@@ -108,18 +108,5 @@ export async function main(deps: MainDeps = {}): Promise<MainOutcome> {
   return 'mcp'
 }
 
-// 当作为脚本被 node 直接执行时启动 main;被测试 import 时不自动启动。
-const isDirectRun = (() => {
-  try {
-    return import.meta.url === `file://${process.argv[1]}`
-  } catch {
-    return false
-  }
-})()
-
-if (isDirectRun) {
-  main().catch((err) => {
-    console.error('[ai-productivity-mcp] fatal:', err)
-    process.exit(1)
-  })
-}
+// v1.0 起 mcp 不再独立运行;统一由 @ai-productivity-tracker/cli 的 argv-router 调度。
+// 老的 isDirectRun 自启动入口删除,避免被 cli 包 esbuild bundle 时内联触发副作用。
