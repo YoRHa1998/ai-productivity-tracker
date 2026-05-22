@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+out/
+coverage/
+.turbo/
+.cache/
+pnpm-lock.yaml
+*.tsbuildinfo
+packages/*/dist/
+packages/cli/dist/web/
