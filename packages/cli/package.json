@@ -1,0 +1,61 @@
+{
+  "name": "@ai-productivity-tracker/cli",
+  "version": "0.1.0",
+  "description": "Standalone AI productivity tracking toolkit. One npm package: daemon + stdio MCP + Cursor/Claude hook + browser dashboard.",
+  "keywords": [
+    "ai",
+    "productivity",
+    "mcp",
+    "model-context-protocol",
+    "cursor",
+    "claude-code",
+    "jira",
+    "tracking",
+    "lessons-learned"
+  ],
+  "license": "MIT",
+  "author": "zhongleijian",
+  "homepage": "https://github.com/zhongleijian/ai-productivity-tracker",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhongleijian/ai-productivity-tracker.git"
+  },
+  "type": "module",
+  "bin": {
+    "ai-productivity-tracker": "./dist/cli.mjs",
+    "aipt": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter @ai-productivity-tracker/ui build && node build.mjs",
+    "build:cli-only": "node build.mjs",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rimraf dist .turbo .cache *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@ai-productivity-tracker/core": "workspace:*",
+    "@ai-productivity-tracker/hook-core": "workspace:*",
+    "@ai-productivity-tracker/mcp": "workspace:*",
+    "@ai-productivity-tracker/server": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.25.0",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
