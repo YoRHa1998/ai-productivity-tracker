@@ -7,7 +7,6 @@
 
     "strict": true,
     "noImplicitOverride": true,
-    "noUncheckedIndexedAccess": true,
     "noFallthroughCasesInSwitch": true,
     "noPropertyAccessFromIndexSignature": false,
 

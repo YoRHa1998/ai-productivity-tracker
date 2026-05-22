@@ -50,7 +50,8 @@ export default tseslint.config(
     files: ['**/*.{spec,test}.ts', '**/__tests__/**'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
-      '@typescript-eslint/no-non-null-assertion': 'off'
+      '@typescript-eslint/no-non-null-assertion': 'off',
+      '@typescript-eslint/no-require-imports': 'off'
     }
   },
 
