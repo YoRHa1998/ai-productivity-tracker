@@ -1,0 +1,608 @@
+/*
+ * AI 提效面板共享样式
+ * 参考 plugins/test-recorder/* 的视觉语言（Hero / 卡片 / chip / flow / metric / code / state）
+ * 不使用 scoped，所有 Tab 直接 import 引入。
+ */
+
+/* ===== Hero ===== */
+.aip-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 20px 22px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(79, 110, 245, 0.07), rgba(79, 110, 245, 0.02));
+  border: 1px solid rgba(79, 110, 245, 0.12);
+}
+
+.aip-hero--compact {
+  padding: 14px 18px;
+  border-radius: 12px;
+}
+
+.aip-hero__left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.aip-hero__icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent-primary, #4f6ef5), #6b8af7);
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(79, 110, 245, 0.25);
+}
+
+.aip-hero--compact .aip-hero__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
+
+.aip-hero__info {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.aip-hero__title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.aip-hero__info h3,
+.aip-hero__info h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.35;
+}
+
+.aip-hero--compact .aip-hero__info h3,
+.aip-hero--compact .aip-hero__info h2 {
+  font-size: 16px;
+}
+
+.aip-hero__info p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.aip-hero__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 12px;
+  border-radius: 20px;
+  background: var(--accent-primary, #4f6ef5);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.aip-hero__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent-primary, #4f6ef5);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s,
+    opacity 0.15s;
+  box-shadow: 0 4px 12px rgba(79, 110, 245, 0.25);
+}
+
+.aip-hero__cta:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(79, 110, 245, 0.3);
+}
+
+.aip-hero__cta:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ===== Card / Section ===== */
+.aip-card {
+  display: grid;
+  gap: 14px;
+  padding: 20px 22px;
+  border-radius: 12px;
+  background: var(--surface-elevated, #fff);
+  border: 1px solid var(--border-subtle, rgba(96, 114, 153, 0.1));
+  box-shadow: var(--shadow-soft, 0 10px 28px rgba(141, 157, 197, 0.08));
+}
+
+.aip-card--flat {
+  background: rgba(96, 114, 153, 0.04);
+  border-color: rgba(96, 114, 153, 0.08);
+  box-shadow: none;
+}
+
+.aip-card--accent {
+  background: linear-gradient(135deg, rgba(79, 110, 245, 0.06), rgba(79, 110, 245, 0.02));
+  border-color: rgba(79, 110, 245, 0.15);
+}
+
+.aip-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.aip-card__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.aip-card__title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(79, 110, 245, 0.1);
+  color: var(--accent-primary, #4f6ef5);
+  flex-shrink: 0;
+}
+
+.aip-card__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.aip-card__caption,
+.aip-card p.aip-card__caption {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.aip-card__caption--inline,
+.aip-card p.aip-card__caption--inline {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.aip-card__hint {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(79, 110, 245, 0.06);
+  border-left: 3px solid var(--accent-primary, #4f6ef5);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.aip-card__hint code {
+  background: rgba(26, 26, 46, 0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.aip-card__hint p {
+  margin: 0;
+}
+
+.aip-card__hint p + p {
+  margin-top: 6px;
+}
+
+/* ===== Chip / Tag ===== */
+.aip-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: rgba(96, 114, 153, 0.08);
+  border: 1px solid rgba(96, 114, 153, 0.12);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+}
+
+.aip-chip--primary {
+  background: rgba(79, 110, 245, 0.08);
+  border-color: rgba(79, 110, 245, 0.16);
+  color: var(--accent-primary, #4f6ef5);
+}
+
+.aip-chip--success {
+  background: rgba(52, 199, 89, 0.08);
+  border-color: rgba(52, 199, 89, 0.18);
+  color: #2d9a53;
+}
+
+.aip-chip--warning {
+  background: rgba(255, 149, 0, 0.08);
+  border-color: rgba(255, 149, 0, 0.18);
+  color: #d48200;
+}
+
+.aip-chip--danger {
+  background: rgba(212, 98, 111, 0.08);
+  border-color: rgba(212, 98, 111, 0.18);
+  color: var(--danger, #d4626f);
+}
+
+.aip-chip--muted {
+  background: rgba(96, 114, 153, 0.06);
+  border-color: rgba(96, 114, 153, 0.1);
+  color: var(--text-soft);
+}
+
+.aip-chip--solid {
+  background: var(--accent-primary, #4f6ef5);
+  border-color: transparent;
+  color: #fff;
+}
+
+.aip-chip--lg {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+/* v2.5.0 iteration 来源 AI 工具配色 chip:暗色与浅色主题下均使用白字 */
+.aip-chip--source-cursor {
+  background: #7c3aed;
+  border-color: transparent;
+  color: #fff;
+}
+
+.aip-chip--source-claude {
+  background: #ea580c;
+  border-color: transparent;
+  color: #fff;
+}
+
+/* ===== Metric ===== */
+.aip-metric {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle, rgba(96, 114, 153, 0.1));
+  background: var(--surface-elevated, #fff);
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+
+.aip-metric:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft, 0 10px 28px rgba(141, 157, 197, 0.12));
+}
+
+.aip-metric--highlight {
+  background: linear-gradient(135deg, rgba(52, 199, 89, 0.08), rgba(52, 199, 89, 0.02));
+  border-color: rgba(52, 199, 89, 0.18);
+}
+
+.aip-metric__icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.aip-metric__icon--primary {
+  background: rgba(79, 110, 245, 0.1);
+  color: var(--accent-primary, #4f6ef5);
+}
+
+.aip-metric__icon--success {
+  background: rgba(52, 199, 89, 0.12);
+  color: #2d9a53;
+}
+
+.aip-metric__icon--warm {
+  background: rgba(255, 149, 0, 0.1);
+  color: #d48200;
+}
+
+.aip-metric__icon--muted {
+  background: rgba(96, 114, 153, 0.1);
+  color: var(--text-soft);
+}
+
+.aip-metric__body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.aip-metric__label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.aip-metric__value {
+  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.aip-metric--highlight .aip-metric__value {
+  color: #2d9a53;
+}
+
+.aip-metric__hint {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* ===== Flow（流程图：dot + 连线） ===== */
+.aip-flow {
+  display: grid;
+  gap: 0;
+  padding-left: 4px;
+  margin: 0;
+  list-style: none;
+}
+
+.aip-flow-step {
+  display: flex;
+  gap: 16px;
+  padding: 12px 0;
+  position: relative;
+}
+
+.aip-flow-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 32px;
+  bottom: 0;
+  width: 2px;
+  background: rgba(79, 110, 245, 0.15);
+}
+
+.aip-flow-dot {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent-primary, #4f6ef5);
+  margin-top: 5px;
+  box-shadow: 0 0 0 4px rgba(79, 110, 245, 0.12);
+}
+
+.aip-flow-step--muted .aip-flow-dot {
+  background: var(--text-soft);
+  box-shadow: 0 0 0 4px rgba(96, 114, 153, 0.12);
+}
+
+.aip-flow-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.aip-flow-body h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.aip-flow-body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.aip-flow-body ul,
+.aip-flow-body ol {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.aip-flow-body li + li {
+  margin-top: 3px;
+}
+
+/* ===== Code 块 ===== */
+.aip-code {
+  display: block;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(26, 26, 46, 0.06);
+  border: 1px solid rgba(96, 114, 153, 0.1);
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  cursor: pointer;
+  user-select: all;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.aip-code:hover {
+  background: rgba(79, 110, 245, 0.06);
+  border-color: rgba(79, 110, 245, 0.2);
+}
+
+.aip-code--dark {
+  background: #1f2430;
+  border-color: transparent;
+  color: #e6edf3;
+}
+
+.aip-code--dark:hover {
+  background: #111827;
+}
+
+.aip-inline-code {
+  background: rgba(26, 26, 46, 0.06);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+}
+
+/* ===== 工具栏（搜索 / 筛选） ===== */
+.aip-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: rgba(96, 114, 153, 0.04);
+  border: 1px solid rgba(96, 114, 153, 0.08);
+}
+
+/* ===== 状态块（空 / loading / error） ===== */
+.aip-state {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 40px 20px;
+  text-align: center;
+  border-radius: 12px;
+  background: rgba(96, 114, 153, 0.04);
+  border: 1px dashed rgba(96, 114, 153, 0.18);
+}
+
+.aip-state__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: rgba(96, 114, 153, 0.08);
+  color: var(--text-soft);
+}
+
+.aip-state p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.aip-state__hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ===== 表格 wrap（包裹 ElTable） ===== */
+.aip-table-wrap {
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle, rgba(96, 114, 153, 0.1));
+  overflow: hidden;
+  background: var(--surface-elevated, #fff);
+}
+
+/* 按 test-recorder 表格风格覆盖 Element Plus 表格默认色 */
+.aip-table-wrap :deep(.el-table) {
+  --el-table-border-color: transparent;
+  --el-table-header-bg-color: rgba(96, 114, 153, 0.04);
+  --el-table-row-hover-bg-color: rgba(79, 110, 245, 0.04);
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  background: transparent;
+  font-size: 13px;
+}
+
+.aip-table-wrap :deep(.el-table::before),
+.aip-table-wrap :deep(.el-table::after) {
+  display: none;
+}
+
+.aip-table-wrap :deep(.el-table th.el-table__cell) {
+  background: var(--el-table-header-bg-color);
+  color: var(--text-soft);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.aip-table-wrap :deep(.el-table td.el-table__cell) {
+  border-bottom: 1px solid var(--border-subtle, rgba(96, 114, 153, 0.08));
+}
+
+.aip-table-wrap :deep(.el-table tr:last-child td.el-table__cell) {
+  border-bottom: 0;
+}
+
+/* ===== 区块标题（用于卡片内的小节标题） ===== */
+.aip-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.aip-section-title__meta {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-soft);
+}

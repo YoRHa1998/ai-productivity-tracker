@@ -1,0 +1,1662 @@
+<script setup lang="ts">
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import {
+  ElDrawer,
+  ElEmpty,
+  ElInput,
+  ElInputNumber,
+  ElMessage,
+  ElMessageBox,
+  ElOption,
+  ElSelect,
+  ElTable,
+  ElTableColumn,
+  ElTooltip
+} from 'element-plus'
+
+import {
+  fetchSummary,
+  getRequirementDetail,
+  listRequirements,
+  patchRequirement,
+  refreshBugs,
+  syncJiraTitle,
+  type RequirementDetail,
+  type RequirementStatus,
+  type RequirementSummary,
+  type SummaryMetrics
+} from '../api'
+import { fetchCurrentSession } from '../lib/session'
+import '../styles/aip-shared.css'
+
+const loading = ref(false)
+const requirements = ref<RequirementSummary[]>([])
+const summary = ref<SummaryMetrics | null>(null)
+const search = ref('')
+const statusFilter = ref<'' | RequirementStatus>('')
+
+const drawerOpen = ref(false)
+const detailLoading = ref(false)
+const currentDetail = ref<RequirementDetail | null>(null)
+const bugRefreshing = ref(false)
+const detailRefreshing = ref(false)
+
+/**
+ * 状态下拉的本地受控值。
+ *
+ * ElSelect 用 `:model-value="currentDetail.status"` 单向绑定时,如果父侧
+ * 不更新 currentDetail.status(例如用户在 confirm 弹窗里点了 Cancel),
+ * 组件内部 selectedLabel 不会自动回退,UI 会卡在用户刚选的"新值"上,
+ * 这会让取消变更的视觉反馈不对。改成 `v-model="statusDraft"` 并通过
+ * watch 单向同步 currentDetail.status -> statusDraft,handleStatusChange
+ * 在用户取消 / patch 失败时主动把 statusDraft 回滚到 prev,UI 就能立刻
+ * 回到原状态。
+ */
+const statusDraft = ref<RequirementStatus | ''>('')
+watch(
+  () => currentDetail.value?.status ?? '',
+  (val) => {
+    statusDraft.value = val as RequirementStatus | ''
+  },
+  { immediate: true }
+)
+
+/**
+ * v2.14.0 人工预估时间内联编辑 —— 单位「小时」.
+ *
+ * 后端存储仍是 `manualEstimateMinutes` 整数,不动 schema.
+ * 编辑时把分钟换算成小时(允许 0.5 步进的小数,如 0.5/1.5/2 等),
+ * 保存时 Math.round(hours * 60) 写回 manualEstimateMinutes.
+ */
+const estimateEditing = ref(false)
+const estimateHoursDraft = ref(0)
+const estimateSaving = ref(false)
+
+/** v2.14.0 标题内联编辑(允许用户在 Jira 拉不到时手填兜底). */
+const titleEditing = ref(false)
+const titleDraft = ref('')
+const titleSaving = ref(false)
+const titleSyncing = ref(false)
+/** 已经为当前 jiraKey 触发过一次自动兜底,避免每次 openDetail 都打一次接口 */
+const titleAutoSyncedKeys = ref<Set<string>>(new Set())
+
+/**
+ * 当前工具平台登录用户的 name, 用于覆盖 Owner 列显示。
+ * v2.1 起所有需求数据都在用户本机, 所以可视化时 owner 就是当前登录账号。
+ * 加载失败保持空串, UI 兜底显示 '—'。
+ */
+const currentOwnerName = ref('')
+
+const filteredRequirements = computed(() => {
+  const keyword = search.value.trim().toLowerCase()
+  const ownerKeyword = currentOwnerName.value.toLowerCase()
+  return requirements.value.filter((item) => {
+    const matchesStatus = !statusFilter.value || item.status === statusFilter.value
+    if (!matchesStatus) return false
+    if (!keyword) return true
+    return (
+      item.jiraKey.toLowerCase().includes(keyword) ||
+      item.title.toLowerCase().includes(keyword) ||
+      ownerKeyword.includes(keyword) ||
+      item.projectSlug.toLowerCase().includes(keyword)
+    )
+  })
+})
+
+async function loadList() {
+  loading.value = true
+  try {
+    const [list, sum] = await Promise.all([listRequirements(), fetchSummary()])
+    requirements.value = list
+    summary.value = sum
+  } catch (err) {
+    ElMessage.error((err as Error).message || '加载失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+async function openDetail(row: RequirementSummary) {
+  drawerOpen.value = true
+  detailLoading.value = true
+  currentDetail.value = null
+  // 退出可能残留的编辑态(用户上一次抽屉编辑后没保存就关闭)
+  estimateEditing.value = false
+  titleEditing.value = false
+  try {
+    currentDetail.value = await getRequirementDetail(row.jiraKey)
+    void maybeAutoSyncJiraTitle(currentDetail.value)
+  } catch (err) {
+    ElMessage.error((err as Error).message || '详情加载失败')
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+/**
+ * v2.14.0 自动兜底:当详情 title 仍等于 jiraKey(init 时未拿到真实 summary),
+ * 静默后台触发一次 syncJiraTitle.成功则刷新当前抽屉 + 列表;失败仅 console.warn,
+ * 不打扰用户(用户没配 Jira 凭证是常见前置).
+ *
+ * 每个 jiraKey 仅在当次会话尝试一次,避免每次 openDetail 都发请求.
+ */
+async function maybeAutoSyncJiraTitle(detail: RequirementDetail | null) {
+  if (!detail) return
+  if (detail.title !== detail.jiraKey) return
+  if (titleAutoSyncedKeys.value.has(detail.jiraKey)) return
+  titleAutoSyncedKeys.value.add(detail.jiraKey)
+  try {
+    const result = await syncJiraTitle(detail.jiraKey)
+    if (result.title && currentDetail.value?.jiraKey === detail.jiraKey) {
+      currentDetail.value = { ...currentDetail.value, title: result.title }
+    }
+    await loadList()
+  } catch (err) {
+    console.warn('[ai-productivity] 自动同步 Jira 标题失败,已忽略:', err)
+  }
+}
+
+async function handleRefreshDetail() {
+  if (!currentDetail.value) return
+  detailRefreshing.value = true
+  try {
+    currentDetail.value = await getRequirementDetail(currentDetail.value.jiraKey)
+  } catch (err) {
+    ElMessage.error((err as Error).message || '详情刷新失败')
+  } finally {
+    detailRefreshing.value = false
+  }
+}
+
+function startEditEstimate() {
+  if (!currentDetail.value) return
+  estimateHoursDraft.value = Number((currentDetail.value.manualEstimateMinutes / 60).toFixed(2))
+  estimateEditing.value = true
+}
+
+function cancelEditEstimate() {
+  estimateEditing.value = false
+}
+
+async function handleSaveEstimate() {
+  if (!currentDetail.value) return
+  const hours = Number(estimateHoursDraft.value)
+  if (!Number.isFinite(hours) || hours < 0) {
+    ElMessage.error('请输入 ≥ 0 的小时数')
+    return
+  }
+  const minutes = Math.round(hours * 60)
+  estimateSaving.value = true
+  try {
+    await patchRequirement(currentDetail.value.jiraKey, { manualEstimateMinutes: minutes })
+    estimateEditing.value = false
+    // 并行刷新当前抽屉详情 + 列表 + 总览,让 boost / 表格 / 汇总实时联动
+    await Promise.all([
+      getRequirementDetail(currentDetail.value.jiraKey).then((next) => {
+        currentDetail.value = next
+      }),
+      loadList()
+    ])
+    ElMessage.success('人工预估已更新')
+  } catch (err) {
+    ElMessage.error((err as Error).message || '保存失败')
+  } finally {
+    estimateSaving.value = false
+  }
+}
+
+function startEditTitle() {
+  if (!currentDetail.value) return
+  titleDraft.value = currentDetail.value.title
+  titleEditing.value = true
+  void nextTick(() => {
+    const el = document.querySelector<HTMLInputElement>('.aip-drawer__header-title-input input')
+    el?.focus()
+    el?.select()
+  })
+}
+
+function cancelEditTitle() {
+  titleEditing.value = false
+}
+
+async function handleSaveTitle() {
+  if (!currentDetail.value) return
+  const next = titleDraft.value.trim()
+  if (!next) {
+    ElMessage.error('标题不能为空')
+    return
+  }
+  titleSaving.value = true
+  try {
+    await patchRequirement(currentDetail.value.jiraKey, { title: next })
+    currentDetail.value = { ...currentDetail.value, title: next }
+    titleEditing.value = false
+    await loadList()
+    ElMessage.success('标题已更新')
+  } catch (err) {
+    ElMessage.error((err as Error).message || '保存失败')
+  } finally {
+    titleSaving.value = false
+  }
+}
+
+async function handleSyncJiraTitle() {
+  if (!currentDetail.value) return
+  titleSyncing.value = true
+  try {
+    const result = await syncJiraTitle(currentDetail.value.jiraKey)
+    currentDetail.value = { ...currentDetail.value, title: result.title }
+    await loadList()
+    ElMessage.success(`已从 Jira 拉取最新标题:${result.title}`)
+  } catch (err) {
+    ElMessage.error(
+      (err as Error).message || 'Jira 标题拉取失败,请确认已在 Settings Tab 配置 Jira 凭证'
+    )
+  } finally {
+    titleSyncing.value = false
+  }
+}
+
+async function handleStatusChange(next: RequirementStatus) {
+  if (!currentDetail.value) return
+  const prev = currentDetail.value.status as RequirementStatus | ''
+  if (next === prev) return
+  try {
+    await ElMessageBox.confirm(`确认将需求状态改为 ${next}?`, '状态变更', { type: 'warning' })
+  } catch {
+    statusDraft.value = prev
+    return
+  }
+  try {
+    await patchRequirement(currentDetail.value.jiraKey, { status: next })
+    currentDetail.value.status = next
+    await loadList()
+    ElMessage.success('状态已更新')
+  } catch (err) {
+    statusDraft.value = prev
+    ElMessage.error((err as Error).message || '更新失败')
+  }
+}
+
+async function handleRefreshBugs() {
+  if (!currentDetail.value) return
+  bugRefreshing.value = true
+  try {
+    const result = await refreshBugs(currentDetail.value.jiraKey)
+    currentDetail.value.linkedBugCount = result.linkedBugCount
+    currentDetail.value.linkedBugJql = result.linkedBugJql
+    currentDetail.value.bugsRefreshedAt = result.bugsRefreshedAt
+    ElMessage.success(`已拉取 ${result.linkedBugCount} 条关联 bug`)
+  } catch (err) {
+    ElMessage.error((err as Error).message || 'Bug 拉取失败')
+  } finally {
+    bugRefreshing.value = false
+  }
+}
+
+function formatBoost(value: number | null) {
+  if (value == null) return '-'
+  return `${value.toFixed(2)}×`
+}
+
+function formatMinutes(value: number) {
+  if (value < 60) return `${value} min`
+  const hours = Math.floor(value / 60)
+  const mins = value % 60
+  return mins ? `${hours}h ${mins}min` : `${hours}h`
+}
+
+function formatThinkSeconds(value: number) {
+  if (!value || value <= 0) return '0s'
+  if (value < 60) return `${value}s`
+  const mins = Math.floor(value / 60)
+  const secs = value % 60
+  return secs ? `${mins}m ${secs}s` : `${mins}m`
+}
+
+/**
+ * Token 数字本身一旦突破几十万就难以一眼读出量级,本函数按 K / M / B
+ * 三档压缩显示,精度遵循「跨档保留更多有效位」原则:
+ * - <1K: 原值 + 千位分隔(如 999、12)
+ * - 1K~10K: 保留两位小数(如 1.23K)
+ * - 10K~1M: 保留一位小数(如 12.5K、613.3K)
+ * - 1M~10M: 保留两位小数(如 1.23M)
+ * - 10M~1B: 保留一位小数(如 12.5M)
+ * - >=1B: 保留两位小数(如 1.23B)
+ * 同步提供 formatTokenTitle 用于 hover tooltip 显示精确值。
+ */
+function formatTokenCount(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0'
+  const abs = Math.abs(value)
+  if (abs < 1000) return value.toLocaleString()
+  if (abs < 10_000) return `${(value / 1000).toFixed(2)}K`
+  if (abs < 1_000_000) return `${(value / 1000).toFixed(1)}K`
+  if (abs < 10_000_000) return `${(value / 1_000_000).toFixed(2)}M`
+  if (abs < 1_000_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  return `${(value / 1_000_000_000).toFixed(2)}B`
+}
+
+function formatTokenTitle(value: number) {
+  if (!Number.isFinite(value)) return '0'
+  return `${value.toLocaleString()} tokens`
+}
+
+/**
+ * v2.7.0 时间线仅保留「本次对话变更」(自上一轮 iteration 以来的增量),
+ * 移除可读性差的「总变更」行;后端字段保留兼容,不删数据
+ */
+const expandedIterFiles = ref<Set<number>>(new Set())
+
+/**
+ * v2.7.1 时间线 Token 行展示「本轮 · 累计」双数值。
+ * 后端 iteration 字段只存 cumulativeToken(累计),本轮 delta = 相邻 iteration 做差;
+ * 老数据(包括混入 v2.7.0 前 Cursor 旧算法导致的偏高 cumulativeToken)的 delta 仍能正确反映「本轮增量趋势」,
+ * 但绝对数值受历史口径影响,需要用户清空 ai-productivity 目录后才会完全回归新口径。
+ */
+const iterationTokenDeltas = computed<Map<number, number>>(() => {
+  const map = new Map<number, number>()
+  const iterations = currentDetail.value?.iterations
+  if (!iterations || iterations.length === 0) return map
+  const sorted = [...iterations].sort((a, b) => a.seq - b.seq)
+  let prev = 0
+  for (const iter of sorted) {
+    const delta = Math.max(0, iter.cumulativeToken - prev)
+    map.set(iter.seq, delta)
+    prev = iter.cumulativeToken
+  }
+  return map
+})
+
+function toggleIterFiles(id: number) {
+  const next = new Set(expandedIterFiles.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expandedIterFiles.value = next
+}
+
+function statusChipClass(status: string) {
+  if (status === 'in_progress') return 'aip-chip--warning'
+  if (status === 'finished') return 'aip-chip--success'
+  if (status === 'abandoned') return 'aip-chip--muted'
+  return 'aip-chip--muted'
+}
+
+function statusLabel(status: string) {
+  if (status === 'in_progress') return '进行中'
+  if (status === 'finished') return '已完成'
+  if (status === 'abandoned') return '已放弃'
+  return status
+}
+
+function iterationChipClass(kind: string) {
+  if (kind === 'first_coding') return 'aip-chip--success'
+  if (kind === 'milestone') return 'aip-chip--warning'
+  return 'aip-chip--primary'
+}
+
+async function loadCurrentOwner() {
+  try {
+    const session = await fetchCurrentSession()
+    currentOwnerName.value = session.name ?? ''
+  } catch {
+    currentOwnerName.value = ''
+  }
+}
+
+onMounted(() => {
+  loadList()
+  loadCurrentOwner()
+})
+</script>
+
+<template>
+  <section class="aip-workspace">
+    <!-- 指标卡 -->
+    <div class="aip-workspace__metrics">
+      <div class="aip-metric">
+        <div class="aip-metric__icon aip-metric__icon--primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M9 11h6M9 15h4M5 21V5a2 2 0 0 1 2-2h7l5 5v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
+        <div class="aip-metric__body">
+          <span class="aip-metric__label">跟踪需求数</span>
+          <strong class="aip-metric__value">{{ summary?.totalRequirements ?? 0 }}</strong>
+          <span class="aip-metric__hint"
+            >进行中 {{ summary?.inProgressCount ?? 0 }} · 已完成
+            {{ summary?.finishedCount ?? 0 }}</span
+          >
+        </div>
+      </div>
+
+      <div class="aip-metric aip-metric--highlight">
+        <div class="aip-metric__icon aip-metric__icon--success">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path
+              d="m13 2-1 11h7l-9 9 1-11H4l9-9Z"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
+        <div class="aip-metric__body">
+          <span class="aip-metric__label">平均提效倍数</span>
+          <strong class="aip-metric__value">{{
+            formatBoost(summary?.averageBoost ?? null)
+          }}</strong>
+          <span class="aip-metric__hint">公式可在 Settings 页调整</span>
+        </div>
+      </div>
+
+      <div class="aip-metric">
+        <div class="aip-metric__icon aip-metric__icon--warm">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M9 9V7a3 3 0 0 1 6 0v2m-9 4h12l-1 9H7l-1-9Z"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
+        <div class="aip-metric__body">
+          <span class="aip-metric__label">总关联 Bug</span>
+          <strong class="aip-metric__value">{{ summary?.totalBugCount ?? 0 }}</strong>
+          <span class="aip-metric__hint">来自 Jira 关联查询</span>
+        </div>
+      </div>
+
+      <div class="aip-metric">
+        <div class="aip-metric__icon aip-metric__icon--muted">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6" />
+            <path
+              d="M12 7v5l3 2"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
+        <div class="aip-metric__body">
+          <span class="aip-metric__label">总 Token</span>
+          <strong class="aip-metric__value" :title="formatTokenTitle(summary?.totalToken ?? 0)">{{
+            formatTokenCount(summary?.totalToken ?? 0)
+          }}</strong>
+          <span class="aip-metric__hint">Hook 自动累计</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 工具栏 -->
+    <div class="aip-toolbar">
+      <ElInput
+        v-model="search"
+        placeholder="搜索 Jira Key / 标题 / owner / 项目"
+        clearable
+        style="width: 320px"
+      />
+      <ElSelect v-model="statusFilter" placeholder="状态筛选" clearable style="width: 180px">
+        <ElOption label="进行中" value="in_progress" />
+        <ElOption label="已完成" value="finished" />
+        <ElOption label="已放弃" value="abandoned" />
+      </ElSelect>
+      <span class="aip-workspace__toolbar-count">
+        共 {{ filteredRequirements.length }} 条需求
+      </span>
+    </div>
+
+    <!-- 表格 -->
+    <div class="aip-table-wrap aip-workspace__table">
+      <ElTable
+        :data="filteredRequirements"
+        v-loading="loading"
+        style="width: 100%"
+        :empty-text="loading ? '加载中...' : '暂无需求，等待 skill 上报'"
+        @row-click="openDetail"
+      >
+        <ElTableColumn prop="jiraKey" label="Jira Key" width="140" />
+        <ElTableColumn label="标题" min-width="260" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="aip-workspace__title-cell">
+              <span class="aip-workspace__title-cell-text">{{ row.title }}</span>
+              <ElTooltip
+                v-if="row.title === row.jiraKey"
+                placement="top"
+                content="标题未从 Jira 同步,打开详情后将自动尝试刷新;也可点击「从 Jira 刷新」按钮手动拉取"
+              >
+                <span class="aip-chip aip-chip--warning aip-workspace__title-cell-badge"
+                  >未同步</span
+                >
+              </ElTooltip>
+            </span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="提效倍数" width="130">
+          <template #default="{ row }">
+            <span class="aip-workspace__boost">{{ formatBoost(row.metrics.boost) }}</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="对话次数" width="110" align="center">
+          <template #default="{ row }">{{ row.metrics.codingRuns }}</template>
+        </ElTableColumn>
+        <ElTableColumn label="Token" width="140" align="right">
+          <template #default="{ row }">
+            <span :title="formatTokenTitle(row.metrics.latestCumulativeToken)">
+              {{ formatTokenCount(row.metrics.latestCumulativeToken) }}
+            </span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="耗时" width="110" align="right">
+          <template #default="{ row }">{{
+            formatMinutes(row.metrics.latestElapsedMinutes)
+          }}</template>
+        </ElTableColumn>
+        <ElTableColumn label="Bug" width="80" align="center">
+          <template #default="{ row }">{{ row.linkedBugCount }}</template>
+        </ElTableColumn>
+        <ElTableColumn label="状态" width="110">
+          <template #default="{ row }">
+            <span class="aip-chip" :class="statusChipClass(row.status)">{{
+              statusLabel(row.status)
+            }}</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="项目" width="140">
+          <template #default="{ row }">{{ row.projectSlug || '—' }}</template>
+        </ElTableColumn>
+        <ElTableColumn label="Owner" width="140">
+          <template #default>{{ currentOwnerName || '—' }}</template>
+        </ElTableColumn>
+      </ElTable>
+    </div>
+
+    <!-- 抽屉详情 -->
+    <ElDrawer v-model="drawerOpen" size="780" destroy-on-close>
+      <template #header>
+        <div class="aip-drawer__header">
+          <div class="aip-drawer__header-main">
+            <span v-if="currentDetail" class="aip-chip aip-chip--primary">{{
+              currentDetail.jiraKey
+            }}</span>
+            <template v-if="currentDetail && !titleEditing">
+              <h3 class="aip-drawer__header-title">{{ currentDetail.title }}</h3>
+              <button
+                type="button"
+                class="aip-drawer__header-iconbtn"
+                title="编辑标题"
+                @click="startEditTitle"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="aip-drawer__header-iconbtn"
+                title="从 Jira 刷新标题"
+                :disabled="titleSyncing"
+                @click="handleSyncJiraTitle"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  :class="{ 'aip-workspace__refresh-spin': titleSyncing }"
+                >
+                  <path
+                    d="M21 12a9 9 0 1 1-3.6-7.2"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                  />
+                  <path
+                    d="M21 4v5h-5"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            </template>
+            <template v-else-if="currentDetail && titleEditing">
+              <ElInput
+                v-model="titleDraft"
+                size="small"
+                class="aip-drawer__header-title-input"
+                :maxlength="200"
+                @keyup.enter="handleSaveTitle"
+                @keyup.esc="cancelEditTitle"
+              />
+              <button
+                type="button"
+                class="aip-drawer__header-iconbtn aip-drawer__header-iconbtn--primary"
+                :disabled="titleSaving"
+                title="保存"
+                @click="handleSaveTitle"
+              >
+                保存
+              </button>
+              <button
+                type="button"
+                class="aip-drawer__header-iconbtn"
+                :disabled="titleSaving"
+                title="取消"
+                @click="cancelEditTitle"
+              >
+                取消
+              </button>
+            </template>
+          </div>
+          <div class="aip-drawer__header-actions">
+            <button
+              v-if="currentDetail"
+              type="button"
+              class="aip-drawer__header-iconbtn"
+              title="刷新详情(公式或数据变更后联动)"
+              :disabled="detailRefreshing"
+              @click="handleRefreshDetail"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                :class="{ 'aip-workspace__refresh-spin': detailRefreshing }"
+              >
+                <path
+                  d="M21 12a9 9 0 1 1-3.6-7.2"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+                <path
+                  d="M21 4v5h-5"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <a
+              v-if="currentDetail?.jiraUrl"
+              :href="currentDetail.jiraUrl"
+              target="_blank"
+              class="aip-drawer__header-link"
+            >
+              打开 Jira
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M14 3h7v7M21 3l-9 9M10 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </a>
+          </div>
+        </div>
+      </template>
+
+      <div v-if="detailLoading" class="aip-state">
+        <div class="aip-state__icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M21 12a9 9 0 1 1-3.6-7.2"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+            />
+          </svg>
+        </div>
+        <p>加载中…</p>
+      </div>
+      <div v-else-if="!currentDetail">
+        <ElEmpty description="暂无数据" />
+      </div>
+      <div v-else class="aip-drawer__body">
+        <!-- Boost Hero -->
+        <div class="aip-drawer__boost">
+          <div class="aip-drawer__boost-side">
+            <span class="aip-drawer__boost-label">人工预估</span>
+            <div v-if="!estimateEditing" class="aip-drawer__boost-value-row">
+              <span class="aip-drawer__boost-value">{{
+                formatMinutes(currentDetail.manualEstimateMinutes)
+              }}</span>
+              <button
+                type="button"
+                class="aip-drawer__boost-edit-btn"
+                title="编辑人工预估时间"
+                @click="startEditEstimate"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+            <div v-else class="aip-drawer__boost-edit">
+              <ElInputNumber
+                v-model="estimateHoursDraft"
+                :min="0"
+                :step="0.5"
+                :precision="1"
+                size="small"
+                controls-position="right"
+                class="aip-drawer__boost-input"
+              />
+              <span class="aip-drawer__boost-unit">小时</span>
+              <button
+                type="button"
+                class="aip-drawer__boost-edit-btn aip-drawer__boost-edit-btn--primary"
+                :disabled="estimateSaving"
+                @click="handleSaveEstimate"
+              >
+                保存
+              </button>
+              <button
+                type="button"
+                class="aip-drawer__boost-edit-btn"
+                :disabled="estimateSaving"
+                @click="cancelEditEstimate"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+          <div class="aip-drawer__boost-arrow">
+            <svg width="22" height="14" viewBox="0 0 22 14" fill="none">
+              <path
+                d="M1 7h20m0 0-5-5m5 5-5 5"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
+          <div class="aip-drawer__boost-center">
+            <span class="aip-drawer__boost-main">{{
+              formatBoost(currentDetail.metrics.boost)
+            }}</span>
+            <span class="aip-drawer__boost-caption">提效倍数</span>
+          </div>
+          <div class="aip-drawer__boost-arrow">
+            <svg width="22" height="14" viewBox="0 0 22 14" fill="none">
+              <path
+                d="M1 7h20m0 0-5-5m5 5-5 5"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
+          <div class="aip-drawer__boost-side">
+            <span class="aip-drawer__boost-label">AI 实际</span>
+            <span class="aip-drawer__boost-value">{{
+              formatMinutes(currentDetail.metrics.latestElapsedMinutes)
+            }}</span>
+          </div>
+        </div>
+
+        <!-- 指标 -->
+        <article class="aip-card aip-card--flat">
+          <header class="aip-card__header">
+            <h3 class="aip-card__title">指标</h3>
+            <span class="aip-card__meta">复杂度：{{ currentDetail.complexity }}</span>
+          </header>
+          <div class="aip-drawer__metrics-grid">
+            <div class="aip-drawer__metric">
+              <span>对话次数</span>
+              <strong>{{ currentDetail.metrics.codingRuns }}</strong>
+            </div>
+            <div class="aip-drawer__metric">
+              <span>累计 Token</span>
+              <strong :title="formatTokenTitle(currentDetail.metrics.latestCumulativeToken)">
+                {{ formatTokenCount(currentDetail.metrics.latestCumulativeToken) }}
+              </strong>
+            </div>
+            <div class="aip-drawer__metric">
+              <span>Bug 惩罚</span>
+              <strong>×{{ currentDetail.metrics.bugPenalty }}</strong>
+            </div>
+            <div class="aip-drawer__metric">
+              <span>Token 惩罚</span>
+              <strong>×{{ currentDetail.metrics.tokenPenalty }}</strong>
+            </div>
+            <div class="aip-drawer__metric aip-drawer__metric--full">
+              <span>状态</span>
+              <ElSelect
+                v-model="statusDraft"
+                size="small"
+                style="width: 140px"
+                @change="handleStatusChange"
+              >
+                <ElOption label="进行中" value="in_progress" />
+                <ElOption label="已完成" value="finished" />
+                <ElOption label="已放弃" value="abandoned" />
+              </ElSelect>
+            </div>
+          </div>
+        </article>
+
+        <!-- 关联 Bug -->
+        <article class="aip-card aip-card--flat">
+          <header class="aip-card__header">
+            <h3 class="aip-card__title">关联 Bug</h3>
+            <button
+              type="button"
+              class="aip-drawer__refresh-btn"
+              :disabled="bugRefreshing"
+              @click="handleRefreshBugs"
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                :class="{ 'aip-workspace__refresh-spin': bugRefreshing }"
+              >
+                <path
+                  d="M21 12a9 9 0 1 1-3.6-7.2"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+                <path
+                  d="M21 4v5h-5"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              {{ bugRefreshing ? '拉取中…' : '刷新' }}
+            </button>
+          </header>
+          <div class="aip-drawer__bug">
+            <div class="aip-drawer__bug-row">
+              <span>数量</span>
+              <strong>{{ currentDetail.linkedBugCount }}</strong>
+            </div>
+            <div class="aip-drawer__bug-row">
+              <span>JQL</span>
+              <code class="aip-inline-code">{{ currentDetail.linkedBugJql || '(未配置)' }}</code>
+            </div>
+            <div class="aip-drawer__bug-row">
+              <span>最近刷新</span>
+              <code class="aip-inline-code">{{ currentDetail.bugsRefreshedAt ?? '从未' }}</code>
+            </div>
+          </div>
+        </article>
+
+        <!-- Iteration 时间线 -->
+        <article class="aip-card aip-card--flat">
+          <header class="aip-card__header">
+            <h3 class="aip-card__title">Iteration 时间线</h3>
+            <span class="aip-card__meta">共 {{ currentDetail.iterations.length }} 条</span>
+          </header>
+          <ol v-if="currentDetail.iterations.length" class="aip-flow">
+            <li v-for="iter in currentDetail.iterations" :key="iter.seq" class="aip-flow-step">
+              <span class="aip-flow-dot" />
+              <div class="aip-flow-body">
+                <div class="aip-drawer__timeline-head">
+                  <span class="aip-chip" :class="iterationChipClass(iter.kind)"
+                    >#{{ iter.seq }} {{ iter.kind }}</span
+                  >
+                  <span
+                    v-if="iter.source && iter.source !== 'unknown'"
+                    class="aip-chip"
+                    :class="
+                      iter.source === 'cursor'
+                        ? 'aip-chip--source-cursor'
+                        : 'aip-chip--source-claude'
+                    "
+                    >{{ iter.source === 'cursor' ? 'Cursor' : 'Claude Code' }}</span
+                  >
+                  <span
+                    v-if="iter.modelName"
+                    class="aip-chip aip-chip--muted aip-drawer__timeline-model"
+                    >{{ iter.modelName }}</span
+                  >
+                  <span class="aip-drawer__timeline-time">{{
+                    new Date(iter.reportedAt).toLocaleString()
+                  }}</span>
+                </div>
+                <div class="aip-drawer__timeline-body">
+                  <div>
+                    Token:
+                    <span
+                      class="aip-drawer__timeline-token-current"
+                      :title="`本轮: ${formatTokenTitle(iterationTokenDeltas.get(iter.seq) ?? 0)} / 累计: ${formatTokenTitle(iter.cumulativeToken)}`"
+                      >本轮 {{ formatTokenCount(iterationTokenDeltas.get(iter.seq) ?? 0) }}</span
+                    >
+                    <span class="aip-drawer__timeline-token-sep"> · 累计 </span>
+                    <span :title="formatTokenTitle(iter.cumulativeToken)">{{
+                      formatTokenCount(iter.cumulativeToken)
+                    }}</span>
+                    · 累计耗时: {{ formatMinutes(iter.elapsedMinutes) }} · 本轮 AI 思考:
+                    {{ formatThinkSeconds(iter.thinkSeconds) }}
+                  </div>
+                  <div
+                    v-if="iter.diffFiles || iter.changedFiles.length"
+                    class="aip-drawer__timeline-diff-row"
+                  >
+                    <span
+                      class="aip-drawer__timeline-diff-label aip-drawer__timeline-diff-label--accent"
+                      >本轮变更</span
+                    >
+                    <span>
+                      {{ iter.diffFiles }} files +{{ iter.diffInsertions }} -{{
+                        iter.diffDeletions
+                      }}
+                    </span>
+                    <button
+                      v-if="iter.changedFiles.length"
+                      type="button"
+                      class="aip-drawer__linkbtn aip-drawer__timeline-files-btn"
+                      @click="toggleIterFiles(iter.seq)"
+                    >
+                      {{
+                        expandedIterFiles.has(iter.seq)
+                          ? '收起'
+                          : `展开 ${iter.changedFiles.length} 个改动文件`
+                      }}
+                    </button>
+                  </div>
+                  <div
+                    v-if="iter.changedFiles.length && expandedIterFiles.has(iter.seq)"
+                    class="aip-drawer__timeline-files"
+                  >
+                    <span
+                      v-for="file in iter.changedFiles"
+                      :key="`iter-${file.path}`"
+                      class="aip-chip aip-chip--muted aip-drawer__timeline-file"
+                      :title="file.path"
+                      ><b>{{ file.status }}</b
+                      >{{ file.path }}</span
+                    >
+                  </div>
+                  <div v-if="iter.conversationSummary" class="aip-drawer__timeline-summary">
+                    <div class="aip-drawer__timeline-summary-header">
+                      <span class="aip-drawer__timeline-summary-label">AI 对话总结</span>
+                      <span
+                        class="aip-chip"
+                        :class="
+                          iter.conversationSummary.type === 'coding'
+                            ? 'aip-chip--primary'
+                            : 'aip-chip--muted'
+                        "
+                        >{{
+                          iter.conversationSummary.type === 'coding' ? '代码改动' : '沟通讨论'
+                        }}</span
+                      >
+                    </div>
+                    <div class="aip-drawer__timeline-summary-oneline">
+                      {{ iter.conversationSummary.oneLine }}
+                    </div>
+                    <div
+                      v-if="
+                        iter.conversationSummary.type === 'coding' &&
+                        iter.conversationSummary.changeScope
+                      "
+                      class="aip-drawer__timeline-summary-body"
+                    >
+                      <span class="aip-drawer__timeline-summary-subtitle">改动范围</span>
+                      <p>{{ iter.conversationSummary.changeScope }}</p>
+                    </div>
+                    <div
+                      v-else-if="
+                        iter.conversationSummary.type === 'communication' &&
+                        iter.conversationSummary.discussion
+                      "
+                      class="aip-drawer__timeline-summary-body"
+                    >
+                      <span class="aip-drawer__timeline-summary-subtitle">讨论内容</span>
+                      <p>{{ iter.conversationSummary.discussion }}</p>
+                    </div>
+                  </div>
+                  <div
+                    v-else-if="iter.kind !== 'init'"
+                    class="aip-drawer__timeline-summary aip-drawer__timeline-summary--empty"
+                  >
+                    本轮无 AI 对话总结
+                  </div>
+                </div>
+              </div>
+            </li>
+          </ol>
+          <p v-else class="aip-drawer__empty-hint">暂无上报</p>
+        </article>
+      </div>
+    </ElDrawer>
+  </section>
+</template>
+
+<style scoped>
+.aip-workspace {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+}
+
+.aip-workspace__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.aip-workspace__toolbar-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.aip-workspace__refresh-spin {
+  animation: aip-spin 1s linear infinite;
+}
+
+@keyframes aip-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 表格 wrap 调整 progress 条颜色 */
+.aip-workspace__table :deep(.el-progress-bar__inner) {
+  background: linear-gradient(90deg, var(--accent-primary, #4f6ef5), #6b8af7);
+}
+
+.aip-workspace__table :deep(.el-progress) {
+  margin-right: 8px;
+}
+
+.aip-workspace__table :deep(.el-progress-bar__outer) {
+  background: rgba(96, 114, 153, 0.12);
+}
+
+.aip-workspace__table :deep(.el-table__row) {
+  cursor: pointer;
+}
+
+.aip-workspace__boost {
+  font-weight: 700;
+  font-size: 13.5px;
+  color: #2d9a53;
+  font-variant-numeric: tabular-nums;
+}
+
+.aip-workspace__title-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.aip-workspace__title-cell-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aip-workspace__title-cell-badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 1px 6px;
+}
+
+/* ===== Drawer ===== */
+.aip-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.aip-drawer__header-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.aip-drawer__header-main h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.aip-drawer__header-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.aip-drawer__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.aip-drawer__header-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(96, 114, 153, 0.18);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.aip-drawer__header-iconbtn:hover:not(:disabled) {
+  background: rgba(79, 110, 245, 0.08);
+  border-color: rgba(79, 110, 245, 0.24);
+  color: var(--accent-primary, #4f6ef5);
+}
+
+.aip-drawer__header-iconbtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.aip-drawer__header-iconbtn--primary {
+  background: var(--accent-primary, #4f6ef5);
+  border-color: var(--accent-primary, #4f6ef5);
+  color: #fff;
+}
+
+.aip-drawer__header-iconbtn--primary:hover:not(:disabled) {
+  background: #3a59da;
+  border-color: #3a59da;
+  color: #fff;
+}
+
+.aip-drawer__header-title-input {
+  width: 260px;
+}
+
+.aip-drawer__header-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-primary, #4f6ef5);
+  text-decoration: none;
+}
+
+.aip-drawer__header-link:hover {
+  text-decoration: underline;
+}
+
+.aip-drawer__body {
+  display: grid;
+  gap: 14px;
+  padding: 0 4px 16px;
+}
+
+/* Boost Hero */
+.aip-drawer__boost {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(52, 199, 89, 0.08), rgba(79, 110, 245, 0.06));
+  border: 1px solid rgba(52, 199, 89, 0.18);
+}
+
+.aip-drawer__boost-side {
+  display: grid;
+  gap: 3px;
+  justify-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.aip-drawer__boost-label {
+  font-size: 11px;
+  color: var(--text-soft);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.aip-drawer__boost-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.aip-drawer__boost-value-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.aip-drawer__boost-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(96, 114, 153, 0.18);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.aip-drawer__boost-edit-btn:hover:not(:disabled) {
+  background: rgba(79, 110, 245, 0.08);
+  border-color: rgba(79, 110, 245, 0.24);
+  color: var(--accent-primary, #4f6ef5);
+}
+
+.aip-drawer__boost-edit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.aip-drawer__boost-edit-btn--primary {
+  background: var(--accent-primary, #4f6ef5);
+  border-color: var(--accent-primary, #4f6ef5);
+  color: #fff;
+}
+
+.aip-drawer__boost-edit-btn--primary:hover:not(:disabled) {
+  background: #3a59da;
+  border-color: #3a59da;
+  color: #fff;
+}
+
+.aip-drawer__boost-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.aip-drawer__boost-input {
+  width: 110px;
+}
+
+.aip-drawer__boost-unit {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.aip-drawer__boost-arrow {
+  color: rgba(96, 114, 153, 0.4);
+  flex-shrink: 0;
+}
+
+.aip-drawer__boost-center {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: 0 10px;
+}
+
+.aip-drawer__boost-main {
+  font-size: 36px;
+  font-weight: 800;
+  color: #2d9a53;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-shadow: 0 2px 12px rgba(52, 199, 89, 0.18);
+}
+
+.aip-drawer__boost-caption {
+  font-size: 11px;
+  color: var(--text-soft);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* 指标网格 */
+.aip-drawer__metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.aip-drawer__metric {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-elevated, rgba(255, 255, 255, 0.6));
+  border: 1px solid rgba(96, 114, 153, 0.08);
+}
+
+.aip-drawer__metric--full {
+  grid-column: span 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.aip-drawer__metric span {
+  color: var(--text-soft);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+}
+
+.aip-drawer__metric strong {
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Bug */
+.aip-drawer__bug {
+  display: grid;
+  gap: 6px;
+}
+
+.aip-drawer__bug-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.aip-drawer__bug-row span {
+  flex-shrink: 0;
+  width: 80px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.aip-drawer__bug-row strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.aip-drawer__bug-row code {
+  flex: 1;
+  word-break: break-all;
+}
+
+.aip-drawer__refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid rgba(79, 110, 245, 0.2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-primary, #4f6ef5);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.aip-drawer__refresh-btn:hover:not(:disabled) {
+  background: rgba(79, 110, 245, 0.08);
+}
+
+.aip-drawer__refresh-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* 时间线 */
+.aip-drawer__timeline-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.aip-drawer__timeline-time {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aip-drawer__timeline-model {
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+
+.aip-drawer__timeline-files-btn {
+  margin-left: 8px;
+}
+
+.aip-drawer__timeline-diff-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.aip-drawer__timeline-diff-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(96, 114, 153, 0.1);
+  color: var(--text-soft);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.aip-drawer__timeline-diff-label--accent {
+  background: rgba(79, 110, 245, 0.12);
+  color: var(--accent-primary, #4f6ef5);
+}
+
+.aip-drawer__timeline-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(96, 114, 153, 0.05);
+  border: 1px dashed rgba(96, 114, 153, 0.18);
+}
+
+.aip-drawer__timeline-file {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.aip-drawer__timeline-file b {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(79, 110, 245, 0.12);
+  color: var(--accent-primary, #4f6ef5);
+  font-weight: 700;
+  font-size: 10px;
+}
+
+.aip-drawer__timeline-token-current {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.aip-drawer__timeline-token-sep {
+  color: var(--text-muted);
+}
+
+.aip-drawer__timeline-body {
+  display: grid;
+  gap: 3px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.aip-drawer__timeline-note {
+  margin-top: 4px;
+  padding: 6px 10px;
+  background: rgba(79, 110, 245, 0.06);
+  border-left: 3px solid var(--accent-primary, #4f6ef5);
+  border-radius: 4px;
+}
+
+.aip-drawer__timeline-summary {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(52, 199, 89, 0.06);
+  border-left: 3px solid rgba(52, 199, 89, 0.5);
+}
+
+.aip-drawer__timeline-summary--empty {
+  background: rgba(96, 114, 153, 0.04);
+  border-left-color: rgba(96, 114, 153, 0.25);
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 12px;
+}
+
+.aip-drawer__timeline-summary-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.aip-drawer__timeline-summary-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #2d9a53;
+  text-transform: uppercase;
+}
+
+.aip-drawer__timeline-summary-oneline {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.5;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+
+.aip-drawer__timeline-summary-body {
+  margin: 0;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.aip-drawer__timeline-summary-body p {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
+.aip-drawer__timeline-summary-subtitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.aip-drawer__linkbtn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-primary, #4f6ef5);
+  cursor: pointer;
+}
+
+.aip-drawer__linkbtn:hover {
+  text-decoration: underline;
+}
+
+.aip-drawer__empty-hint {
+  margin: 0;
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+  .aip-drawer__metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .aip-drawer__metric--full {
+    grid-column: span 2;
+  }
+  .aip-drawer__boost {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .aip-drawer__boost-arrow {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .aip-workspace {
+    padding: 18px;
+    gap: 14px;
+  }
+}
+</style>
