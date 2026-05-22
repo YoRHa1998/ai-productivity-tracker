@@ -1,0 +1,21 @@
+{
+  "name": "@ai-productivity-tracker/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Data stores, metrics, watchers, and core business logic for ai-productivity-tracker. Bundled into the cli entry; not published directly.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./store": "./src/store/index.ts",
+    "./store/*": "./src/store/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rimraf dist .turbo .cache *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@ai-productivity-tracker/hook-core": "workspace:*"
+  }
+}
