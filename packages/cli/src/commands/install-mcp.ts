@@ -44,7 +44,8 @@ export async function runInstallMcp(args: InstallMcpArgs = {}): Promise<number> 
       return 1
     }
   }
-  if (!data.mcpServers || typeof data.mcpServers !== 'object') {
+  // 数组也是 typeof object,这里显式拒绝并重建,避免后续把 server 写成数组项
+  if (!data.mcpServers || typeof data.mcpServers !== 'object' || Array.isArray(data.mcpServers)) {
     data.mcpServers = {}
   }
 
