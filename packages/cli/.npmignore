@@ -1,0 +1,16 @@
+# 仅保留 dist/ 和 package 元数据;package.json files 字段是首选过滤器,
+# 这份 .npmignore 作为兜底,避免误带 source / map / config 类文件。
+
+src/
+node_modules/
+tsconfig.json
+build.mjs
+*.tsbuildinfo
+.eslintcache
+.cache/
+.turbo/
+coverage/
+
+# 排除 source maps 与冗余 skill 镜像(用户面板拿不到 .map,镜像也只是开发态备份)
+dist/**/*.map
+dist/skills/

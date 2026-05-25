@@ -27,6 +27,11 @@ const version = pkg.version
 const entryFile = join(__dirname, 'src/index.ts')
 const outfile = join(distDir, 'cli.mjs')
 
+// 默认产物不含 source map(npm tarball 体积优化)。
+// 本地排错可:
+//   AIPT_BUILD_SOURCEMAP=1 node build.mjs   → 输出 cli.mjs.map
+const includeSourcemap = process.env.AIPT_BUILD_SOURCEMAP === '1'
+
 await build({
   entryPoints: [entryFile],
   bundle: true,
@@ -34,7 +39,7 @@ await build({
   target: 'node20',
   format: 'esm',
   outfile,
-  sourcemap: true,
+  sourcemap: includeSourcemap,
   minify: false,
   banner: {
     // banner 是 esbuild 不会改写的头部固定结构,适合放稳定 marker。

@@ -14,7 +14,8 @@ export default defineConfig({
     // 看板产物直接落到 cli 包内,daemon 通过 webRoot 静态托管
     outDir: '../cli/dist/web',
     emptyOutDir: true,
-    sourcemap: true,
+    // npm tarball 默认不含 sourcemap;本地排错可 AIPT_BUILD_SOURCEMAP=1 pnpm build
+    sourcemap: process.env.AIPT_BUILD_SOURCEMAP === '1',
     rollupOptions: {
       output: {
         manualChunks: {
