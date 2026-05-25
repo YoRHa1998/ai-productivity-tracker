@@ -113,13 +113,16 @@ marker `# ai-productivity-hook` 用于识别同源条目,`aipt install` 时按 m
 ### 3.3 stop-check 内部决策树
 
 ```
-1. parsePayload(stdin) → 提取 workspace_roots[0] / loop_count
-2. loop_count > CURSOR_STOP_LOOP_LIMIT(默认 1) → skipped_loop_guard
+1. parsePayload(stdin) → 提取 workspace_roots[0] / loop_count / status
+2. (v1.0.0-rc.11) Cursor status ∈ {aborted, error} → skipped_aborted
+   用户手动 ESC / Cancel / API 失败时,Cursor 仍会触发 stop hook,
+   必须在最前面静默放行,绝不输出 followup_message
 3. resolveTrackingContext(cwd) → { projectRoot, branch, issueKey }
 4. issueKey 不存在 → skipped_no_issue_key
 5. isRequirementInitialized(issueKey) === false → skipped_requirement_missing
 6. agent 不可达(skipAgentReachability=false 时)→ skipped_agent_unavailable
-7. readRecentAttachSentinel(issueKey):
+7. loop_count >= 1(Cursor)/ stop_hook_active===true(Claude) → skipped_loop_guard
+8. readRecentAttachSentinel(issueKey):
    - 文件存在 + calledAt 在 90s 窗内 → allowed_recent_attach (stdout 空,exit 0)
    - 否则 → inject_followup:
      stdout {
@@ -128,11 +131,16 @@ marker `# ai-productivity-hook` 用于识别同源条目,`aipt install` 时按 m
      }
 ```
 
+> 注:`status` 字段为 Cursor stop hook payload 独有(`'completed' | 'aborted' | 'error'`),
+> Claude Code Stop hook 文档明确 "do not fire on user interrupts",中断时根本不会进入
+> stop-check;但 stop-check 内 `isAbortedStop()` 仍按方言对称处理,future-proof 防回归.
+
 ### 3.4 决策语义
 
 | outcome.kind            | stdout                           | IDE 行为                                                                   |
 | ----------------------- | -------------------------------- | -------------------------------------------------------------------------- |
 | `allowed_recent_attach` | 空                               | 正常结束                                                                   |
+| `skipped_aborted`       | 空                               | 用户中断 / 出错,正常结束,绝不打扰                                          |
 | `skipped_*`             | 空                               | 正常结束(前置条件不满足,放行)                                              |
 | `inject_followup`       | `{decision:"block", reason:...}` | Cursor 把 reason 当作新一轮 user 消息,LLM 被迫重新答复 + 调 attach_summary |
 

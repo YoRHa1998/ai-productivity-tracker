@@ -10,7 +10,33 @@
 
 ## [Unreleased]
 
-> 占位。下次有可发版改动后补充。
+### Fixed
+
+**Cursor `stop` hook 在用户手动中断时仍误触 followup_message,LLM 被强制重答**
+
+实测现象:用户在 Cursor 里按 ESC / Cancel 中断当前对话后,几秒内 Cursor
+会自动 submit 一条 `[ai-productivity 防伪造校验] ...` 文案,LLM 被强制重新答复,
+完全违背用户中断意图,体验极差。
+
+根因:Cursor 官方 [Hooks 文档](https://cursor.com/docs/hooks.md) 明确 stop hook
+payload 含 `status: "completed" | "aborted" | "error"` 字段;但我们的
+`runStopCheck()` 完全没读 `status`,任何状态下都跑 sentinel 校验,
+sentinel 缺失就 `inject_followup`,Cursor 把 followup_message 当作下一轮 user prompt
+自动 submit。
+
+对照:Claude Code Stop hook 文档明确 "do not fire on user interrupts",中断时根本不调
+Stop hook,所以同 IDE 装的 evolution 等 skill 天然不被中断打扰 —— **Cursor 行为不同,
+必须在 stop-check 内主动过滤**。
+
+修复:[`packages/hook-core/src/stop-check.ts`](../packages/hook-core/src/stop-check.ts) 内 `detectDialect()` 之后
+立即调 `isAbortedStop(parsed, dialect)`,Cursor `status ∈ {aborted, error}` →
+立即返回新 outcome `skipped_aborted`(`output: null`),不再跑 git / sentinel / agent ping
+任何后续逻辑,零开销零打扰。
+
+向后兼容:`status` 字段缺失(老 Cursor / 测试 fixture)按 `'completed'` 处理,
+**不**判定为 abort,原有 sentinel 校验逻辑全保留,不会让"中断"和"老版本"混淆。
+
+新增 4 例单元测试覆盖 aborted / error / 优先级 / 老 payload 兼容,612 → 616 例全绿。
 
 ---
 
@@ -177,7 +203,7 @@ deprecate 原因:`packaging bug: dependencies contain workspace:* protocol, fail
 **每个 rc 暴露不同维度的非显然问题**——这是新 OSS 包正常发布节奏,关键是
 deprecate 老版本 + CHANGELOG 透明记录,让后来者一次就跑通。
 
-记录 8 条经验供后续 release 或同类 OSS 项目参考。
+记录 9 条经验供后续 release 或同类 OSS 项目参考。
 
 ### 1. pnpm `<script>` 会把全局 `~/.npmrc` 注入为 `npm_config_*` env
 
@@ -356,6 +382,51 @@ Claude Code 等其它 IDE 不会这样标。
 **处理**:`console.error` 写诊断日志是 stdio MCP server 标准做法,保留。
 用户看到 `[error] running v1.0.0-rc.7` 不要慌,真正的错误会有
 "Connection closed" / "JSON parse error" 等 MCP 级别报错伴随。
+
+### 9. Cursor `stop` hook 在用户手动中断时**也会触发**,必须读 `status` 字段过滤
+
+**现象**:用户在 Cursor 里按 ESC / Cancel 中断对话后,几秒内 Cursor 自动 submit
+一条 `[ai-productivity 防伪造校验] ...` 文案当作新一轮 prompt,LLM 被迫重新答复,
+完全违背中断意图,用户体验极差。
+
+**根因**:不能假设"stop hook = 正常完成才触发"。两个 IDE 行为**截然不同**:
+
+| IDE         | 用户中断时 stop hook 是否触发         | 行为依据                                  |
+| ----------- | ------------------------------------- | ----------------------------------------- |
+| Claude Code | **不触发**                            | 文档原文 "do not fire on user interrupts" |
+| Cursor      | **会触发**,payload `status='aborted'` | 文档显式定义 `status` 三态                |
+
+我们的 `runStopCheck()` 只看了 `loop_count` / `stop_hook_active`(死循环防御),
+完全没读 Cursor payload 的 `status` 字段,中断/出错都走 sentinel 校验 → inject_followup
+路径,Cursor 把 followup_message 当作下一轮 user prompt 自动 submit。
+
+参考对照:`.claude/skills/evolution` skill 也有 Stop hook(`session-end.sh`),
+但它装的是 Claude Code 端 → 用户 ESC 时根本不触发,**evolution 自身没做任何
+过滤**,只是天然受益于 Claude Code 的设计。这就是为什么用户感觉"evolution 中断不会
+打扰,我们的 stop-check 会打扰"。
+
+**修复**(`packages/hook-core/src/stop-check.ts`):
+
+```ts
+function isAbortedStop(parsed: Record<string, unknown>, dialect: StopDialect): boolean {
+  const status = typeof parsed.status === 'string' ? parsed.status : ''
+  return status === 'aborted' || status === 'error'
+}
+
+// runStopCheck() 内 detectDialect() 之后立即:
+if (isAbortedStop(parsed, dialect)) {
+  return { kind: 'skipped_aborted', dialect, output: null }
+}
+```
+
+放在最前面的好处:中断时连 git resolveTrackingContext / fetch ping / sentinel read
+都不跑,零开销零副作用。
+
+**方法论**:任何"借用 IDE hook 注入 followup"的设计都必须先调研 hook 在 IDE
+**异常/中断/失败**路径下的行为,不能只盯着 happy path 写代码。同样的 hook 名,
+不同 IDE 行为可能完全相反(Claude `Stop` vs Cursor `stop` 就是典型反例)。
+新增 outcome 维度 `skipped_aborted`,与 `skipped_*` 系列对齐,便于事后日志统计
+"被打扰的中断次数 → 应该为 0"。
 
 ---
 
