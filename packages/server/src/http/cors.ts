@@ -48,11 +48,47 @@ export function applyCors(
 /**
  * `panel-origin` 放行规则:同源(本机 loopback)或 config.allowedOrigins 命中时,
  * 看板路由免 Bearer token 鉴权;IDE/Hook 主链路仍要 token。
+ *
+ * 兜底链(按优先级):
+ *  1. `Origin` 命中 loopback / allowedOrigins
+ *  2. `Referer` 命中 loopback / allowedOrigins(用于同源 GET/HEAD;
+ *     Fetch 标准下浏览器默认不发 Origin)
+ *  3. `Sec-Fetch-Site: same-origin | same-site`(现代浏览器同源 GET 必发,
+ *     作为 Referer 被隐私策略屏蔽时的二次兜底)
+ *
+ * 设计原因:daemon 同源托管看板 SPA 时,首屏批量 GET 不带 Origin,
+ * 仅靠 `Origin` 判定会让所有 panel 路由统一回 401(见 README 401 Troubleshooting)。
  */
 export function isPanelOriginAllowed(config: ServerConfig, req: IncomingMessage): boolean {
   const origin = req.headers.origin
-  if (!origin) return false
-  if (isLocalOrigin(origin)) return true
-  if (config.allowedOrigins.includes(origin)) return true
+  if (origin) {
+    if (isLocalOrigin(origin)) return true
+    if (config.allowedOrigins.includes(origin)) return true
+  }
+
+  const referer = req.headers.referer
+  if (typeof referer === 'string' && referer.length > 0) {
+    const refererOrigin = parseOrigin(referer)
+    if (refererOrigin) {
+      if (isLocalOrigin(refererOrigin)) return true
+      if (config.allowedOrigins.includes(refererOrigin)) return true
+    }
+  }
+
+  const secFetchSite = req.headers['sec-fetch-site']
+  if (typeof secFetchSite === 'string') {
+    const v = secFetchSite.toLowerCase()
+    if (v === 'same-origin' || v === 'same-site') return true
+  }
+
   return false
+}
+
+function parseOrigin(urlLike: string): string | null {
+  try {
+    const u = new URL(urlLike)
+    return `${u.protocol}//${u.host}`
+  } catch {
+    return null
+  }
 }
