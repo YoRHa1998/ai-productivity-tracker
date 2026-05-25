@@ -44,5 +44,13 @@ export async function runMcp(): Promise<number> {
     console.error(`[ai-productivity-tracker] mcp server 异常退出:${msg}`)
     return 1
   }
-  return 0
+
+  // 关键:startMcpServer 的 `await server.connect(transport)` 只是启动 stdio
+  // transport(注册 stdin readable / stdout writable 事件),立刻 resolve。
+  // 不在这里阻塞会让 main() 拿到 0 调 process.exit(0),mcp 子进程立即退出 →
+  // Cursor 看到 "MCP error -32000: Connection closed"。
+  // 阻塞 hang 住 event loop,让 stdio transport 处理 JSON-RPC 直到外部 SIGTERM。
+  return new Promise<number>(() => {
+    /* never resolves */
+  })
 }
