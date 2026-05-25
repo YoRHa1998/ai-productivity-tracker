@@ -24,7 +24,7 @@ const sections: InfoSection[] = [
       {
         title: '看板维度',
         description:
-          '按 Jira 需求维度查看提效倍数、Coding 次数、Token 成本、本轮 git diff 与本轮 AI 对话总结。'
+          '按 Jira 需求维度查看提效倍数、对话次数、Token 成本、本轮 git diff 与本轮 AI 对话总结。'
       },
       {
         title: '数据口径',
@@ -39,41 +39,51 @@ const sections: InfoSection[] = [
       {
         title: '对话总结(软数据)',
         description:
-          '每轮涉及代码改动的对话结束时,AI 自动生成 100-300 字总结,通过 MCP tool 上报回填到本轮 iteration。'
+          '每轮涉及代码改动的对话结束时,AI 自动生成 100-300 字总结,通过 MCP tool ai_productivity_attach_summary 回填到本轮 iteration。'
+      },
+      {
+        title: '复盘经验(P0)',
+        description:
+          '需求结束时在 IDE 内说「经验提取」,AI 自动按 5 个维度(pitfall / rule / best-practice / split-suggestion / tooling)沉淀经验到本机统一经验库,跨需求可复用。'
       }
     ]
   },
   {
     num: '02',
-    title: '数据流',
-    description: 'IDE → 本地 agent → 本机文件,完全不经过平台 API。',
+    title: '架构与数据流',
+    description: '单 npm 包 + 单 daemon + 本机文件,完全不依赖任何远端服务。',
     tone: 'accent',
     items: [
       {
-        title: '需求创建',
+        title: '一行 npm 即安装',
         description:
-          '在 IDE 内跟 AI 给出 Jira URL,AI 调用 ai_productivity_init MCP tool,本地 agent 解析后直接在本机创建 requirement.json 并把当前分支绑定到对应 jiraKey。'
+          'npm i -g @ai-productivity-tracker/cli 安装一个独立包,bin 提供 aipt 与 ai-productivity-tracker 两个等价命令;`aipt install` 一键写入 mcp.json / hooks.json / skill / rule,无任何额外守护进程或下载步骤。'
       },
       {
-        title: '过程上报',
+        title: '需求创建',
         description:
-          'Claude Code:agent 内置 transcript-watcher 监听 ~/.claude/projects/**/*.jsonl,命中绑定时直接写本机 iterations.jsonl;Cursor:afterAgentResponse Hook 调用同一份 ~/Downloads/ai-productivity-mcp.mjs(argv hook 子命令)POST 给 agent,同样直接写本机文件。两条链路都直接写本机文件,不经平台。'
+          '在 IDE 内给 AI 一个 Jira URL,AI 调用 ai_productivity_init MCP tool,daemon 立即在本机创建 ~/.ai-productivity-tracker/data/<JIRA-KEY>/requirement.json,并把当前分支绑定到对应 jiraKey。'
+      },
+      {
+        title: '过程自动采集',
+        description:
+          'Cursor:~/.cursor/hooks.json afterAgentResponse 在每次回答后执行 node <cli.mjs> hook → POST 给 daemon;Claude Code:daemon 内置 TranscriptWatcher 监听 ~/.claude/projects/**/*.jsonl 增量。两条链路都直接落本机文件,不经远端。'
       },
       {
         title: '对话总结上报',
         description:
-          'Claude 端 ~/.claude/skills/ai-productivity-track/ + Cursor 端 ~/.cursor/rules/ai-productivity-track.mdc 自动触发 ai_productivity_attach_summary MCP tool,把本轮总结回填到最新非 init iteration。'
+          '~/.claude/skills/ai-productivity-track/ + ~/.cursor/rules/ai-productivity-track.mdc 由 aipt install 自动注入;AI 每轮答复前调用 ai_productivity_attach_summary,把一句话总结 + 改动范围回填到最新非 init iteration。'
       },
       {
-        title: '看板读取',
+        title: '看板同源托管',
         description:
-          '浏览器直接 fetch http://127.0.0.1:17280/ai-productivity/*,通过 Origin 头自动放行(无需任何 API Token);agent 聚合 index.json + 各 jiraKey 下的 jsonl 实时计算提效倍数。'
+          '浏览器直接 fetch http://127.0.0.1:17350/ai-productivity/*(同 daemon 同源)。daemon 聚合 INDEX.json + 各 jiraKey 下的 jsonl 实时计算指标,前端零跨域、零 token,refresh 即可看到最新数据。'
       }
     ]
   },
   {
     num: '03',
-    title: '边界',
+    title: '边界与隐私',
     description: '当前工具不打算做的事,避免职责越界。',
     tone: 'neutral',
     items: [
@@ -83,14 +93,19 @@ const sections: InfoSection[] = [
           '不承担 PRD、任务板的职能,唯一关联键是 Jira Issue Key(分支名 + MCP 调用都需要包含)。'
       },
       {
-        title: 'IDE 内零安装、零维护',
+        title: '一行 npm 安装、零守护进程维护',
         description:
-          '装一个 MCP server 即同时启用 watcher / Hook 自动采集;agent 重启从 transcript-state.json + hook-dedupe.json 恢复,不会重复计数,切分支与多 worktree 天然恢复。'
+          '装一个 npm 包即同时启用 MCP server / Hook / Watcher 自动采集;daemon 由 aipt mcp 通过 ensureDaemon 按需 spawn-detached,SIGTERM 优雅停机,重启从 transcript-state.json + hook-dedupe.json 恢复,不会重复计数。'
       },
       {
         title: '本机自治、数据不外传',
         description:
-          '所有需求 / iteration / 公式 / Jira 凭证只存在 ~/.truesight-local-agent/ 下;agent 默认只监听 127.0.0.1;断网情况下整套流程照常工作,平台侧不持有任何用户级数据。'
+          '所有需求 / iteration / 公式 / Jira 凭证 / 经验只存在 ~/.ai-productivity-tracker/data/ 下;daemon 默认只监听 127.0.0.1:17350;断网情况下整套流程照常工作,不依赖任何中转服务。'
+      },
+      {
+        title: '体检 & 迁移',
+        description:
+          'aipt doctor 一行命令 9 项体检(Node / home / runtime / data / mcp.json / hooks.json / skill / rule / 老数据);老 truesight-agent 用户跑 aipt migrate 一键平迁老数据到新根。'
       }
     ]
   }
