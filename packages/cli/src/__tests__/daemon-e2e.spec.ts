@@ -40,12 +40,15 @@ async function spawnDaemon(
     AIPT_TOKEN: 't'.repeat(64),
     NODE_OPTIONS: ''
   }
+  // detached:true 让 spawn 出来的进程自己当进程组 leader,后续可以
+  // process.kill(-pid, SIG) 杀整组(避免 tsx 双进程导致 SIGKILL 只杀 wrapper)
   const proc = spawn(
     tsxBin,
     [cliEntry, 'daemon', '--port', String(port), '--no-web', ...extraArgs],
     {
       env,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true
     }
   )
 
@@ -87,7 +90,7 @@ function pickPort(): number {
 
 async function stopDaemon(d: SpawnedDaemon): Promise<void> {
   if (d.proc.exitCode !== null) return
-  d.proc.kill('SIGTERM')
+  killGroup(d.proc.pid!, 'SIGTERM')
   await new Promise<void>((resolve) => {
     if (d.proc.exitCode !== null) {
       resolve()
@@ -95,10 +98,26 @@ async function stopDaemon(d: SpawnedDaemon): Promise<void> {
     }
     d.proc.once('exit', () => resolve())
     setTimeout(() => {
-      if (d.proc.exitCode === null) d.proc.kill('SIGKILL')
+      if (d.proc.exitCode === null) killGroup(d.proc.pid!, 'SIGKILL')
       resolve()
     }, 3000)
   })
+}
+
+/**
+ * Kill 整个进程组(适配 detached:true 启动的 tsx 子进程组)。
+ * 失败时 fallback 到单进程 kill。
+ */
+function killGroup(pid: number, sig: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, sig)
+  } catch {
+    try {
+      process.kill(pid, sig)
+    } catch {
+      /* 已经死了 */
+    }
+  }
 }
 
 describe.sequential('daemon e2e', () => {
@@ -189,6 +208,52 @@ describe.sequential('daemon e2e', () => {
     daemon = null
     expect(existsSync(lockPath)).toBe(false)
   })
+
+  it('daemon crash (SIGKILL) 后重启,孤儿 lockfile 被新 daemon 覆盖', async () => {
+    const port = pickPort()
+    daemon = await spawnDaemon(tmpHome, port)
+    const lockPath = join(tmpHome, '.ai-productivity-tracker', 'runtime.json')
+    for (let i = 0; i < 20 && !existsSync(lockPath); i++) {
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    const firstLock = JSON.parse(readFileSync(lockPath, 'utf-8')) as { pid: number; port: number }
+
+    // SIGKILL 整个进程组(spawnDaemon detached:true 把 tsx wrapper + node daemon
+    // 放在同一进程组里,这里 kill -SIGKILL -pid 才能把 daemon 本体也干掉)
+    killGroup(daemon.proc.pid!, 'SIGKILL')
+    await new Promise<void>((resolve) => {
+      if (daemon!.proc.exitCode !== null || daemon!.proc.signalCode !== null) {
+        resolve()
+        return
+      }
+      daemon!.proc.once('exit', () => resolve())
+    })
+    daemon = null
+
+    // OS 端口需要数百毫秒到 ~2s 才能完全回收
+    await new Promise((r) => setTimeout(r, 2000))
+
+    // 校验:老 daemon 真的死了,/status 不通
+    let oldStillAlive = false
+    try {
+      const r = await fetch(`http://127.0.0.1:${firstLock.port}/status`, {
+        signal: AbortSignal.timeout(500)
+      })
+      oldStillAlive = r.ok
+    } catch {
+      oldStillAlive = false
+    }
+    expect(oldStillAlive).toBe(false)
+
+    // 再起一个 daemon(可能 fallback 到下一个空 port,这取决于 OS 端口回收速度)
+    daemon = await spawnDaemon(tmpHome, port)
+    const newLock = JSON.parse(readFileSync(lockPath, 'utf-8')) as { pid: number; port: number }
+    expect(newLock.pid).not.toBe(firstLock.pid)
+
+    // 新 daemon /status 必然能访问
+    const probe = await fetch(`http://127.0.0.1:${newLock.port}/status`)
+    expect(probe.ok).toBe(true)
+  }, 20000)
 
   it('端口冲突 → daemon 自动选下一个空端口', async () => {
     const port = pickPort()
