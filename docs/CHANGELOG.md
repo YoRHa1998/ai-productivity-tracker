@@ -14,12 +14,34 @@
 
 ---
 
-## [1.0.0-rc.3] - 2026-05-25
+## [1.0.0-rc.7] - 2026-05-25
 
-> 首个**实际可用**的 RC 版本。从 `instant-web-tools / web-tool-platform AI 提效面板`
-> (v2.18.0)完整迁出成独立 npm 包,以 1:1 行为保留为约束。
+> 首个**端到端可用**的 RC 版本(MCP 真能连上 Cursor / Claude Code)。
 >
-> 之前 rc.1 / rc.2 因安装期 packaging bug 已 npm deprecate,**请直接用 rc.3+**。
+> 之前 rc.1 ~ rc.6 因不同的安装期 / 启动期 bug 全部 npm deprecate,
+> **请直接用 rc.7+**。详见下方各 rc 版本的 deprecation 说明。
+
+### Fixed(rc.6 → rc.7 关键修复)
+
+**MCP 子进程缺 event-loop hang,startMcpServer 后立即 exit 导致 stdio 关闭**
+
+实测 Cursor MCP 连接报"MCP error -32000: Connection closed":
+
+- `[ai-productivity-mcp] running ...` 启动日志正常
+- 紧接着 `Connection failed`,Cursor 前端红色 Error
+
+根因:`@modelcontextprotocol/sdk` 的 `await server.connect(transport)` 只是把
+stdio transport 注册到事件循环,**立刻 resolve(不阻塞)**。我们的 `runMcp()`
+resolve 后,`main().then(code => process.exit(code))` 立即调用 process.exit,
+mcp 子进程立即退出 → stdio JSON-RPC channel 断开。
+
+修复:`runMcp()` 末尾 `return new Promise<number>(() => {})` 阻塞 event loop,
+让 stdio transport 处理 JSON-RPC 直到外部 SIGTERM(IDE 关闭 MCP 子进程时自然杀掉)。
+daemon 子命令早就用了相同模式,mcp 子命令漏改。
+
+---
+
+## [1.0.0-rc.3] - 2026-05-25(被 rc.4+ 修复迭代取代)
 
 ### Added(首版核心能力)
 
@@ -94,7 +116,7 @@
 - server(2 spec, 83 例):routes/ai-productivity + skill-sync
 - cli(7 spec, 64 例):paths / pick-port / runtime-lock / config / install-mcp / migrate + daemon e2e(spawn 真 daemon,含 crash 重启 + 端口冲突场景)
 
-### 发布产物指标(rc.3)
+### 发布产物指标(rc.7)
 
 - npm tarball: **633 KB**(阈值 3 MB,PRD §V14 达标)
 - unpacked dist: **2.6 MB**(阈值 5 MB,PRD §V14 达标)
@@ -103,34 +125,59 @@
 
 ---
 
-## [1.0.0-rc.2] - 2026-05-25 — DEPRECATED ⚠️
+## DEPRECATED 版本汇总
 
-> **npm deprecated**。修了 rc.1 的 `workspace:*` 协议问题,`npm install -g` 能装上,
-> 但 cli 入口 main() 在 npm 全局 symlink 启动场景下不触发(`isDirectRun` 判断失效),
-> 所有命令静默 exit 0,完全不可用。请直接用 [1.0.0-rc.3](#100-rc3---2026-05-25) 或更新。
+> 以下 6 个 rc 版本都因不同的 packaging / 启动期 bug 在 npm registry 上做了 `npm deprecate` 标记。
+> 用户安装时 npm 会打印 deprecation warning + 推荐升级到 rc.7。
 
-deprecate 原因发布到 npm registry:
+### [1.0.0-rc.6] - 2026-05-25 — DEPRECATED ⚠️
 
-> "installs cleanly but cli entry never runs main() on symlinked bin. Please use 1.0.0-rc.3 or later."
+> mcp 子命令在 `startMcpServer()` 后立即 process.exit,stdio 关闭 → Cursor MCP
+> 报 `MCP error -32000: Connection closed`。日志显示 server 启动成功但连接立刻失败。
 
----
+deprecate 原因:`stop-check hook command still points to ~/Downloads/ai-productivity-mcp.mjs (legacy v2.x death path, file not exist after install). Please use 1.0.0-rc.6 or later.` (注:rc.5 → rc.6 修了路径,rc.6 → rc.7 修了 mcp hang。每次 rc 暴露的新问题都不同)
 
-## [1.0.0-rc.1] - 2026-05-25 — DEPRECATED ⚠️
+### [1.0.0-rc.5] - 2026-05-25 — DEPRECATED ⚠️
 
-> **npm deprecated**。`cli/package.json` `dependencies` 含 `workspace:*` 协议,
-> 用户 `npm install -g @ai-productivity-tracker/cli@1.0.0-rc.1` 直接报
+> `skill-sync.ts` 的 `defaultMcpBinPath()` 仍硬编码 `~/Downloads/ai-productivity-mcp.mjs`,
+> 导致 hooks.json 中 stop-check hook 命令指向已删除的文件,Cursor stop hook 触发时 ENOENT 静默失败。
+
+### [1.0.0-rc.4] - 2026-05-25 — DEPRECATED ⚠️
+
+> mcp.json / hooks.json 内的 `node` 是相对命令,依赖 PATH 解析。macOS GUI 应用
+> (Cursor / Claude Code)从 launchd 启动子进程时 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`,
+> nvm/volta/fnm 装的 node 全部不在里面,触发 ENOENT 静默失败。
+
+### [1.0.0-rc.3] - 2026-05-25 — DEPRECATED ⚠️
+
+> `aipt install` 调 daemon `/install-cursor-hook` 端点时,daemon handler 硬检查
+> `~/Downloads/ai-productivity-mcp.mjs` 文件存在性,不存在 → HTTP 412。
+> cli 早已通过 body.hookEntry 传了正确的全局 cli.mjs 路径,但 handler 完全没接住。
+> 同时 install-mcp 默认 command 是 `npx -y ...`,macOS GUI 应用启 MCP 子进程时拉包易超时。
+
+### [1.0.0-rc.2] - 2026-05-25 — DEPRECATED ⚠️
+
+> cli 入口 main() 在 npm 全局 symlink 启动场景下不触发(`isDirectRun` 判断失效),
+> 所有命令静默 exit 0,完全不可用。
+
+deprecate 原因:`installs cleanly but cli entry never runs main() on symlinked bin. Please use 1.0.0-rc.3 or later.`
+
+### [1.0.0-rc.1] - 2026-05-25 — DEPRECATED ⚠️
+
+> `cli/package.json` `dependencies` 含 `workspace:*` 协议,用户 `npm install -g` 直接报
 > `EUNSUPPORTEDPROTOCOL Unsupported URL Type "workspace:"` 安装失败,完全装不上。
-> 请直接用 [1.0.0-rc.3](#100-rc3---2026-05-25) 或更新。
 
-deprecate 原因发布到 npm registry:
-
-> "packaging bug: dependencies contain workspace:\* protocol, fails to install. Please use 1.0.0-rc.3 or later."
+deprecate 原因:`packaging bug: dependencies contain workspace:* protocol, fails to install. Please use 1.0.0-rc.3 or later.`
 
 ---
 
 ## 📚 发布工程经验(踩坑笔记)
 
-本仓库首次走完"独立 npm 包"完整发布流程时遇到 4 个非显然的坑。记录在此供后续 release 或同类 OSS 项目参考。
+本仓库首次走完"独立 npm 包"完整发布流程,从 rc.1 走到 rc.7 才真正端到端可用。
+**每个 rc 暴露不同维度的非显然问题**——这是新 OSS 包正常发布节奏,关键是
+deprecate 老版本 + CHANGELOG 透明记录,让后来者一次就跑通。
+
+记录 8 条经验供后续 release 或同类 OSS 项目参考。
 
 ### 1. pnpm `<script>` 会把全局 `~/.npmrc` 注入为 `npm_config_*` env
 
@@ -217,6 +264,98 @@ GAT)。这是 npm 平台侧策略,非代码问题。
 
 效果:`pnpm release --publish` 完全静默通过 2FA 校验,token 限定在单一 scope,
 即便文件泄露最大破坏面也仅限于 publish 这一个 scope 的包。
+
+### 5. macOS GUI 应用启子进程时 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`
+
+**现象**:rc.4 把 mcp.json 配置改成 `{ command: "node", args: ["<abs cli.mjs>", "mcp"] }`,
+shell 终端跑完全 OK,但 Cursor 启 MCP 子进程时静默 ENOENT 失败。
+
+**根因**:Cursor / Claude Code 等 GUI 应用从 macOS launchd 启动,继承的 PATH **不是**
+你 shell rc 文件里的 PATH,而是 macOS 系统默认 `/usr/bin:/bin:/usr/sbin:/sbin`。
+nvm / volta / fnm / asdf 等 Node 版本管理器装的 node 全部不在这个 PATH 里,
+`exec node ...` 直接 ENOENT。
+
+**修复**:**所有写到 IDE 配置的命令必须用 `process.execPath` 绝对路径**,
+不依赖 PATH 解析:
+
+```ts
+// install-mcp.ts / install-cursor-hook / skill-sync stop-check 三处都这么写
+const command = process.execPath // /Users/.../bin/node 绝对路径
+const args = [process.argv[1] /* cli.mjs 绝对路径 */, 'mcp']
+```
+
+同样适用于 Linux 用户用 nvm/volta 时,以及未来 Windows 的 nvs/nvm-windows。
+
+### 6. stdio MCP server 启动后必须显式 hang event loop
+
+**现象**:rc.6 实测 Cursor 报 `MCP error -32000: Connection closed`,但日志
+显示 mcp 启动成功(`[ai-productivity-mcp] running ...`)。
+
+**根因**:`@modelcontextprotocol/sdk` 的 `await server.connect(transport)` 接受
+一个 transport,底层做的事:
+
+1. 把 process.stdin 注册成 readable 监听
+2. 把 process.stdout 注册成 writable
+3. resolve Promise
+
+它**不阻塞**——只是把回调挂到 Node event loop。但 cli `runMcp()` resolve 后
+`main().then(code => process.exit(code))` 立即调 `process.exit(0)`,**就算 stdio
+监听器还在,process.exit 也会强制杀进程** → Cursor stdio JSON-RPC channel 断开。
+
+**修复**:子命令显式 hang event loop:
+
+```ts
+export async function runMcp(): Promise<number> {
+  await ensureDaemon()
+  await startMcpServer() // 注册 stdio 监听后立刻 resolve
+  // 永不 resolve,event loop keep alive,直到外部 SIGTERM
+  return new Promise<number>(() => {})
+}
+```
+
+`daemon` 子命令早就用了相同模式(SIGTERM/SIGINT handler 内调 process.exit),
+**mcp 子命令是漏改**。所有"长期运行的 stdio / HTTP server 子命令"都需要这个模式。
+
+### 7. 大型项目迁移时的"死代码 fallback"陷阱
+
+**现象**:从 rc.3 到 rc.6,陆续在 4 个地方发现源仓库 v2.x 留下的死代码,
+全部默认指向 `~/Downloads/ai-productivity-mcp.mjs`(老的"用户手动 curl 下载"位置):
+
+1. `server/routes/ai-productivity.ts` `defaultHookEntryPath()` + 412 错误文案
+2. `server/routes/ai-productivity.ts` `handleAiProductivityInstallCursorHook` 硬检查
+3. `server/routes/ai-productivity.ts` hook command 拼装中的 `node ${path}`
+4. `server/skill-sync.ts` `defaultMcpBinPath()` 用于 stop-check command
+
+**根因**:这些函数都被单测覆盖,但**测试用例只验证"接口契约"**(传入参数 → 输出
+结果),没有覆盖"默认值是否合理"。`existsSync(~/Downloads/...)` 在源仓库
+测试机上可能存在(因为用户机器上有),迁移到新仓库后用户没装老工具,这些死路径
+就一个一个炸出来。
+
+**修复方法论(供后续大型迁移参考)**:
+
+1. **grep 老路径关键字做一次 sweep**:`grep -rn "Downloads/ai-productivity-mcp\|truesight\|17280" packages/` —— 任何命中都要 case-by-case 评估保留还是清理
+2. **写"全新机器端到端 e2e"**:模拟刚装完 npm 包的纯净环境跑完整流程,catch
+   所有"假设用户机器上有 XX"的隐式依赖。本仓库后续可以加 vitest e2e:
+   起一个 mkdtempSync 模拟 HOME → npm i → aipt install → aipt mcp → 解析 JSON-RPC
+3. **rc 阶段就是用来 catch 这些坑的**:7 个 rc 看似多,实际是 OSS 发布前正常节奏;
+   每次 deprecate 老版本 + CHANGELOG 透明记录,让后来者跳过坑
+
+### 8. Cursor MCP 客户端的 stderr UI 显示约定
+
+**现象**:cli 通过 `console.error('[ai-productivity-tracker] reusing daemon ...')` 输出
+诊断日志,Cursor 端 MCP Output 面板里这些行被标 `[error]`,看着像"启动报错"。
+
+**根因**:stdio MCP 协议规定:
+
+- **stdout** 是 JSON-RPC 通道,只能有合法 JSON-RPC 帧
+- **stderr** 可以任意输出,通常作为子进程的诊断日志
+
+Cursor 把子进程 stderr 每行都标记成 `[error]` 是 UI 约定(不是真错误)。
+Claude Code 等其它 IDE 不会这样标。
+
+**处理**:`console.error` 写诊断日志是 stdio MCP server 标准做法,保留。
+用户看到 `[error] running v1.0.0-rc.7` 不要慌,真正的错误会有
+"Connection closed" / "JSON parse error" 等 MCP 级别报错伴随。
 
 ---
 
