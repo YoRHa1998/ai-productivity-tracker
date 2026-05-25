@@ -4,7 +4,6 @@ import AiProductivityTrackerWorkspaceTab from './tabs/AiProductivityTrackerWorks
 import AiProductivityTrackerLessonsTab from './tabs/AiProductivityTrackerLessonsTab.vue'
 import AiProductivityTrackerSettingsTab from './tabs/AiProductivityTrackerSettingsTab.vue'
 import AiProductivityTrackerMcpConfigTab from './tabs/AiProductivityTrackerMcpConfigTab.vue'
-import AiProductivityTrackerAboutTab from './tabs/AiProductivityTrackerAboutTab.vue'
 import AiProductivityTrackerGuideTab from './tabs/AiProductivityTrackerGuideTab.vue'
 
 export interface TabMeta {
@@ -18,8 +17,7 @@ export const tabs: TabMeta[] = [
   { key: 'lessons', label: '复盘经验', order: 2 },
   { key: 'settings', label: '业务配置', order: 3 },
   { key: 'mcp-config', label: 'MCP 配置', order: 4 },
-  { key: 'about', label: '工具说明', order: 5 },
-  { key: 'guide', label: '使用说明', order: 6 }
+  { key: 'guide', label: '使用说明', order: 5 }
 ]
 
 const routes: RouteRecordRaw[] = [
@@ -47,12 +45,6 @@ const routes: RouteRecordRaw[] = [
     name: 'mcp-config',
     component: AiProductivityTrackerMcpConfigTab,
     meta: { label: 'MCP 配置' }
-  },
-  {
-    path: '/about',
-    name: 'about',
-    component: AiProductivityTrackerAboutTab,
-    meta: { label: '工具说明' }
   },
   {
     path: '/guide',

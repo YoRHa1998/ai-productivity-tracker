@@ -84,18 +84,29 @@ export interface AttachSummaryInput {
 
 export interface AttachSummaryResult {
   ok: true
-  /** v2.7.0 起恒为 true:pending 写盘成功视作 updated。回填到 iteration 由后续 hook/watcher 触发 */
+  /** v2.7.0 起 happy path 恒为 true;v2.13.0 起 skipped 场景为 false */
   updated: boolean
   /**
    * v2.7.0:总结已写入 `<jiraKey>/pending-summary.json` 中间态,等待下一条 iteration 写盘消费。
    * `pending: true` 表示已成功落盘 pending(等价旧 updated:true)。
    */
   pending?: boolean
+  /**
+   * v2.13.0 新增:非 Jira 分支误调的兜底,daemon 不返 4xx 而是返
+   * `{ skipped: true, reason: 'no_jira_key', jiraKey: '' }`,避免 IDE 工具面板标红。
+   * MCP 工具层把它格式化为 `skipped jiraKey=... reason=no_jira_key`。
+   */
+  skipped?: boolean
+  /** skipped=true 时为空串;happy path 为实际 jiraKey */
   jiraKey: string
   /** v2.7.0 起恒为 null:总结由下一条 iteration 接管,seq 在 attach 调用时尚未确定 */
   iterationSeq: number | null
-  /** v2.6.0 保留兼容:'no_iteration' | 'only_init' 老语义。v2.7.0 起新增 'write_failed' */
-  reason?: 'no_iteration' | 'only_init' | 'write_failed'
+  /**
+   * v2.6.0:'no_iteration' | 'only_init' 老语义。
+   * v2.7.0 新增 'write_failed'。
+   * v2.13.0 新增 'no_jira_key'(非 Jira 分支误调的 skipped 兜底)。
+   */
+  reason?: 'no_iteration' | 'only_init' | 'write_failed' | 'no_jira_key'
 }
 
 export class AgentClient {

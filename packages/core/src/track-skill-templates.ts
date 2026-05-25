@@ -64,9 +64,32 @@
  *   `normalizeConversationSummary` 仍按 120/300 二次截断,数据完整性不变。
  * - 5 份模板文案对应改写:`oneLine: "<目标 ≤120 字(超出会被 agent 静默截断,不会失败)>"`
  *   类似措辞,让 LLM 明确"字数是建议不是硬限"并放心调用。
+ *
+ * v2.13.0 收紧非 Jira 分支触发(用户反馈:在没有 Jira key 的分支也频繁触发,污染体验):
+ * - 根因 1:Cursor rule frontmatter `alwaysApply: true`,**每轮系统 prompt 无条件注入**;且正文
+ *   开篇就是「每轮**最终答复前**都触发,不区分是否改代码」+「**禁止凭'心里总结清楚了'就跳过**」
+ *   这种**反向倒逼**句,LLM 偏向"先调一次再说",非 Jira 分支命中 daemon HTTP 400 留下工具
+ *   面板红色失败。
+ * - 根因 2:Claude `UserPromptSubmit` Hook 是无条件 `printf`,shell 层不判分支,reminder 100%
+ *   注入对话上下文,Claude Code 同样会误调。
+ * - 本期改动:
+ *   a) `CURSOR_TRACK_RULE_CONTENT` / `CLAUDE_TRACK_SKILL_CONTENT` 整体重排:把「前置」改写为
+ *      首段「## 强约束」,**非 Jira 分支严禁调用 + 严禁在答复中提及上报相关内容**;删/改"不
+ *      区分是否改代码"" 禁止凭心里总结清楚就跳过 "等反向倒逼句,改成「**前置满足时**必须真
+ *      调,**前置不满足时**严禁调用」双向对称表述。
+ *   b) `CLAUDE_TRACK_HOOK_REMINDER_COMMAND` 从无条件 `printf` 改为 `bash -c` 包的条件 shell:
+ *      先 `git symbolic-ref --short -q HEAD` 探当前分支,**不含 Jira key 时直接静默 0 输出**,
+ *      Claude 端非 Jira 分支真正做到零污染。marker 保留外层确保 install 覆盖路径不变。
+ *   c) MCP `ai_productivity_attach_summary` tool description 也补一句"仅当 cwd 分支含 Jira
+ *      issue key 时调用",`tools/list` 阶段就有威慑(配套改在 packages/mcp/src/tools.ts)。
+ *   d) daemon `handleAiProductivityAttachSummary` 的「无法推断当前追踪需求」从 HTTP 400 改为
+ *      HTTP 200 `{ ok:true, skipped:true, reason:'no_jira_key' }`,即便 LLM 仍误调,工具面板
+ *      也是绿色 skipped 而非红色 4xx(配套改在 packages/server/src/routes/ai-productivity.ts)。
+ * - Cursor rule 仍保持 `alwaysApply: true`(用户 trade-off:Jira 分支触发率不变),靠 prompt
+ *   文案 + Claude shell + MCP description + daemon 兜底 4 层防线把非 Jira 分支 noise 压到极低。
  */
 
-export const TRACK_SKILL_VERSION = '2.12.0'
+export const TRACK_SKILL_VERSION = '2.13.0'
 
 export const CLAUDE_TRACK_SKILL_FILENAME = 'SKILL.md'
 export const CURSOR_TRACK_RULE_FILENAME = 'ai-productivity-track.mdc'
@@ -80,24 +103,53 @@ export const CURSOR_TRACK_RULE_FILENAME = 'ai-productivity-track.mdc'
  * 用于安装时覆盖旧版本而不重复追加.
  */
 export const CLAUDE_TRACK_HOOK_REMINDER_MARKER = '# ai-productivity-track-reminder'
-export const CLAUDE_TRACK_HOOK_REMINDER_COMMAND = `printf '%s' '即将开始本轮对话。如果当前 git 分支匹配 [A-Z][A-Z0-9]+-\\d+,请在最终答复前调用 ai_productivity_attach_summary MCP tool 上报本轮结构化总结(oneLine + type + changeScope/discussion,source="claude-code"),前置不满足时静默跳过。详见 ~/.claude/skills/ai-productivity-track/SKILL.md。' ${CLAUDE_TRACK_HOOK_REMINDER_MARKER}`
+/**
+ * v2.13.0 收紧:
+ *   - 老版本是无条件 `printf`,无论当前分支是否含 Jira issue key,reminder 100% 注入 Claude
+ *     对话上下文,导致非 Jira 分支同样有 ~150 token 上下文污染 + LLM 误调 attach_summary。
+ *   - 新版本用 `bash -c` 包一段条件 shell:先用 `git symbolic-ref --short -q HEAD` 探当前
+ *     分支(`CLAUDE_PROJECT_DIR` 兜底,否则 `$PWD`),正则匹配到 `[A-Z][A-Z0-9]+-\d+` 才 printf,
+ *     否则直接静默退出,Claude 那侧非 Jira 分支零污染。
+ *   - 任何 git 失败(非 git 仓库 / detached HEAD / git 不存在等)一律 fail-open(不输出),
+ *     `|| true` 兜底保证 exit code 始终 0,不影响 Claude 主流程。
+ *   - marker `# ai-productivity-track-reminder` 保留在 `bash -c '...'` 之外,确保
+ *     `findTrackReminderEntry` 仍能命中老条目,`installAiTrackClaudeHook` 走覆盖路径而非追加。
+ *   - 依赖:bash + git,macOS / Linux 默认都有,与本仓库 `process.execPath` + Hook 等其他模块
+ *     的隐式依赖一致。
+ */
+export const CLAUDE_TRACK_HOOK_REMINDER_COMMAND =
+  `bash -c 'b=$(git -C "\${CLAUDE_PROJECT_DIR:-$PWD}" symbolic-ref --short -q HEAD 2>/dev/null || true); ` +
+  `[[ "$b" =~ [A-Z][A-Z0-9]+-[0-9]+ ]] && ` +
+  `printf %s "即将开始本轮对话。当前 git 分支含 Jira issue key,请在最终答复前调用 ai_productivity_attach_summary MCP tool 上报本轮结构化总结(oneLine + type + changeScope/discussion,source=claude-code);daemon 不可达 / 需求未初始化 等其它前置不满足时,静默跳过本次调用,详见 ~/.claude/skills/ai-productivity-track/SKILL.md。" ` +
+  `|| true' ` +
+  CLAUDE_TRACK_HOOK_REMINDER_MARKER
 
 export const CLAUDE_TRACK_SKILL_CONTENT = `---
 name: ai-productivity-track
-description: 当用户在 git 仓库内进行任何形式的对话(无论是否改代码),当前 git 分支名包含 [A-Z][A-Z0-9]+-\\d+ Jira issue key 时,MUST 在最终答复前调用本 skill 上报结构化对话总结。本 skill 内部静默处理前置不满足场景,LLM 无需自行判断是否调用。配套 ~/.claude/settings.json UserPromptSubmit Hook 会主动 reminder,本 skill 描述使用流程细节。
+description: 当用户在 git 仓库内进行对话,且当前 git 分支名匹配正则 [A-Z][A-Z0-9]+-\\d+(含 Jira issue key)时,在最终答复前调用本 skill 上报结构化对话总结。分支不含 Jira issue key 时本 skill 完全不适用,严禁触发。本 skill 内部静默处理前置不满足场景,LLM 无需自行判断是否调用。配套 ~/.claude/settings.json UserPromptSubmit Hook(v2.13.0 起在 shell 层做 branch 探测,非 Jira 分支不再注入 reminder)。
 ---
 
 # ai-productivity-track (v${TRACK_SKILL_VERSION})
 
-## 触发
+## 强约束:前置(任一不满足 → 本规则对本轮 100% 不适用)
 
-每轮**最终答复前**都触发,不区分是否改代码。
+按顺序检查以下 3 条,**全部满足才进入触发流程**;任意一条不满足时,本规则对本轮完全失效,LLM 应当**当本规则不存在**:
 
-## 前置(任一不满足 → 静默跳过,不在答复中留痕)
+1. 当前 git 分支名必须匹配正则 \`[A-Z][A-Z0-9]+-\\d+\`(Jira issue key)
+2. 本地 daemon \`http://127.0.0.1:17350\` 必须可达
+3. 对应 jiraKey 必须已通过 \`ai_productivity_init\` 在 AI 提效面板初始化
 
-- 当前 git 分支名包含 Jira issue key (正则 \`[A-Z][A-Z0-9]+-\\d+\`)
-- 本地 daemon \`http://127.0.0.1:17350\` 可达
-- 该 jiraKey 已在 AI 提效面板初始化
+**前置不满足时的硬约束(任一情况均适用)**:
+
+- **严禁**调用 \`ai_productivity_attach_summary\`。即便 daemon v2.13.0 起会返 \`200 { skipped:true }\` 而非 4xx,工具调用本身依然是一次无意义浪费,且会在 IDE 工具面板留下痕迹打扰用户
+- **严禁**在答复任何位置(正文 / blockquote / 代码块 / 列表项 / think 段 / tool args)提及「上报 / 总结 / 跳过 / 前置不满足 / ai-productivity」等字样
+- 直接当本规则不存在,正常完成用户请求即可
+
+特别地,**Claude Code 用户提示一开始可能出现一句由 \`UserPromptSubmit\` Hook 注入的"即将开始本轮对话..."reminder**(v2.13.0 起 shell 层已做 branch 探测,仅在 Jira 分支注入)。如果你**没有**看到该 reminder,默认就视为前置不满足,直接走"本规则不适用"路径。
+
+## 触发(全部前置满足后)
+
+每轮**最终答复前**调用一次 \`ai_productivity_attach_summary\`,不区分本轮是否改代码(改动用 \`type\` 字段区分)。
 
 ## 调用
 
@@ -115,33 +167,31 @@ ai_productivity_attach_summary({
 
 \`type\` 判定:本轮使用 Write/Edit/StrReplace/EditNotebook/Delete,或执行了 \`git commit\` / \`pnpm install\` / \`pnpm build\` 等改写工作区的命令 → \`coding\`;否则 \`communication\`。
 
-\`jiraKey\` / \`branch\` / \`cwd\` 均无需传入。MCP 客户端按 \`CLAUDE_PROJECT_DIR\` → \`CURSOR_PROJECT_DIR\` → \`WORKSPACE_FOLDER_PATHS\`(v2.7.3 起,Cursor IDE 实测注入) → \`process.cwd()\` 顺序解析后自动注入 \`cwd\`;agent 端按"显式 jiraKey → branch → cwd 当前分支 → bindings.json 最近活跃需求"四级 fallback 解析。仅当 IDE 未在已绑定的 git 仓库内运行时,才需显式传入 \`jiraKey\`。
+\`jiraKey\` / \`branch\` / \`cwd\` 均无需传入。MCP 客户端按 \`CLAUDE_PROJECT_DIR\` → \`CURSOR_PROJECT_DIR\` → \`WORKSPACE_FOLDER_PATHS\` → \`process.cwd()\` 顺序解析后自动注入 \`cwd\`;agent 端按"显式 jiraKey → branch → cwd 当前分支 → bindings.json 最近活跃需求"四级 fallback 解析。仅当 IDE 未在已绑定的 git 仓库内运行时,才需显式传入 \`jiraKey\`(但此场景已被「强约束 1」过滤,实际不会走到这里)。
 
 ## 完成态(v${TRACK_SKILL_VERSION} 零提示)
 
 **调用 MCP 工具即结束本轮。不要在答复中输出任何"已上报""总结已上报""该对话已总结上报"之类的提示文字,也不要用 blockquote / 代码块 / 列表项变相输出。**
 
-理由:上报成功用户在 AI 提效面板自然能看到,上报失败提示也只会误导;整个软数据通道对用户应当 100% 无感。无论工具返回 \`updated: true\` / \`updated: false\` / 报错 / 网络异常 / 前置不满足,答复中**都不能**出现任何提示完成态的文字。
+理由:上报成功用户在 AI 提效面板自然能看到,上报失败提示也只会误导;整个软数据通道对用户应当 100% 无感。无论工具返回 \`updated: true\` / \`updated: false\` / \`skipped: true\` / 报错 / 网络异常,答复中**都不能**出现任何提示完成态的文字。
 
 > v2.7.0 起总结写入 pending 中间态,由本轮 hook/watcher 触发的下一条 iteration 自然消费并挂到该 iteration 上。
-> v2.7.3 起 MCP 客户端在 Cursor 下补齐 \`WORKSPACE_FOLDER_PATHS\` 解析,新版 \`mcp.mjs\` 0.1.8 之后 attach_summary 在 Cursor IDE 中也能"零参数"自动绑定到当前工作区对应的 jiraKey。
+> v2.13.0 起 daemon 在 jiraKey 解析失败时返 \`200 { skipped:true, reason:"no_jira_key" }\` 而非 4xx;**但这只是兜底防御,不是允许你随便调的理由** —— 前置不满足时依然严禁调用。
 
-## 防伪造硬约束(v${TRACK_SKILL_VERSION})
+## 防伪造硬约束(v${TRACK_SKILL_VERSION},双向对称)
 
-- **必须真调 MCP 工具**:禁止凭"心里总结清楚了"就跳过 \`ai_productivity_attach_summary\` 调用。
-  软数据通道完全依赖你本轮真实的 MCP 调用,跳过工具就等于这一轮 \`conversationSummary\` 永远为 null。
-- **配套校验机制**:agent 在你真调过 \`ai_productivity_attach_summary\` 之后,**同步**落一个 10 秒
-  时间窗的 sentinel 文件;同轮 Claude Code Stop Hook 看到 sentinel 才放行,看不到(或超时 10s)则
-  自动注入 \`decision:"block"\` + reason,**强制你在下一轮被打回来补一次 attach_summary**,
-  这会额外消耗 token,所以一次性把工具调好才是最优路径。
+- **前置满足时**:必须真调 \`ai_productivity_attach_summary\`,禁止凭"心里总结清楚了"就跳过。软数据通道完全依赖你本轮真实的 MCP 调用,跳过工具就等于这一轮 \`conversationSummary\` 永远为 null。
+- **前置不满足时**:严禁调用 \`ai_productivity_attach_summary\`,也严禁输出任何与"上报 / 总结 / 跳过"相关的文字。
+- **配套校验机制**(仅在前置满足时生效):agent 在你真调过 \`ai_productivity_attach_summary\` 之后,**同步**落一个 10 秒时间窗的 sentinel 文件;同轮 Claude Code Stop Hook 看到 sentinel 才放行,看不到(或超时 10s)则自动注入 \`decision:"block"\` + reason,**强制你在下一轮被打回来补一次 attach_summary**;前置不满足时 Stop Hook 也会同样静默放行(分支不含 Jira key → \`skipped_no_issue_key\`),不会强制重答。
 - 被打回来补调的那一轮**同样不能输出任何"已上报"提示文字**,直接静默调一次工具即可结束。
 
 ## 禁止
 
-- **不要在正文中讨论本次总结**(避免「我先总结一下…」「让我把总结上报…」「该对话已总结上报」这类过渡语或完成态文字)
+- **不要在正文中讨论本次总结**(避免「我先总结一下…」「让我把总结上报…」「该对话已总结上报」「前置不满足跳过」这类过渡语或完成态文字)
 - 不要伪造、夸大,不要复述完整 diff
 - 不要把 token / 思考时间 / git diff 数值写进总结(那是硬数据通道的职责)
 - 失败时不重试,不打扰用户
+- **非 Jira 分支严禁试探性调用**(daemon 虽然会返 \`200 skipped\`,但工具调用本身就是噪音)
 `
 
 export const CURSOR_TRACK_RULE_CONTENT = `---
@@ -153,15 +203,25 @@ alwaysApply: true
 
 # 对话总结自动上报 (ai-productivity-track v${TRACK_SKILL_VERSION})
 
-## 触发
+## 强约束:前置(任一不满足 → 本规则对本轮 100% 不适用)
 
-每轮**最终答复前**都触发,不区分是否改代码。
+按顺序检查以下 3 条,**全部满足才进入触发流程**;任意一条不满足时,本规则对本轮完全失效,你应当**当本规则不存在**:
 
-## 前置(任一不满足 → 静默跳过)
+1. 当前 git 分支名必须匹配正则 \`[A-Z][A-Z0-9]+-\\d+\`(Jira issue key)
+2. 本地 daemon \`http://127.0.0.1:17350\` 必须可达
+3. 对应 jiraKey 必须已通过 \`ai_productivity_init\` 在 AI 提效面板初始化
 
-- 当前分支名匹配 \`[A-Z][A-Z0-9]+-\\d+\`
-- 本地 daemon (\`http://127.0.0.1:17350\`) 可达
-- 对应 jiraKey 已在 AI 提效面板初始化
+**前置不满足时的硬约束(任一情况均适用)**:
+
+- **严禁**调用 \`ai_productivity_attach_summary\`。即便 daemon v2.13.0 起会返 \`200 { skipped:true }\` 而非 4xx,工具调用本身依然是一次无意义浪费,且会在 Cursor 工具面板留下痕迹打扰用户
+- **严禁**在答复任何位置(正文 / blockquote / 代码块 / 列表项 / think 段 / tool args)提及「上报 / 总结 / 跳过 / 前置不满足 / ai-productivity」等字样
+- 直接当本规则不存在,正常完成用户请求即可
+
+特别强调:**\`main\` / \`master\` / \`develop\` / \`bugfix-*\` / \`chore/*\` 等不含 Jira issue key 的分支,本规则一律不适用**,不要做任何"试探性"调用。
+
+## 触发(全部前置满足后)
+
+每轮**最终答复前**调用一次 \`ai_productivity_attach_summary\`,不区分本轮是否改代码(改动用 \`type\` 字段区分)。
 
 ## 调用
 
@@ -181,33 +241,31 @@ ai_productivity_attach_summary({
 
 \`jiraKey\` / \`branch\` / \`cwd\` 均无需传入,agent 会基于 MCP 客户端自动注入的 \`cwd\` 解析当前活跃需求。
 
-> v2.7.3 起 MCP 客户端在 Cursor 下读取 \`WORKSPACE_FOLDER_PATHS\` 环境变量(Cursor IDE 启动 MCP server 时的实际工作区注入,不是 \`CURSOR_PROJECT_DIR\`),解决"cwd 落在用户 home → agent 4 级 fallback 全失败 → 400"的老问题。前提是 \`~/Downloads/ai-productivity-mcp.mjs\` 已升级至 0.1.8+。
+> v2.7.3 起 MCP 客户端在 Cursor 下读取 \`WORKSPACE_FOLDER_PATHS\` 环境变量(Cursor IDE 启动 MCP server 时的实际工作区注入,不是 \`CURSOR_PROJECT_DIR\`),解决"cwd 落在用户 home → agent 4 级 fallback 全失败 → 400"的老问题。
 
 ## 完成态(v${TRACK_SKILL_VERSION} 零提示)
 
 **调用 MCP 工具即结束本轮。不要在答复中输出任何"已上报""总结已上报""该对话已总结上报"之类的提示文字,也不要用 blockquote / 代码块 / 列表项变相输出。**
 
-理由:上报成功用户在 AI 提效面板自然能看到,上报失败提示也只会误导;整个软数据通道对用户应当 100% 无感。无论工具返回 \`updated: true\` / \`updated: false\` / 报错 / 网络异常 / 前置不满足,答复中**都不能**出现任何提示完成态的文字。
+理由:上报成功用户在 AI 提效面板自然能看到,上报失败提示也只会误导;整个软数据通道对用户应当 100% 无感。无论工具返回 \`updated: true\` / \`updated: false\` / \`skipped: true\` / 报错 / 网络异常,答复中**都不能**出现任何提示完成态的文字。
 
 > v2.7.0 起总结写入 pending 中间态,由本轮 Cursor afterAgentResponse hook 触发的新 iteration 自然消费。
-> v2.7.3 起 MCP 客户端补齐 \`WORKSPACE_FOLDER_PATHS\` 自动注入(0.1.8+),Cursor IDE 下 attach_summary 真正"零参数"工作。
+> v2.13.0 起 daemon 在 jiraKey 解析失败时返 \`200 { skipped:true, reason:"no_jira_key" }\` 而非 4xx,工具面板不再标红;**但这只是兜底防御,不是允许你随便调的理由** —— 前置不满足时依然严禁调用。
 
-## 防伪造硬约束(v${TRACK_SKILL_VERSION})
+## 防伪造硬约束(v${TRACK_SKILL_VERSION},双向对称)
 
-- **必须真调 MCP 工具**:禁止凭"心里总结清楚了"就跳过 \`ai_productivity_attach_summary\` 调用。
-  软数据通道完全依赖你本轮真实的 MCP 调用,跳过工具就等于这一轮 \`conversationSummary\` 永远为 null。
-- **配套校验机制**:agent 在你真调过 \`ai_productivity_attach_summary\` 之后,**同步**落一个 10 秒
-  时间窗的 sentinel 文件;同轮 Cursor \`stop\` Hook 看到 sentinel 才放行,看不到(或超时 10s)则
-  自动塞一条 \`followup_message\`,**强制你在下一轮被打回来补一次 attach_summary**,这会额外消耗 token,
-  所以一次性把工具调好才是最优路径。
+- **前置满足时**:必须真调 \`ai_productivity_attach_summary\`,禁止凭"心里总结清楚了"就跳过。软数据通道完全依赖你本轮真实的 MCP 调用,跳过工具就等于这一轮 \`conversationSummary\` 永远为 null。
+- **前置不满足时**:严禁调用 \`ai_productivity_attach_summary\`,也严禁输出任何与"上报 / 总结 / 跳过"相关的文字。
+- **配套校验机制**(仅在前置满足时生效):agent 在你真调过 \`ai_productivity_attach_summary\` 之后,**同步**落一个 10 秒时间窗的 sentinel 文件;同轮 Cursor \`stop\` Hook 看到 sentinel 才放行,看不到(或超时 10s)则自动塞一条 \`followup_message\`,**强制你在下一轮被打回来补一次 attach_summary**;前置不满足时 Stop Hook 也会同样静默放行(分支不含 Jira key → \`skipped_no_issue_key\`),不会强制重答。
 - 被打回来补调的那一轮**同样不能输出任何"已上报"提示文字**,直接静默调一次工具即可结束。
 
 ## 禁止
 
-- 不要在正文中讨论总结过程(避免「我先总结一下…」「让我把总结上报…」「该对话已总结上报」这类过渡语或完成态文字)
+- 不要在正文中讨论总结过程(避免「我先总结一下…」「让我把总结上报…」「该对话已总结上报」「前置不满足跳过」这类过渡语或完成态文字)
 - 不要伪造、夸大
 - 不要复述完整 diff 或大量代码
 - 不要把 token / 思考时间 / git diff 数值写进总结
+- **非 Jira 分支严禁试探性调用**(daemon 虽然会返 \`200 skipped\`,但工具调用本身就是噪音)
 `
 
 export interface TrackSkillTemplate {

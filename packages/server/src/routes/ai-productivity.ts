@@ -1223,7 +1223,7 @@ export interface AttachSummaryRequestBody {
 
 export interface AttachSummaryResponse {
   ok: true
-  /** v2.7.0 起恒为 true:pending 写盘成功就视作 updated;实际回填到 iteration 由后续 hook/watcher 触发 */
+  /** v2.7.0 起 happy path 恒为 true;v2.13.0 起 skipped 场景为 false */
   updated: boolean
   /**
    * v2.7.0:对话总结现在写入 `<jiraKey>/pending-summary.json` 中间态,
@@ -1231,11 +1231,18 @@ export interface AttachSummaryResponse {
    * `pending: true` 表示已经成功落 pending 文件(等价旧 `updated: true`)。
    */
   pending: boolean
+  /**
+   * v2.13.0 新增:LLM 在非 Jira 分支误调时,daemon 不再返 4xx,改为返
+   * `200 { ok:true, skipped:true, reason:'no_jira_key', jiraKey:'' }`,
+   * 让 IDE 工具面板不再标红失败。仅在 skipped=true 时 `reason='no_jira_key'`。
+   */
+  skipped?: boolean
+  /** skipped=true 时为空串;happy path 为实际 jiraKey */
   jiraKey: string
   /** v2.7.0 起恒为 null:总结由下一条 iteration 接管,seq 在 attach 调用时尚未确定 */
   iterationSeq: number | null
-  /** 仅在不可恢复错误时出现(jiraKey 解析成功但写盘失败) */
-  reason?: 'write_failed'
+  /** 'write_failed':jiraKey 解析成功但写盘失败;'no_jira_key':v2.13.0 兜底,非 Jira 分支误调 */
+  reason?: 'write_failed' | 'no_jira_key'
 }
 
 const ONE_LINE_MAX = 120
@@ -1388,7 +1395,21 @@ export async function handleAiProductivityAttachSummary(
     }
   }
   if (!jiraKey) {
-    fail(res, 400, '无法推断当前追踪需求;请确保 cwd 在已绑定的 git 仓库内,或显式传入 jiraKey')
+    // v2.13.0 收紧非 Jira 分支触发(用户反馈:noise 主要来自 Cursor 工具面板红色失败):
+    //   - 老行为:HTTP 400 + "无法推断当前追踪需求" → MCP 客户端拿到 isError=true,工具面板标红
+    //   - 新行为:HTTP 200 + skipped:true + reason='no_jira_key',工具面板不再标红
+    //   - 这只是「LLM 已经误调了 → 不让用户看到红色」的兜底防御,真正的硬约束在
+    //     rule/skill 模板 + MCP tool description 层,要求 LLM 在分支不含 Jira key 时根本不调
+    console.info('[attach_summary] skipped: no jira key resolvable from request / cwd')
+    ok(res, {
+      ok: true,
+      updated: false,
+      pending: false,
+      skipped: true,
+      jiraKey: '',
+      iterationSeq: null,
+      reason: 'no_jira_key'
+    } satisfies AttachSummaryResponse)
     return
   }
   if (resolveVia !== 'explicit') {

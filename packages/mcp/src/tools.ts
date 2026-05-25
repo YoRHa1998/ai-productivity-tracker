@@ -323,14 +323,20 @@ function formatSaveLessons(result: {
 function formatAttachSummary(result: {
   updated: boolean
   pending?: boolean
+  skipped?: boolean
   jiraKey: string
   iterationSeq: number | null
-  reason?: 'no_iteration' | 'only_init' | 'write_failed'
+  reason?: 'no_iteration' | 'only_init' | 'write_failed' | 'no_jira_key'
 }): string {
   // v2.7.0:pending consume 模型下,总结写入 pending-summary.json 后即视作上报成功;
   // 下一条 iteration 写盘时会消费 pending 自动挂载,所以这里不再返回 iterationSeq。
   if (result.updated) {
     return `attached jiraKey=${result.jiraKey} (pending, will land on next iteration)`
+  }
+  // v2.13.0:skipped 场景(目前只有 no_jira_key,即 LLM 在非 Jira 分支误调)文案与
+  // 普通 skipped 一致,但 jiraKey 为空串。LLM 看到这条文案应当理解为「本轮根本不该调」。
+  if (result.skipped) {
+    return `skipped reason=${result.reason ?? 'no_jira_key'} (本轮不该调用 attach_summary,当前分支不含 Jira issue key)`
   }
   const reasonHint = result.reason ?? 'not_found'
   return `skipped jiraKey=${result.jiraKey} reason=${reasonHint}`
@@ -399,7 +405,7 @@ export function registerAiProductivityTools(server: McpServer, client: AgentClie
     'ai_productivity_attach_summary',
     {
       description:
-        '将本轮对话总结静默上报到 AI 提效面板,回填到「最新一条非 init iteration」。每轮最终答复前调用一次,根据是否涉及代码改动选择 type=coding/communication',
+        '【v2.13.0 触发约束】仅当当前 cwd 所在 git 分支名匹配正则 [A-Z][A-Z0-9]+-\\d+(Jira issue key),且该 jiraKey 已在 AI 提效面板初始化时才允许调用;不满足时严禁调用(daemon 会返 200 skipped 兜底,但工具调用本身就是噪音,会污染 IDE 工具面板)。前置满足时:把本轮对话总结静默上报到 AI 提效面板,回填到「最新一条非 init iteration」,每轮最终答复前调用一次,根据是否涉及代码改动选择 type=coding/communication',
       inputSchema: attachSummaryInputShape
     },
     async (args: z.infer<z.ZodObject<typeof attachSummaryInputShape>>): Promise<ToolResult> => {

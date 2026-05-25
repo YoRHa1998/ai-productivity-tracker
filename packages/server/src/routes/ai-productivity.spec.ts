@@ -1604,15 +1604,26 @@ describe('handleAiProductivityAttachSummary (v2.7.0 pending model + v2.10.0 sent
     expect(peekPendingSummary('ABC-700')).toBeNull()
   })
 
-  it('jiraKey 无法解析时返回 400,且 pending 不落盘', async () => {
-    // 不 init,且 cwd 是非 git 仓库 → 四级 fallback 全部失败
+  it('v2.13.0 jiraKey 无法解析时返 200 skipped + reason=no_jira_key,且 pending 不落盘', async () => {
+    // 不 init,且 cwd 是非 git 仓库 → 四级 fallback 全部失败.
+    // 老行为是 HTTP 400(LLM 在 Cursor 工具面板留下红色失败),v2.13.0 起改为
+    // 200 + { skipped: true, reason: 'no_jira_key' } 兜底,工具面板不再标红.
     const mock = makeMockRes()
     await handleAiProductivityAttachSummary(mock.res, {
       oneLine: 'x',
       type: 'communication',
       discussion: 'y'
     })
-    expect(mock.statusCode).toBe(400)
+    expect(mock.statusCode).toBe(200)
+    const envelope = JSON.parse(mock.body) as {
+      code: string
+      data: { ok: true; skipped?: boolean; reason?: string; updated: boolean; jiraKey: string }
+    }
+    expect(envelope.code).toBe('OK')
+    expect(envelope.data.skipped).toBe(true)
+    expect(envelope.data.reason).toBe('no_jira_key')
+    expect(envelope.data.updated).toBe(false)
+    expect(envelope.data.jiraKey).toBe('')
   })
 
   it('需求未 init 时返回 404,不落 pending', async () => {
