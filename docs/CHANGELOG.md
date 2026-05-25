@@ -10,6 +10,72 @@
 
 ## [Unreleased]
 
+### Changed
+
+**v2.14.0 双管齐下提升 Cursor `ai_productivity_attach_summary` 主动调用率(消除"漏调 + stop-hook 补刀"双 iteration)**
+
+实测现象(INSTANT-5321 iterations.jsonl 最近 5 轮):`#18 主动 → #19 漏调 → #20 补刀 → #21 漏调 → #22 补刀`,
+Cursor 端 LLM 几乎从不主动调 attach_summary,每个用户提问稳定被拆成"主答 + 补刀"两条 iteration,
+看板上 `conversationSummary=null` 的"漏调轮"占比近 50%,完全靠 [stop-check.ts](../packages/hook-core/src/stop-check.ts)
+注入 `followup_message` 兜底,代价是每轮多 ~6K token + ~42s 延迟。
+
+根因 3 条:
+
+1. **架构**:Cursor 没有 `UserPromptSubmit` 等价 hook,长会话过半 alwaysApply rule 在大上下文里"沉底"。
+   Claude Code 用 `UserPromptSubmit` Hook 每轮注入 reminder 是有效经验,Cursor 端必须找等价注入位。
+2. **文案**:v2.13.0 rule 开头 200+ 字连串否定句("严禁... 严禁... 当本规则不存在"),
+   3 条前置(分支正则 / daemon 可达 / 已 init)LLM 在 prompt 里无法自我验证,模型保守倾向于"不调"。
+3. **反馈**:stop hook 兜底变相纵容漏调 — 漏调对 LLM 零成本,反而催生"等被打回再静默补一次"的偷懒路径。
+
+修复(A + B 双管齐下,保留 stop hook 作为安全网):
+
+**A. Cursor sessionStart Hook 注入 reminder**
+
+Cursor 官方 [hooks 文档](https://cursor.com/docs/hooks.md) 的 `sessionStart` 支持
+`additional_context` 字段把字符串拼到 conversation 的 initial system context,是 Cursor 端
+最接近 Claude `UserPromptSubmit` 的注入位。新增常量
+[`CURSOR_SESSION_REMINDER_COMMAND`](../packages/core/src/track-skill-templates.ts) 与
+marker `# ai-productivity-session-reminder`,`aipt install` 把命令写到 `~/.cursor/hooks.json`
+的 `hooks.sessionStart` 数组:
+
+```bash
+bash -c 'b=$(git -C "${CURSOR_PROJECT_DIR:-$PWD}" symbolic-ref --short -q HEAD 2>/dev/null || true);
+  if [[ "$b" =~ [A-Z][A-Z0-9]+-[0-9]+ ]]; then
+    k="${BASH_REMATCH[0]}";
+    printf "%s" "{\"additional_context\":\"[ai-productivity] 本会话工作在 Jira 分支 $k,...\"}";
+  else
+    printf "%s" "{}";
+  fi || printf "%s" "{}"' # ai-productivity-session-reminder
+```
+
+- Jira 分支输出 `{"additional_context":"..."}`,Cursor 把字符串拼到 initial system context
+- 非 Jira 分支 / detached HEAD / 非 git 仓库 / git 不存在 → 输出 `{}`,**等价不注入,零污染**
+- 与 Claude 端 `CLAUDE_TRACK_HOOK_REMINDER_COMMAND` 设计完全对称,bash 3.2(macOS 系统默认)即可跑
+- `CURSOR_PROJECT_DIR` 是 Cursor 给所有 hook 子进程统一注入的 workspace 根目录(文档 §Environment Variables 保证),不依赖 sessionStart payload(本身无 workspace_roots 字段)
+
+**B. 重写 Cursor / Claude 双方言 rule 文案(v2.13.0 → v2.14.0)**
+
+[`CURSOR_TRACK_RULE_CONTENT`](../packages/core/src/track-skill-templates.ts) 与
+`CLAUDE_TRACK_SKILL_CONTENT` 双方言同步重写,核心结构调整:
+
+- 首段改为 **`## 触发(每轮必须)`** 正向引导,明确"看到 reminder = 前置已满足,无需再自我验证 3 条前置"
+- 否定句压到末尾 **`## 边界:看不到 reminder 时`**,只保留"没看到提示就不要调"这一条简单判定
+- **删除 `## 防伪造硬约束` 整段**(原来明确告诉 LLM "漏调会被 stop hook 打回来补一次",反而催生
+  "等被打回再补"的偷懒路径)
+- `## 完成态(零提示)` / `## 禁止` 列表保留(防伪造 / 不复述 diff / 不写数值 等硬约束不变)
+
+**C. stop hook 兜底机制完全保留(安全网)**
+
+[stop-check.ts](../packages/hook-core/src/stop-check.ts) 不动,sentinel 90s 窗口 + `inject_followup` 行为不变。
+预期 rc.12 上线后 `inject_followup` 频率从 ~50% 降到 <5%,真"漏调"时仍由它兜底,不丢数据。
+
+**测试覆盖**:新增 `track-skill-templates.spec.ts`(20 例文案 invariant 校验)+
+`skill-sync.spec.ts` 5 例 sessionStart hook 安装/覆盖/inspect 覆盖,612 → 644 例全绿。
+
+**注意**:用户机器需要 `npm i -g @ai-productivity-tracker/cli@1.0.0-rc.12` 然后跑
+`aipt install` 让新 hook 写入 `~/.cursor/hooks.json` + 新 rule 覆盖 `~/.cursor/rules/ai-productivity-track.mdc`,
+然后**重启 Cursor 让 sessionStart hook 在新会话生效**(现有会话不会重新跑 sessionStart)。
+
 ### Fixed
 
 **Cursor `stop` hook 在用户手动中断时仍误触 followup_message,LLM 被强制重答**

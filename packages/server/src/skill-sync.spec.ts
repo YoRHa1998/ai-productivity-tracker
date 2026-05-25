@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  buildCursorSessionReminderCommand,
   buildCursorStopCheckCommand,
   buildClaudeStopCheckCommand,
   CLAUDE_LEGACY_LOCAL_BIN_HOOK_FRAGMENT,
@@ -21,6 +22,7 @@ import {
   installAiTrackCursorHook,
   installAiTrackSkillBundle
 } from './skill-sync.js'
+import { CURSOR_SESSION_REMINDER_MARKER } from '@ai-productivity-tracker/core'
 
 let tmpHome: string
 let originalHome: string | undefined
@@ -38,10 +40,12 @@ afterEach(() => {
   else process.env.HOME = originalHome
 })
 
-describe('Cursor hooks.json 注入(v2.10.0:仅 stop hook + 清理老 mark-tool 条目)', () => {
-  it('空 hooks.json 场景 → 仅创建 stop entry,afterMCPExecution 不存在', async () => {
+describe('Cursor hooks.json 注入(v2.14.0:stop + sessionStart reminder + 清理老 mark-tool)', () => {
+  it('空 hooks.json 场景 → 同时创建 stop / sessionStart entry,afterMCPExecution 不存在', async () => {
     const res = await installAiTrackCursorHook()
     expect(res.stopCheck.replaced).toBe(false)
+    expect(res.sessionReminder.replaced).toBe(false)
+    expect(res.sessionReminder.finalCommand).toBe(buildCursorSessionReminderCommand())
     expect(res.legacyMarkToolRemoved).toBe(false)
     expect(res.legacyMarkToolPreviousCommand).toBeNull()
 
@@ -50,6 +54,7 @@ describe('Cursor hooks.json 注入(v2.10.0:仅 stop hook + 清理老 mark-tool �
     expect(parsed.hooks.stop).toEqual([
       { command: buildCursorStopCheckCommand(), loop_limit: CURSOR_STOP_LOOP_LIMIT }
     ])
+    expect(parsed.hooks.sessionStart).toEqual([{ command: buildCursorSessionReminderCommand() }])
     // 没有老条目,install 不应该自动新建空数组
     expect(parsed.hooks.afterMCPExecution).toBeUndefined()
   })
@@ -176,7 +181,102 @@ describe('Cursor hooks.json 注入(v2.10.0:仅 stop hook + 清理老 mark-tool �
     const status = await inspectAiTrackCursorHook()
     expect(status.stopCheckInstalled).toBe(true)
     expect(status.stopCheckUpToDate).toBe(true)
+    expect(status.sessionReminderInstalled).toBe(true)
+    expect(status.sessionReminderUpToDate).toBe(true)
     expect(status.legacyMarkToolDetected).toBe(false)
+  })
+
+  // ===== v2.14.0 sessionStart reminder hook 专项覆盖 =====
+
+  it('v2.14.0:已有同 marker sessionStart entry 时原地覆盖 command,不复制多条', async () => {
+    const dir = path.join(tmpHome, '.cursor')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      path.join(dir, 'hooks.json'),
+      JSON.stringify({
+        version: 1,
+        hooks: {
+          sessionStart: [{ command: `bash -c 'echo old' ${CURSOR_SESSION_REMINDER_MARKER}` }]
+        }
+      })
+    )
+    const res = await installAiTrackCursorHook()
+    expect(res.sessionReminder.replaced).toBe(true)
+    expect(res.sessionReminder.previousCommand).toContain('echo old')
+    expect(res.sessionReminder.finalCommand).toBe(buildCursorSessionReminderCommand())
+
+    const parsed = JSON.parse(readFileSync(path.join(dir, 'hooks.json'), 'utf-8'))
+    expect(parsed.hooks.sessionStart).toHaveLength(1)
+    expect(parsed.hooks.sessionStart[0].command).toBe(buildCursorSessionReminderCommand())
+  })
+
+  it('v2.14.0:已有其他 sessionStart entry(用户自有 audit / env hook)→ 保留,只追加 reminder', async () => {
+    const dir = path.join(tmpHome, '.cursor')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      path.join(dir, 'hooks.json'),
+      JSON.stringify({
+        version: 1,
+        hooks: {
+          sessionStart: [{ command: './hooks/session-init.sh # user-custom-audit' }]
+        }
+      })
+    )
+    const res = await installAiTrackCursorHook()
+    expect(res.sessionReminder.replaced).toBe(false)
+
+    const parsed = JSON.parse(readFileSync(path.join(dir, 'hooks.json'), 'utf-8'))
+    expect(parsed.hooks.sessionStart).toHaveLength(2)
+    expect(parsed.hooks.sessionStart[0].command).toBe('./hooks/session-init.sh # user-custom-audit')
+    expect(parsed.hooks.sessionStart[1].command).toBe(buildCursorSessionReminderCommand())
+  })
+
+  it('v2.14.0:reminder command 形态合法 — 含 marker + bash -c + CURSOR_PROJECT_DIR 探 branch', async () => {
+    const cmd = buildCursorSessionReminderCommand()
+    expect(cmd).toContain(CURSOR_SESSION_REMINDER_MARKER)
+    expect(cmd).toMatch(/^bash -c /)
+    expect(cmd).toContain('CURSOR_PROJECT_DIR')
+    expect(cmd).toContain('symbolic-ref')
+    expect(cmd).toContain('additional_context')
+    // 兜底:任何失败必须输出合法 JSON `{}`,避免污染 Cursor sessionStart 解析
+    expect(cmd).toContain('printf "%s" "{}"')
+  })
+
+  it('v2.14.0:inspect 旧仓库未装 reminder → installed=false,upToDate=false', async () => {
+    const dir = path.join(tmpHome, '.cursor')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      path.join(dir, 'hooks.json'),
+      JSON.stringify({
+        version: 1,
+        hooks: {
+          stop: [{ command: buildCursorStopCheckCommand(), loop_limit: CURSOR_STOP_LOOP_LIMIT }]
+        }
+      })
+    )
+    const status = await inspectAiTrackCursorHook()
+    expect(status.stopCheckInstalled).toBe(true)
+    expect(status.sessionReminderInstalled).toBe(false)
+    expect(status.sessionReminderUpToDate).toBe(false)
+    expect(status.sessionReminderCurrentCommand).toBeNull()
+  })
+
+  it('v2.14.0:inspect 命中老 reminder 命令但版本旧 → installed=true,upToDate=false', async () => {
+    const dir = path.join(tmpHome, '.cursor')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      path.join(dir, 'hooks.json'),
+      JSON.stringify({
+        version: 1,
+        hooks: {
+          sessionStart: [{ command: `bash -c 'echo stale' ${CURSOR_SESSION_REMINDER_MARKER}` }]
+        }
+      })
+    )
+    const status = await inspectAiTrackCursorHook()
+    expect(status.sessionReminderInstalled).toBe(true)
+    expect(status.sessionReminderUpToDate).toBe(false)
+    expect(status.sessionReminderCurrentCommand).toContain('echo stale')
   })
 })
 

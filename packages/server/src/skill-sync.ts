@@ -9,6 +9,8 @@ import {
   CLAUDE_TRACK_HOOK_REMINDER_MARKER,
   CLAUDE_TRACK_SKILL_CONTENT,
   CLAUDE_TRACK_SKILL_FILENAME,
+  CURSOR_SESSION_REMINDER_COMMAND,
+  CURSOR_SESSION_REMINDER_MARKER,
   CURSOR_TRACK_RULE_CONTENT,
   CURSOR_TRACK_RULE_FILENAME,
   TRACK_SKILL_VERSION,
@@ -492,6 +494,15 @@ export interface CursorTrackHookInstallResult {
     finalCommand: string
   }
   /**
+   * v2.14.0 新增:`hooks.sessionStart` 数组里 marker
+   * `# ai-productivity-session-reminder` 的安装结果(覆盖式 upsert).
+   */
+  sessionReminder: {
+    replaced: boolean
+    previousCommand: string | null
+    finalCommand: string
+  }
+  /**
    * v2.10.0:install 时检测并删除 `~/.cursor/hooks.json` 的 `afterMCPExecution`
    * 数组里 marker `# ai-productivity-mark-tool-called` 命中的老条目。
    * `removed=true` 表示真的删了一条;前端可据此提示用户重启 IDE 让新链路生效。
@@ -889,6 +900,21 @@ export function buildClaudeStopCheckCommand(): string {
   return `${process.execPath} ${defaultMcpBinPath()} stop-check ${CLAUDE_STOP_CHECK_MARKER}`
 }
 
+/**
+ * v2.14.0:Cursor `sessionStart` reminder hook 命令.
+ *
+ * 与 `buildCursorStopCheckCommand()` 不同,reminder 完全在 shell 层实现(bash + git),
+ * 不调任何 cli 子命令.因此这里直接转发 core 模板常量 `CURSOR_SESSION_REMINDER_COMMAND`,
+ * 不需要拼装 `process.execPath` / `defaultMcpBinPath()`.
+ *
+ * 暴露成函数(而非直接 export `CURSOR_SESSION_REMINDER_COMMAND`)是为了和
+ * `buildCursorStopCheckCommand` 调用风格保持一致,未来若需要在 Cursor 端额外拼参数
+ * (例如不同 daemon URL),改这里一处即可.
+ */
+export function buildCursorSessionReminderCommand(): string {
+  return CURSOR_SESSION_REMINDER_COMMAND
+}
+
 // ----- Cursor hooks.json -----
 
 export interface CursorTrackHookStatus {
@@ -896,6 +922,15 @@ export interface CursorTrackHookStatus {
   stopCheckInstalled: boolean
   stopCheckUpToDate: boolean
   stopCheckCurrentCommand: string | null
+  /**
+   * v2.14.0 新增:`~/.cursor/hooks.json` 的 `hooks.sessionStart` 数组里
+   * marker `# ai-productivity-session-reminder` 命中的条目状态.该 hook 在每个新
+   * Cursor 会话创建时探一次 git 分支,Jira 分支输出 `additional_context` 给 LLM
+   * 注入 reminder,与 Claude `UserPromptSubmit` Hook 双方言对称.
+   */
+  sessionReminderInstalled: boolean
+  sessionReminderUpToDate: boolean
+  sessionReminderCurrentCommand: string | null
   /**
    * v2.10.0 deprecated:`afterMCPExecution` 数组里残留的
    * `# ai-productivity-mark-tool-called` 老条目;install 时会主动删除。
@@ -916,6 +951,7 @@ interface CursorHooksFileLike {
   version?: number
   hooks?: {
     stop?: CursorHookEntryLike[]
+    sessionStart?: CursorHookEntryLike[]
     afterMCPExecution?: CursorHookEntryLike[]
     [k: string]: unknown
   }
@@ -977,8 +1013,13 @@ export async function inspectAiTrackCursorHook(): Promise<CursorTrackHookStatus>
   const file = defaultCursorHooksFile()
   const parsed = await readCursorHooksFile(file)
   const stopCheckCmd = buildCursorStopCheckCommand()
+  const sessionReminderCmd = buildCursorSessionReminderCommand()
 
   const stopHit = findCursorEntryByMarker(parsed.hooks?.stop, CURSOR_STOP_CHECK_MARKER)
+  const sessionHit = findCursorEntryByMarker(
+    parsed.hooks?.sessionStart,
+    CURSOR_SESSION_REMINDER_MARKER
+  )
   const legacyMarkHit = findCursorEntryByMarker(
     parsed.hooks?.afterMCPExecution,
     CURSOR_MARK_TOOL_MARKER
@@ -989,16 +1030,20 @@ export async function inspectAiTrackCursorHook(): Promise<CursorTrackHookStatus>
     stopCheckInstalled: !!stopHit,
     stopCheckUpToDate: !!stopHit && stopHit.entry.command === stopCheckCmd,
     stopCheckCurrentCommand: stopHit?.entry.command ?? null,
+    sessionReminderInstalled: !!sessionHit,
+    sessionReminderUpToDate: !!sessionHit && sessionHit.entry.command === sessionReminderCmd,
+    sessionReminderCurrentCommand: sessionHit?.entry.command ?? null,
     legacyMarkToolDetected: !!legacyMarkHit,
     legacyHookDetected: detectLegacyCursorEntry(parsed)
   }
 }
 
 /**
- * v2.10.0 install:
+ * v2.14.0 install:
  *   1. 写 stop hook(沿用既有覆盖语义)
- *   2. 主动清理 afterMCPExecution 数组里 `# ai-productivity-mark-tool-called` 老条目(下线兼容)
- *   3. 整体写盘
+ *   2. 写 sessionStart reminder hook(v2.14.0 新增,等价 Claude UserPromptSubmit)
+ *   3. 主动清理 afterMCPExecution 数组里 `# ai-productivity-mark-tool-called` 老条目(下线兼容)
+ *   4. 整体写盘
  */
 export async function installAiTrackCursorHook(): Promise<CursorTrackHookInstallResult> {
   const file = defaultCursorHooksFile()
@@ -1008,11 +1053,15 @@ export async function installAiTrackCursorHook(): Promise<CursorTrackHookInstall
   parsed.hooks = parsed.hooks ?? {}
   const hooks = parsed.hooks
   const stopArr = (Array.isArray(hooks.stop) ? hooks.stop : []) as CursorHookEntryLike[]
+  const sessionArr = (
+    Array.isArray(hooks.sessionStart) ? hooks.sessionStart : []
+  ) as CursorHookEntryLike[]
   const mcpArr = (
     Array.isArray(hooks.afterMCPExecution) ? hooks.afterMCPExecution : []
   ) as CursorHookEntryLike[]
 
   const stopCheckCmd = buildCursorStopCheckCommand()
+  const sessionReminderCmd = buildCursorSessionReminderCommand()
 
   // 1) stop hook(覆盖式注入)
   const stopHit = findCursorEntryByMarker(stopArr, CURSOR_STOP_CHECK_MARKER)
@@ -1029,7 +1078,23 @@ export async function installAiTrackCursorHook(): Promise<CursorTrackHookInstall
   }
   hooks.stop = stopArr
 
-  // 2) 清理 afterMCPExecution 老 mark-tool-called 条目(v2.10.0 下线)
+  // 2) sessionStart reminder hook(v2.14.0,覆盖式注入)
+  //
+  // 与 stop hook 不同,sessionStart entry 不需要 loop_limit / matcher 等字段,只要 command.
+  // 同 marker 命中老条目时覆盖 command;不命中时 push 新 entry.其他 sessionStart 条目
+  // (例如用户自己装的 audit / env 注入)完全保留,绝不破坏.
+  const sessionHit = findCursorEntryByMarker(sessionArr, CURSOR_SESSION_REMINDER_MARKER)
+  const sessionPrev = sessionHit?.entry.command ?? null
+  const sessionReplaced = !!sessionHit
+  const sessionEntry: CursorHookEntryLike = { command: sessionReminderCmd }
+  if (sessionHit) {
+    sessionArr[sessionHit.index] = sessionEntry
+  } else {
+    sessionArr.push(sessionEntry)
+  }
+  hooks.sessionStart = sessionArr
+
+  // 3) 清理 afterMCPExecution 老 mark-tool-called 条目(v2.10.0 下线)
   let legacyRemoved = false
   let legacyPrev: string | null = null
   const legacyHit = findCursorEntryByMarker(mcpArr, CURSOR_MARK_TOOL_MARKER)
@@ -1053,6 +1118,11 @@ export async function installAiTrackCursorHook(): Promise<CursorTrackHookInstall
   return {
     path: file,
     stopCheck: { replaced: stopReplaced, previousCommand: stopPrev, finalCommand: stopCheckCmd },
+    sessionReminder: {
+      replaced: sessionReplaced,
+      previousCommand: sessionPrev,
+      finalCommand: sessionReminderCmd
+    },
     legacyMarkToolRemoved: legacyRemoved,
     legacyMarkToolPreviousCommand: legacyPrev
   }
