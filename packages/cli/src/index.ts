@@ -132,16 +132,14 @@ function parseMigrateArgs(rest: string[]): MigrateArgs {
   return args
 }
 
-// 直接被 node 调用时启动 main;被 import 时不自动执行(测试场景)。
-const isDirectRun = (() => {
-  try {
-    return import.meta.url === `file://${process.argv[1]}`
-  } catch {
-    return false
-  }
-})()
-
-if (isDirectRun) {
+// cli 永远作为 entry 被执行(全局 bin/aipt symlink 启动场景下,
+// `import.meta.url === file://${process.argv[1]}` 比较会失败:argv[1] 是
+// symlink 路径而 import.meta.url 指向 realpath,导致 isDirectRun 永远 false
+// → main() 不跑 → cli 静默退出。
+// 解决:dist/cli.mjs 是单一 entry,直接调 main(),不再做 isDirectRun 判断。
+// 单测用例(argv-router.spec.ts)走的是 import { main } from './index.js'
+// 路径,我们额外用 process.env.AIPT_SKIP_AUTOSTART 防止测试时被自动启动。
+if (!process.env.AIPT_SKIP_AUTOSTART) {
   main().then(
     (code) => process.exit(code),
     (err) => {
