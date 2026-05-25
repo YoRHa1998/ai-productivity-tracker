@@ -179,6 +179,26 @@ pnpm --filter @ai-productivity-tracker/cli build   # 链式 ui build + esbuild b
 pnpm --filter @ai-productivity-tracker/ui dev      # 开发态 SPA(自动 proxy /ai-productivity 到 daemon)
 ```
 
+### 发布到 npm(维护者)
+
+```bash
+# 首次设置专用发布账号(token 落在项目级 .npmrc.publish,不污染 ~/.npmrc)
+npm login --userconfig=./.npmrc.publish --auth-type=web --scope=@ai-productivity-tracker
+
+# 干跑(不真发,验证产物 + 体积 + 登录态)
+pnpm release prerelease
+
+# 真发
+pnpm release prerelease --publish     # → x.y.z-rc.N+1
+pnpm release patch --publish           # → x.y.(z+1)
+pnpm release 1.0.0 --publish           # → 显式版本
+```
+
+`scripts/release.mjs` 自动:typecheck → test → lint → bump → build →
+体积校验(< 3MB tarball)→ npm whoami 验证 → publish → git commit + tag。
+
+详见 [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) 内"发布工程经验"段。
+
 ---
 
 ## 许可证
