@@ -9,9 +9,12 @@ import { isRequirementInitialized, resolveTrackingContext } from './lib/tracking
  *
  * 流程:
  *   1. 读 stdin 解析 stop hook payload(Cursor / Claude Code 各自字段)
- *   2. 前置三连:分支含 issueKey、需求已 init、agent 可达;任一不满足 → 静默 exit 0 放行
- *   3. loop 防御:cursor.loop_count >= 1 或 claude.stop_hook_active === true → 放行(避免死循环)
- *   4. 查 jiraKey 维度的 recent-attach sentinel:
+ *   2. abort 过滤(v1.0.0-rc.11):Cursor `status` ∈ {aborted, error} → 立即静默放行,
+ *      用户手动中断 ESC / API error 都不再被 followup_message 打扰.
+ *      Claude Code Stop hook 文档明确 "do not fire on user interrupts",这里仅为对称兜底.
+ *   3. 前置三连:分支含 issueKey、需求已 init、agent 可达;任一不满足 → 静默 exit 0 放行
+ *   4. loop 防御:cursor.loop_count >= 1 或 claude.stop_hook_active === true → 放行(避免死循环)
+ *   5. 查 jiraKey 维度的 recent-attach sentinel:
  *      - 文件存在且 `now - calledAt < RECENT_ATTACH_WINDOW_MS` → 放行(本轮真调过 attach_summary)
  *      - 缺失 / 超窗 → 输出方言化的 followup_message / decision:block,让 LLM 在下一轮被强制补一次
  *
@@ -58,6 +61,7 @@ export type StopDialect = 'cursor' | 'claude-code'
 export type StopOutcomeKind =
   | 'skipped_no_stdin'
   | 'skipped_parse_failed'
+  | 'skipped_aborted'
   | 'skipped_no_issue_key'
   | 'skipped_requirement_missing'
   | 'skipped_agent_unreachable'
@@ -101,6 +105,30 @@ function detectDialect(parsed: Record<string, unknown>): StopDialect {
   if (typeof parsed.session_id === 'string' && !('cursor_version' in parsed)) return 'claude-code'
   // 默认按 cursor(loop_count 字段也是 cursor 独有的)
   return 'cursor'
+}
+
+/**
+ * v1.0.0-rc.11: Cursor `stop` hook 在用户手动中断(ESC / Cancel)时也会触发,
+ * payload `status` 字段会传 `'aborted'` / `'error'` / `'completed'` 三选一.
+ *
+ * - 用户中断后我们若仍输出 followup_message,Cursor 会自动 submit 这条消息当作下一轮 user prompt,
+ *   LLM 被强制重新答复,直接违背用户中断意图,体验极差.
+ * - 因此 abort/error 一律静默放行,把 stop-check 的存在感降为零.
+ *
+ * Claude Code Stop hook 文档明确 "do not fire on user interrupts",理论上不会在中断时触发,
+ * 此处仅为方言对称,future-proof 防止官方未来加 UserInterrupt 之类的 hook 时回归.
+ *
+ * 兼容:`status` 字段缺失(老 Cursor / 测试 fixture)按 `'completed'` 处理,**不**判定为 abort,
+ * 原有 sentinel 校验逻辑全保留,不会让"中断"和"老版本"混淆.
+ */
+function isAbortedStop(parsed: Record<string, unknown>, dialect: StopDialect): boolean {
+  const status = typeof parsed.status === 'string' ? parsed.status : ''
+  if (dialect === 'cursor') {
+    return status === 'aborted' || status === 'error'
+  }
+  // Claude Code Stop hook payload 目前不含 status 字段;若未来添加,
+  // 保持与 Cursor 同语义 abort/error 静默放行.
+  return status === 'aborted' || status === 'error'
 }
 
 function hitLoopGuard(parsed: Record<string, unknown>, dialect: StopDialect): boolean {
@@ -164,6 +192,10 @@ export async function runStopCheck(opts: StopCheckOptions = {}): Promise<StopChe
   }
 
   const dialect = detectDialect(parsed)
+
+  if (isAbortedStop(parsed, dialect)) {
+    return { kind: 'skipped_aborted', dialect, output: null }
+  }
 
   const ctx = resolveTrackingContext(parsed)
   if (!ctx) {

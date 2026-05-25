@@ -195,6 +195,52 @@ describe('runStopCheck — Cursor 方言(v2.13.0 jiraKey-recent-attach, 90s 窗)
     })
     expect(outcome.kind).toBe('inject_followup')
   })
+
+  // v1.0.0-rc.11: Cursor stop hook 在用户手动中断时也会触发,payload `status` 字段值为
+  // 'aborted' / 'error'.我们必须静默放行,不能 inject followup_message,否则 Cursor 会
+  // 把它当作下一轮 user prompt 自动 submit,LLM 被强制重答,违背用户中断意图.
+  it("status='aborted' → 静默放行(skipped_aborted),不输出 followup", async () => {
+    const outcome = await runStopCheck({
+      stdin: cursorPayload(env, { status: 'aborted' }),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true
+    })
+    expect(outcome.kind).toBe('skipped_aborted')
+    expect(outcome.dialect).toBe('cursor')
+    expect(outcome.output).toBeNull()
+  })
+
+  it("status='error' → 静默放行(skipped_aborted)", async () => {
+    const outcome = await runStopCheck({
+      stdin: cursorPayload(env, { status: 'error' }),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true
+    })
+    expect(outcome.kind).toBe('skipped_aborted')
+    expect(outcome.output).toBeNull()
+  })
+
+  it("status='aborted' 优先级高于 sentinel 缺失 → 不 inject followup", async () => {
+    // 即使 sentinel 缺失(原本会 inject_followup),只要 status=aborted 就立即放行
+    const outcome = await runStopCheck({
+      stdin: cursorPayload(env, { status: 'aborted', loop_count: 0 }),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true
+    })
+    expect(outcome.kind).toBe('skipped_aborted')
+  })
+
+  it('老 Cursor 兼容:payload 缺 status 字段时 → 仍走原逻辑(回归保护)', async () => {
+    const payload = JSON.parse(cursorPayload(env)) as Record<string, unknown>
+    delete payload.status
+    const outcome = await runStopCheck({
+      stdin: JSON.stringify(payload),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true
+    })
+    // sentinel 缺失 → 仍 inject_followup,功能不退化
+    expect(outcome.kind).toBe('inject_followup')
+  })
 })
 
 describe('runStopCheck — Claude Code 方言(v2.13.0 jiraKey-recent-attach, 90s 窗)', () => {
