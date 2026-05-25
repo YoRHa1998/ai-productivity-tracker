@@ -54,7 +54,11 @@ export async function runInstallMcp(args: InstallMcpArgs = {}): Promise<number> 
     data.mcpServers = {}
   }
 
-  const command = args.command ?? 'node'
+  // 用 process.execPath(当前 node 二进制的绝对路径)而不是 'node':
+  // macOS GUI 应用(Cursor / Claude Code)从 launchd 启动时 PATH 只有
+  // /usr/bin:/bin:/usr/sbin:/sbin,nvm/volta/fnm 等装的 node 不在里面,
+  // `command: 'node'` 会被 IDE 启 MCP 子进程时报 ENOENT。
+  const command = args.command ?? process.execPath
   const cmdArgs = args.args ?? [resolveCliEntry(), 'mcp']
 
   // 删除老 key("ai-productivity"),避免一台机器两条配置同时存在

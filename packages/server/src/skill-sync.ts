@@ -865,12 +865,19 @@ function defaultMcpBinPath(): string {
   return path.join(homedir(), 'Downloads', 'ai-productivity-mcp.mjs')
 }
 
+/**
+ * v1.0:用 process.execPath(当前 node 绝对路径)而不是 'node'。
+ *
+ * Cursor / Claude Code 从 macOS launchd 启动 hook 子进程时 PATH 只有
+ * /usr/bin:/bin:/usr/sbin:/sbin,nvm/volta/fnm 装的 node 不在里面,
+ * `command: 'node'` 会被 IDE 启 hook 子进程时报 ENOENT。
+ */
 export function buildCursorStopCheckCommand(): string {
-  return `node ${defaultMcpBinPath()} stop-check ${CURSOR_STOP_CHECK_MARKER}`
+  return `${process.execPath} ${defaultMcpBinPath()} stop-check ${CURSOR_STOP_CHECK_MARKER}`
 }
 
 export function buildClaudeStopCheckCommand(): string {
-  return `node ${defaultMcpBinPath()} stop-check ${CLAUDE_STOP_CHECK_MARKER}`
+  return `${process.execPath} ${defaultMcpBinPath()} stop-check ${CLAUDE_STOP_CHECK_MARKER}`
 }
 
 // ----- Cursor hooks.json -----

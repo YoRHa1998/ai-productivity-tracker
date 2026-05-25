@@ -1194,13 +1194,16 @@ describe('handleAiProductivityInstallCursorHook', () => {
     expect(body.data.ok).toBe(true)
     expect(body.data.hookEntryPath).toBe(entryPath)
     expect(body.data.cliPath).toBe(entryPath)
-    expect(body.data.finalCommand).toBe(`node ${entryPath} hook # ai-productivity-hook`)
+    // v1.0:用 process.execPath 而不是裸 'node' 适配 GUI 应用启 hook 子进程
+    expect(body.data.finalCommand).toBe(
+      `${process.execPath} ${entryPath} hook # ai-productivity-hook`
+    )
     expect(body.data.replaced).toBe(false)
     expect(body.data.previousCommand).toBeNull()
 
     const written = JSON.parse(readFileSync(hooksPath, 'utf-8'))
     expect(written.hooks.afterAgentResponse[0].command).toBe(
-      `node ${entryPath} hook # ai-productivity-hook`
+      `${process.execPath} ${entryPath} hook # ai-productivity-hook`
     )
   })
 
@@ -1215,7 +1218,7 @@ describe('handleAiProductivityInstallCursorHook', () => {
     )
     const body = JSON.parse(mock.body)
     expect(body.data.finalCommand).toBe(
-      `AI_PRODUCTIVITY_DEBUG_HOOK=1 node ${entryPath} hook # ai-productivity-hook`
+      `AI_PRODUCTIVITY_DEBUG_HOOK=1 ${process.execPath} ${entryPath} hook # ai-productivity-hook`
     )
   })
 
@@ -1242,7 +1245,7 @@ describe('handleAiProductivityInstallCursorHook', () => {
     const written = JSON.parse(readFileSync(hooksPath, 'utf-8'))
     expect(written.hooks.afterAgentResponse).toHaveLength(1)
     expect(written.hooks.afterAgentResponse[0].command).toBe(
-      `node ${entryPath} hook # ai-productivity-hook`
+      `${process.execPath} ${entryPath} hook # ai-productivity-hook`
     )
   })
 })

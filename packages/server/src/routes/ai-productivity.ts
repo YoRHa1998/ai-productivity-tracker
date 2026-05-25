@@ -677,10 +677,14 @@ export async function handleAiProductivityInstallCursorHook(
     return
   }
 
+  // 用 process.execPath(当前 node 二进制的绝对路径)而不是 'node':
+  // Cursor / Claude Code 从 macOS launchd 启动 hook 子进程时 PATH 只有系统默认,
+  // nvm/volta/fnm 装的 node 不在里面,会触发 ENOENT。
+  const nodeBin = process.execPath
   const installFn = deps.install ?? installCursorHookFile
   try {
     const result: InstallCursorHookResult = installFn({
-      command: `node ${hookEntryPath} hook`,
+      command: `${nodeBin} ${hookEntryPath} hook`,
       debug: body?.debug ?? false,
       hooksPath
     })
