@@ -861,8 +861,17 @@ export const CLAUDE_MARK_TOOL_MARKER = '# ai-productivity-mark-tool-called'
  */
 export const CLAUDE_LEGACY_LOCAL_BIN_HOOK_FRAGMENT = '/.local/bin/ai-productivity.mjs'
 
+/**
+ * 当前 cli.mjs 的绝对路径(用于 stop-check hook 命令拼装)。
+ *
+ * v1.0 起 cli 与 daemon 是同一份 cli.mjs(esbuild bundle 单文件),
+ * daemon 进程的 `process.argv[1]` 就是 cli.mjs 的真实绝对路径。
+ *
+ * 老 v2.x 这里返回 `~/Downloads/ai-productivity-mcp.mjs`(用户手动下载位置),
+ * 是迁移期遗漏的死代码。
+ */
 function defaultMcpBinPath(): string {
-  return path.join(homedir(), 'Downloads', 'ai-productivity-mcp.mjs')
+  return process.argv[1] ?? path.join(homedir(), 'Downloads', 'ai-productivity-mcp.mjs')
 }
 
 /**
