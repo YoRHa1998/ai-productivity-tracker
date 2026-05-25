@@ -186,6 +186,32 @@ function buildArtifacts() {
   run('pnpm --filter @ai-productivity-tracker/cli build')
 }
 
+/**
+ * Publish-only manifest:把 cli/package.json 临时改成"发布版"。
+ *
+ * 原因:本仓库是 pnpm workspace,cli 的 devDependencies 含 `workspace:*` 协议
+ * (链接到 monorepo 内的 core/hook-core/mcp/server)。这些依赖在 esbuild bundle 时
+ * 已经被内联进 dist/cli.mjs,运行时不依赖任何外部 npm 包。但 npm publish 会原样
+ * 把 package.json(含 workspace:* 字段)塞进 tarball,某些 npm 版本对用户端
+ * `npm install <pkg>` 触发 EUNSUPPORTEDPROTOCOL 报错(实测 rc.1 时确认存在)。
+ *
+ * 解决:publish 前替换为精简 manifest(删除 devDependencies + dev-only scripts),
+ * publish 完毕后还原原始内容(保留 monorepo 开发体验)。
+ */
+function withPublishableManifest(action) {
+  const orig = readFileSync(cliPkgPath, 'utf-8')
+  const pkg = JSON.parse(orig)
+  // 发布版只保留运行时必要字段;dev 才用的字段全清
+  delete pkg.devDependencies
+  delete pkg.scripts // 发布产物没有 build/test/dev 必要;保留 scripts 反而误导用户
+  writeFileSync(cliPkgPath, JSON.stringify(pkg, null, 2) + '\n')
+  try {
+    return action()
+  } finally {
+    writeFileSync(cliPkgPath, orig)
+  }
+}
+
 function verifyTarballSize() {
   // npm pack 干跑拿到产物大小(纯本地操作,不调 registry,可不带 userconfig
   // 但为统一行为还是带上,避免某些 npm 版本读全局 registry 出意外重定向)
@@ -256,8 +282,11 @@ function main() {
     writeFileSync(cliPkgPath, JSON.stringify(pkg, null, 2) + '\n')
     try {
       buildArtifacts()
-      verifyTarballSize()
-      npmPublish(next) // npm publish --dry-run
+      // 用 publishable manifest 测体积 + dry-run publish,精确模拟真发产物
+      withPublishableManifest(() => {
+        verifyTarballSize()
+        npmPublish(next) // npm publish --dry-run
+      })
     } finally {
       // 恢复原版本号,git 工作区保持完全干净
       pkg.version = current
@@ -276,9 +305,11 @@ function main() {
   writeFileSync(cliPkgPath, JSON.stringify(pkg, null, 2) + '\n')
 
   buildArtifacts()
-  verifyTarballSize()
-
-  npmPublish(next)
+  // publish 在 publishable manifest 下跑,确保发出去的 package.json 干净
+  withPublishableManifest(() => {
+    verifyTarballSize()
+    npmPublish(next)
+  })
   gitCommitAndTag(next)
 
   console.log('')

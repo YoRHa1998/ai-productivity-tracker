@@ -42,20 +42,18 @@
     "test": "vitest run",
     "clean": "rimraf dist .turbo .cache *.tsbuildinfo"
   },
-  "dependencies": {
+  "devDependencies": {
     "@ai-productivity-tracker/core": "workspace:*",
     "@ai-productivity-tracker/hook-core": "workspace:*",
     "@ai-productivity-tracker/mcp": "workspace:*",
     "@ai-productivity-tracker/server": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "zod": "^3.25.0"
-  },
-  "devDependencies": {
     "@types/node": "^22.10.0",
     "esbuild": "^0.25.0",
     "rimraf": "^6.0.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "zod": "^3.25.0"
   }
 }
