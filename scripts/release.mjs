@@ -3,15 +3,23 @@
  * `pnpm release [patch|minor|major|prerelease|<exact>]`
  *
  * 自动化发布流程:
- *   1. git 工作区必须干净(允许 lock 文件)
- *   2. 跑 typecheck + test + lint + format:check 全套门禁
- *   3. bump packages/cli/package.json version
- *   4. 链式 build (ui vite + cli esbuild)
- *   5. 校验产物体积(< 3MB tarball,与 PRD §V14 验收对齐)
- *   6. 干跑 `npm publish --dry-run`(默认),或带 --publish 真发
- *   7. 打 git tag v<version> + commit
+ *   1. 检测项目级 .npmrc.publish + npm whoami(隔离 npm 账号,不污染 ~/.npmrc)
+ *   2. git 工作区必须干净(允许 lock 文件)
+ *   3. 跑 typecheck + test + lint + format:check 全套门禁
+ *   4. bump packages/cli/package.json version
+ *   5. 链式 build (ui vite + cli esbuild)
+ *   6. 校验产物体积(< 3MB tarball,与 PRD §V14 验收对齐)
+ *   7. 干跑 `npm publish --dry-run`(默认),或带 --publish 真发
+ *   8. 仅在 --publish 模式下打 git tag v<version> + commit
+ *      (dry-run 模式完全只读,不改 git 与 package.json,可反复迭代)
  *
- * 不会自动 push 与 npm publish 真发,需要人工 review。
+ * npm 账号隔离:
+ *   如果仓库根存在 `.npmrc.publish`(应当 gitignore),会自动给所有 npm 命令
+ *   注入 `--userconfig=<abs>`,使用项目专用 token,不动开发者全局 ~/.npmrc。
+ *   首次准备:
+ *     npm login --userconfig=./.npmrc.publish --auth-type=web --scope=@ai-productivity-tracker
+ *
+ * 不会自动 push,需要人工 review。
  */
 
 import { execSync } from 'node:child_process'
@@ -31,6 +39,27 @@ const skipGitClean = args.includes('--skip-git-clean')
 const skipTests = args.includes('--skip-tests')
 
 const MAX_TARBALL_BYTES = 3 * 1024 * 1024 // PRD V14: ≤ 3MB
+
+/**
+ * 项目级 userconfig:让本仓库 publish 用专用 npm 账号,
+ * 不污染开发者 `~/.npmrc` 全局登录态。
+ *
+ * 文件存在 → 自动给所有 npm 子命令注入 `--userconfig=<abs path>` + `--registry=<official>`。
+ * 文件不存在 → 退回全局 `~/.npmrc`(开发态首次跑 release.mjs 走这条)。
+ *
+ * 为什么同时显式带 --registry?
+ *   pnpm 跑 script 时会把全局 ~/.npmrc 的所有配置作为 `npm_config_*` env 注入子进程,
+ *   env 优先级高于 --userconfig 文件,会覆盖 .npmrc.publish 里的 registry 设置(实测公司
+ *   私有源 http://npm.truesightai.com/ 把官方 https://registry.npmjs.org/ 顶掉,导致 token
+ *   被发到错误 registry → ENEEDAUTH)。
+ *   CLI flag 优先级最高,显式加上能稳定碾压 env 干扰。
+ */
+const projectUserConfig = join(repoRoot, '.npmrc.publish')
+const hasProjectUserConfig = existsSync(projectUserConfig)
+const OFFICIAL_REGISTRY = 'https://registry.npmjs.org/'
+const userConfigFlag = hasProjectUserConfig
+  ? ` --userconfig=${projectUserConfig} --registry=${OFFICIAL_REGISTRY}`
+  : ''
 
 function run(cmd, opts = {}) {
   console.log(`$ ${cmd}`)
@@ -71,6 +100,62 @@ function bumpVersion(current, type) {
   }
 }
 
+/**
+ * publish 前主动跑 npm whoami 确认有 token,没登录就提前 fail,
+ * 避免 publish 跑了一半才报 401。
+ *
+ * dry-run 模式下也跑一次,确保用户配置链路完整可用。
+ */
+/**
+ * 跑 `npm whoami` 时显式控制 stdio + 不继承到屏幕,
+ * 把 stderr 完整捕获返回给调用方决定如何展示。
+ */
+function npmWhoami() {
+  const cmd = `npm whoami${userConfigFlag}`
+  try {
+    const out = execSync(cmd, {
+      cwd: repoRoot,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    }).trim()
+    return { ok: true, name: out }
+  } catch (err) {
+    return {
+      ok: false,
+      stderr: err.stderr?.toString().trim() ?? err.message ?? 'unknown',
+      cmd
+    }
+  }
+}
+
+function verifyNpmAuth() {
+  if (!hasProjectUserConfig) {
+    console.log('  ℹ 未发现 .npmrc.publish,将使用全局 ~/.npmrc 登录态')
+    const r = npmWhoami()
+    if (r.ok) {
+      console.log(`  ✓ 全局 npm 登录身份: ${r.name}`)
+    } else {
+      console.warn('  ⚠ 全局 ~/.npmrc 未登录;真发(--publish)时会失败,dry-run 可继续')
+    }
+    return
+  }
+  console.log(`  ✓ 检测到项目 userconfig: ${projectUserConfig}`)
+  const r = npmWhoami()
+  if (r.ok) {
+    console.log(`  ✓ 项目 npm 登录身份: ${r.name}`)
+    return
+  }
+  console.error('  ✗ .npmrc.publish 内 token 已失效或未登录。')
+  console.error(`    cmd:    ${r.cmd}`)
+  console.error(`    stderr: ${r.stderr.split('\n')[0]}`)
+  console.error(`    请先跑: npm login --userconfig=${projectUserConfig} --auth-type=web`)
+  if (doPublish) {
+    process.exit(1)
+  } else {
+    console.warn('  (dry-run 模式继续,但真发前必须先登录)')
+  }
+}
+
 function ensureGitClean() {
   if (skipGitClean) {
     console.warn('⚠ 跳过 git clean 检查(--skip-git-clean)')
@@ -102,8 +187,9 @@ function buildArtifacts() {
 }
 
 function verifyTarballSize() {
-  // npm pack 干跑拿到产物大小
-  const out = runCapture('npm pack --dry-run --json', { cwd: cliDir })
+  // npm pack 干跑拿到产物大小(纯本地操作,不调 registry,可不带 userconfig
+  // 但为统一行为还是带上,避免某些 npm 版本读全局 registry 出意外重定向)
+  const out = runCapture(`npm pack --dry-run --json${userConfigFlag}`, { cwd: cliDir })
   let parsed
   try {
     parsed = JSON.parse(out)
@@ -126,12 +212,12 @@ function verifyTarballSize() {
 function npmPublish(version) {
   if (!doPublish) {
     console.log('--publish 未指定,跑 npm publish --dry-run')
-    run('npm publish --access public --dry-run', { cwd: cliDir })
+    run(`npm publish --access public --dry-run${userConfigFlag}`, { cwd: cliDir })
     return
   }
   // 真发
   console.log(`🚀 正在发布 @ai-productivity-tracker/cli@${version}`)
-  run('npm publish --access public', { cwd: cliDir })
+  run(`npm publish --access public${userConfigFlag}`, { cwd: cliDir })
 }
 
 function gitCommitAndTag(version) {
@@ -154,9 +240,38 @@ function main() {
   console.log(`Mode: ${doPublish ? 'PUBLISH' : 'DRY-RUN'}`)
   console.log('')
 
+  console.log('▶ npm 登录态检查')
+  verifyNpmAuth()
+  console.log('')
+
   ensureGitClean()
   runQualityGate()
 
+  // 关键设计:dry-run 模式完全只读,不动 git。
+  // 这样多次跑 dry-run 不会留下垃圾 commit/tag,用户可以反复迭代直到满意,
+  // 最后一次 --publish 才真正改 version + commit + tag + push npm。
+  if (!doPublish) {
+    // 临时 bump 到目标版本以便 build + 体积校验产物名对齐,然后回写原版本
+    pkg.version = next
+    writeFileSync(cliPkgPath, JSON.stringify(pkg, null, 2) + '\n')
+    try {
+      buildArtifacts()
+      verifyTarballSize()
+      npmPublish(next) // npm publish --dry-run
+    } finally {
+      // 恢复原版本号,git 工作区保持完全干净
+      pkg.version = current
+      writeFileSync(cliPkgPath, JSON.stringify(pkg, null, 2) + '\n')
+    }
+    console.log('')
+    console.log(`🟢 DRY-RUN 完成: 模拟发布 @ai-productivity-tracker/cli@${next}`)
+    console.log(`   package.json 已恢复到 ${current},git 工作区未改动。`)
+    console.log('   真发请重跑加 --publish:')
+    console.log(`     pnpm release ${bumpArg} --publish`)
+    return
+  }
+
+  // 真发路径:bump + build + publish + commit + tag
   pkg.version = next
   writeFileSync(cliPkgPath, JSON.stringify(pkg, null, 2) + '\n')
 
@@ -167,12 +282,9 @@ function main() {
   gitCommitAndTag(next)
 
   console.log('')
-  console.log(`🎉 完成: @ai-productivity-tracker/cli@${next}`)
-  if (!doPublish) {
-    console.log('   (--publish 未带,这只是干跑;真发请重跑 + 加 --publish)')
-  } else {
-    console.log('   下一步: git push && git push --tags')
-  }
+  console.log(`🎉 PUBLISH 完成: @ai-productivity-tracker/cli@${next}`)
+  console.log('   下一步:')
+  console.log('     git push && git push --tags')
 }
 
 main()
