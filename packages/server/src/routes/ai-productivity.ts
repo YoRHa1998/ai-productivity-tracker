@@ -535,9 +535,40 @@ export async function handleAiProductivityHook(
 //     让前端提示用户「将被覆盖」
 // ────────────────────────────────────────────────────────────────────
 
-/** v2.2.0 起 Cursor Hook 入口实际是 MCP 单文件 .mjs;默认期望路径 ~/Downloads/ai-productivity-mcp.mjs */
+/**
+ * Cursor Hook 入口路径(`node <path> hook` 的 `<path>`)。
+ *
+ * v1.0(独立 npm 包架构):daemon 自己就是 `dist/cli.mjs` esbuild bundle 进程,
+ * `process.argv[1]` 指向当前 cli.mjs 的真实绝对路径,直接用它作为 hook 入口即可。
+ * 这样浏览器侧「一键注入 Hook」按钮不需要传 hookEntry 也能落正确路径
+ * (此前残留兜底到 ~/Downloads/ai-productivity-mcp.mjs 是 v2.x 老下载模式遗物,
+ * 在新架构下该文件不会存在 → install 报 412)。
+ *
+ * 兜底:`process.argv[1]` 不像本工具入口(测试场景 / 非 cli 进程)时回退到老
+ * Downloads 路径,保留向后兼容。
+ */
 export function defaultHookEntryPath(): string {
+  const arg1 = process.argv[1]
+  if (arg1 && looksLikeAiptCliEntry(arg1) && existsSync(arg1)) return arg1
   return join(homedir(), 'Downloads', 'ai-productivity-mcp.mjs')
+}
+
+/**
+ * 判定 `process.argv[1]` 是不是本工具 cli.mjs 入口。
+ *
+ * 真实生产态:`<npm global>/.../ai-productivity-tracker/cli/dist/cli.mjs`
+ *           或本仓库 dev 态 `packages/cli/dist/cli.mjs`、`packages/cli/src/index.ts`
+ *
+ * 测试态(vitest):`process.argv[1]` 通常指向 vitest 自身 → 判定为否,走 fallback
+ * 保持老路径不变,避免每个测试都要 mock argv。
+ */
+function looksLikeAiptCliEntry(entry: string): boolean {
+  // 入口必须有 cli 字样,且属于本工具的 cli 包或 ai-productivity-tracker 路径
+  return (
+    /(\/|\\)cli\.(mjs|js)$/.test(entry) ||
+    /ai-productivity-tracker[\\/]cli[\\/]/.test(entry) ||
+    /packages[\\/]cli[\\/](dist|src)[\\/]/.test(entry)
+  )
 }
 
 /**
