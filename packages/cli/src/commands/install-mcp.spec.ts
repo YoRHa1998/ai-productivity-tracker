@@ -27,14 +27,19 @@ describe('install-mcp', () => {
     rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  it('文件不存在 → 自动新建 + 写入新 key', async () => {
-    const code = await runInstallMcp({ configPath })
+  it('文件不存在 → 自动新建 + 写入新 key(默认 node + cli 绝对路径)', async () => {
+    const code = await runInstallMcp({
+      configPath,
+      // 显式 args 避免依赖 process.argv[1](vitest 下指向 vitest worker)
+      command: 'node',
+      args: ['/abs/path/to/cli.mjs', 'mcp']
+    })
     expect(code).toBe(0)
     expect(existsSync(configPath)).toBe(true)
     const parsed = JSON.parse(readFileSync(configPath, 'utf-8')) as McpJson
     expect(parsed.mcpServers?.['ai-productivity-tracker']).toEqual({
-      command: 'npx',
-      args: ['-y', '@ai-productivity-tracker/cli', 'mcp']
+      command: 'node',
+      args: ['/abs/path/to/cli.mjs', 'mcp']
     })
   })
 

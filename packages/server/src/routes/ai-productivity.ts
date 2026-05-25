@@ -620,6 +620,14 @@ export function handleAiProductivityCursorHookStatus(res: ServerResponse): void 
 
 export interface InstallCursorHookRequestBody {
   debug?: boolean
+  /**
+   * v1.0 由 cli/install.ts 显式传入的 hook entry 绝对路径(通常 = npm 全局
+   * 安装的 cli.mjs 路径,如 `/usr/local/lib/node_modules/@.../dist/cli.mjs`)。
+   *
+   * 不传时退回到 `defaultHookEntryPath()`,该路径在源仓库 v2.x 指向
+   * `~/Downloads/ai-productivity-mcp.mjs`(手动下载模式,已下线)。
+   */
+  hookEntry?: string
 }
 
 export interface InstallCursorHookResponse {
@@ -653,7 +661,10 @@ export async function handleAiProductivityInstallCursorHook(
   body: InstallCursorHookRequestBody | null,
   deps: InstallCursorHookDeps = {}
 ): Promise<void> {
-  const hookEntryPath = deps.hookEntryPath ?? defaultHookEntryPath()
+  // v1.0 优先用 cli/install.ts 通过 body.hookEntry 传入的绝对路径(npm 全局 cli.mjs 位置)
+  // 退回到 default 仅作为老用户兜底(指向 ~/Downloads/ai-productivity-mcp.mjs,
+  // v2.x 手动下载模式已下线,此 fallback 仅给 web UI 等极少数无 cli 上下文的调用方)
+  const hookEntryPath = deps.hookEntryPath ?? body?.hookEntry ?? defaultHookEntryPath()
   const hooksPath = deps.hooksPath ?? defaultCursorHooksPath()
   const entryExists = deps.hookEntryExists ?? existsSync
 
@@ -661,7 +672,7 @@ export async function handleAiProductivityInstallCursorHook(
     fail(
       res,
       412,
-      `未找到 MCP 入口: ${hookEntryPath}。请先在 Web 端「使用说明 → MCP 接入 Step 3」运行 curl 下载 ai-productivity-mcp.mjs,完成后回本卡片重试。`
+      `未找到 MCP/Hook 入口: ${hookEntryPath}。请确认已通过 \`npm i -g @ai-productivity-tracker/cli\` 全局安装,或显式传 hookEntry 字段。`
     )
     return
   }

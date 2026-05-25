@@ -54,7 +54,10 @@ await build({
       `const require = __aiptCreateRequire(import.meta.url);\n`
   },
   define: {
-    __AIPT_VERSION__: JSON.stringify(version)
+    __AIPT_VERSION__: JSON.stringify(version),
+    // @ai-productivity-tracker/mcp 内部用 __VERSION__,统一注入同一版本号,
+    // 避免 startMcpServer 日志打印 "v0.0.0-dev" 误导用户
+    __VERSION__: JSON.stringify(version)
   }
 })
 chmodSync(outfile, 0o755)

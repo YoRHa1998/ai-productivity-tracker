@@ -1177,7 +1177,7 @@ describe('handleAiProductivityInstallCursorHook', () => {
       { hookEntryPath: join(tmpDir, 'nonexistent.mjs'), hooksPath }
     )
     expect(mock.statusCode).toBe(412)
-    expect(JSON.parse(mock.body).message).toMatch(/MCP 入口/)
+    expect(JSON.parse(mock.body).message).toMatch(/MCP\/Hook 入口/)
   })
 
   it('MCP 入口存在时,直接写 hooks.json,命令字符串包含 `node <abs-mjs> hook` + marker', async () => {

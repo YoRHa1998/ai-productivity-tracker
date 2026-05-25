@@ -6,8 +6,13 @@
  *   - 已存在 ai-productivity (或 ai-productivity-tracker) key → 覆盖
  *   - 不存在 → 追加
  *   - 不破坏其它 MCP server 条目
- *   - 缺省命令:`npx -y @ai-productivity-tracker/cli mcp`(无 npx 网络可用时,
- *     在 doctor 命令里再提示用绝对路径)
+ *   - **缺省命令:`node <当前 cli.mjs 绝对路径> mcp`**(直接路径,零网络,
+ *     启动 <100ms;Cursor / Claude Code 的 macOS GUI 子进程也能跑通)
+ *     v1.0.0-rc.3 之前默认 `npx -y @ai-productivity-tracker/cli mcp`,实测在
+ *     macOS GUI 应用启 MCP 子进程时容易因为 PATH / proxy / 网络超时而失败,
+ *     现已切换到绝对路径。
+ *   - 用户可显式 `--command npx --args="-y,@ai-productivity-tracker/cli,mcp"`
+ *     回退到 npx 模式(便于 CI / 跨机器场景共享同份 mcp.json)。
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -17,7 +22,7 @@ import { dirname, join } from 'node:path'
 export interface InstallMcpArgs {
   /** 写到指定路径(测试 / 自定义 IDE 时用),缺省为 ~/.cursor/mcp.json */
   configPath?: string
-  /** 自定义入口命令(默认 `npx -y @ai-productivity-tracker/cli mcp`) */
+  /** 自定义入口命令(默认 `node`,即用绝对路径跑当前 cli.mjs) */
   command?: string
   args?: string[]
 }
@@ -49,8 +54,8 @@ export async function runInstallMcp(args: InstallMcpArgs = {}): Promise<number> 
     data.mcpServers = {}
   }
 
-  const command = args.command ?? 'npx'
-  const cmdArgs = args.args ?? ['-y', '@ai-productivity-tracker/cli', 'mcp']
+  const command = args.command ?? 'node'
+  const cmdArgs = args.args ?? [resolveCliEntry(), 'mcp']
 
   // 删除老 key("ai-productivity"),避免一台机器两条配置同时存在
   let replacedLegacy = false
@@ -82,4 +87,18 @@ export async function runInstallMcp(args: InstallMcpArgs = {}): Promise<number> 
 
 function defaultCursorMcpJson(): string {
   return join(homedir(), '.cursor', 'mcp.json')
+}
+
+/**
+ * 当前 cli.mjs 的绝对路径(用于 MCP 配置内 args[0])。
+ *
+ * - 生产态 esbuild bundle:process.argv[1] = `<npm global>/.../cli/dist/cli.mjs`
+ * - tsx dev 态:process.argv[1] = `<repo>/packages/cli/src/index.ts`
+ *
+ * 配套 cli/src/index.ts 已删除 isDirectRun symlink 判断,argv[1] 永远指向真实入口。
+ */
+function resolveCliEntry(): string {
+  const arg1 = process.argv[1]
+  if (!arg1) throw new Error('无法解析当前 cli 入口路径(process.argv[1] 为空)')
+  return arg1
 }
