@@ -1,0 +1,417 @@
+/*
+ * 玻璃材质 utility 类。
+ *
+ * 命名:
+ *   .aipt-glass            基础玻璃面板(半透 + 描边 + backdrop-blur)
+ *   .aipt-glass--solid     不透明承载(用于内容密集区,避免穿透干扰)
+ *   .aipt-glass--accent    极光描边(顶部 1px 渐变线条)
+ *   .aipt-glass--soft      更弱的玻璃(用于嵌套)
+ *   .aipt-glow             hover/active 时光晕动效
+ *   .aipt-aurora-text      极光渐变文字
+ *   .aipt-aurora-border    极光渐变描边(伪元素实现)
+ *   .aipt-divider          半透明分隔
+ *   .aipt-pulse-dot        脉冲圆点(daemon 状态)
+ *   .aipt-status-dot       基础圆点(无脉冲)
+ *   .aipt-chip-v2          新版 chip
+ *   .aipt-fade-in          进入淡入
+ *   .aipt-shimmer          shimmer 占位
+ *   .aipt-mask-fade        底部羽化遮罩
+ */
+
+/* ===== 基础玻璃面板 ===== */
+.aipt-glass {
+  background: var(--aipt-surface);
+  border: 1px solid var(--aipt-border);
+  border-radius: var(--aipt-radius-lg);
+  backdrop-filter: blur(var(--aipt-blur-md)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--aipt-blur-md)) saturate(140%);
+  box-shadow: var(--aipt-shadow-soft);
+  transition:
+    border-color var(--aipt-duration-base) var(--aipt-easing-out),
+    background var(--aipt-duration-base) var(--aipt-easing-out),
+    box-shadow var(--aipt-duration-base) var(--aipt-easing-out),
+    transform var(--aipt-duration-base) var(--aipt-easing-out);
+}
+
+.aipt-glass--solid {
+  background: var(--aipt-bg-elevated-strong);
+  backdrop-filter: blur(var(--aipt-blur-lg)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--aipt-blur-lg)) saturate(160%);
+}
+
+.aipt-glass--soft {
+  background: var(--aipt-surface-soft);
+  border-color: var(--aipt-border-faint);
+  backdrop-filter: blur(var(--aipt-blur-sm)) saturate(120%);
+  -webkit-backdrop-filter: blur(var(--aipt-blur-sm)) saturate(120%);
+}
+
+.aipt-glass--accent {
+  position: relative;
+  overflow: hidden;
+}
+
+.aipt-glass--accent::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: var(--aipt-gradient-aurora);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.aipt-glass--accent::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  background: var(--aipt-gradient-aurora);
+  opacity: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: -1;
+  transition: opacity var(--aipt-duration-base) var(--aipt-easing-out);
+  filter: blur(20px);
+}
+
+.aipt-glass--accent:hover::after {
+  opacity: 0.25;
+}
+
+/* ===== Hover glow:仅当显式标 .aipt-glow ===== */
+.aipt-glow {
+  position: relative;
+}
+
+.aipt-glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  background: var(--aipt-gradient-aurora-soft);
+  transition: opacity var(--aipt-duration-base) var(--aipt-easing-out);
+}
+
+.aipt-glow:hover {
+  border-color: var(--aipt-border-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--aipt-shadow-soft), var(--aipt-shadow-glow);
+}
+
+.aipt-glow:hover::before {
+  opacity: 0.6;
+}
+
+/* ===== 渐变文字 ===== */
+.aipt-aurora-text {
+  background: var(--aipt-gradient-aurora);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.aipt-aurora-text--pink {
+  background-image: var(--aipt-gradient-pink);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.aipt-aurora-text--mint {
+  background-image: var(--aipt-gradient-mint);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* ===== 渐变描边(via mask) ===== */
+.aipt-aurora-border {
+  position: relative;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.aipt-aurora-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--aipt-gradient-aurora);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ===== 分隔线 ===== */
+.aipt-divider {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--aipt-border-strong) 30%,
+    var(--aipt-border-strong) 70%,
+    transparent
+  );
+  margin: var(--aipt-space-4) 0;
+  border: 0;
+}
+
+.aipt-divider--vertical {
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    var(--aipt-border) 30%,
+    var(--aipt-border) 70%,
+    transparent
+  );
+  margin: 0 var(--aipt-space-3);
+}
+
+/* ===== 状态圆点 ===== */
+.aipt-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--aipt-text-muted);
+  box-shadow: 0 0 0 0 transparent;
+  flex-shrink: 0;
+}
+
+.aipt-status-dot--ok {
+  background: var(--aipt-state-success);
+  box-shadow: 0 0 12px rgba(126, 221, 197, 0.55);
+}
+
+.aipt-status-dot--warn {
+  background: var(--aipt-state-warning);
+  box-shadow: 0 0 12px rgba(245, 196, 137, 0.5);
+}
+
+.aipt-status-dot--danger {
+  background: var(--aipt-state-danger);
+  box-shadow: 0 0 12px rgba(240, 133, 151, 0.5);
+}
+
+.aipt-status-dot--muted {
+  background: var(--aipt-text-faint);
+  box-shadow: none;
+}
+
+.aipt-pulse-dot {
+  position: relative;
+}
+
+.aipt-pulse-dot::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+  animation: aipt-pulse 2s var(--aipt-easing-inout) infinite;
+  pointer-events: none;
+}
+
+@keyframes aipt-pulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+  70% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+
+.aipt-pulse-dot.aipt-status-dot--ok {
+  color: var(--aipt-state-success);
+}
+
+.aipt-pulse-dot.aipt-status-dot--warn {
+  color: var(--aipt-state-warning);
+}
+
+.aipt-pulse-dot.aipt-status-dot--danger {
+  color: var(--aipt-state-danger);
+}
+
+/* ===== Chip v2(玻璃版) ===== */
+.aipt-chip-v2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--aipt-radius-pill);
+  background: var(--aipt-surface);
+  border: 1px solid var(--aipt-border);
+  color: var(--aipt-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(var(--aipt-blur-sm));
+  -webkit-backdrop-filter: blur(var(--aipt-blur-sm));
+  white-space: nowrap;
+}
+
+.aipt-chip-v2--accent {
+  background: var(--aipt-gradient-aurora);
+  border-color: transparent;
+  color: var(--aipt-text-on-accent);
+  font-weight: 600;
+}
+
+.aipt-chip-v2--success {
+  background: var(--aipt-state-success-soft);
+  border-color: rgba(126, 221, 197, 0.3);
+  color: var(--aipt-state-success);
+}
+
+.aipt-chip-v2--warning {
+  background: var(--aipt-state-warning-soft);
+  border-color: rgba(245, 196, 137, 0.3);
+  color: var(--aipt-state-warning);
+}
+
+.aipt-chip-v2--danger {
+  background: var(--aipt-state-danger-soft);
+  border-color: rgba(240, 133, 151, 0.3);
+  color: var(--aipt-state-danger);
+}
+
+.aipt-chip-v2--info {
+  background: var(--aipt-state-info-soft);
+  border-color: rgba(134, 197, 232, 0.32);
+  color: var(--aipt-state-info);
+}
+
+.aipt-chip-v2--ghost {
+  background: transparent;
+  border-color: var(--aipt-border);
+  color: var(--aipt-text-secondary);
+}
+
+/* ===== 进入动效 ===== */
+.aipt-fade-in {
+  animation: aipt-fade-in var(--aipt-duration-slow) var(--aipt-easing-out) both;
+}
+
+@keyframes aipt-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ===== Shimmer 占位 ===== */
+.aipt-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: var(--aipt-surface);
+}
+
+.aipt-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--aipt-surface-hover) 50%, transparent);
+  animation: aipt-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes aipt-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ===== 底部羽化遮罩(列表/抽屉常用) ===== */
+.aipt-mask-fade {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent 100%);
+}
+
+/* ===== 路由切换动效 ===== */
+.aipt-route-fade-enter-active,
+.aipt-route-fade-leave-active {
+  transition:
+    opacity var(--aipt-duration-base) var(--aipt-easing-out),
+    transform var(--aipt-duration-base) var(--aipt-easing-out);
+}
+
+.aipt-route-fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.aipt-route-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* ===== 全局工具类(替代轻量布局,无需 UnoCSS) ===== */
+.aipt-flex {
+  display: flex;
+}
+
+.aipt-flex-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.aipt-items-center {
+  align-items: center;
+}
+
+.aipt-justify-between {
+  justify-content: space-between;
+}
+
+.aipt-gap-1 {
+  gap: var(--aipt-space-1);
+}
+.aipt-gap-2 {
+  gap: var(--aipt-space-2);
+}
+.aipt-gap-3 {
+  gap: var(--aipt-space-3);
+}
+.aipt-gap-4 {
+  gap: var(--aipt-space-4);
+}
+.aipt-gap-6 {
+  gap: var(--aipt-space-6);
+}
+
+/* ===== 数字 tabular ===== */
+.aipt-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings:
+    'tnum' on,
+    'lnum' on;
+}

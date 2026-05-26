@@ -1,0 +1,313 @@
+/*
+ * 设计 token:全局 CSS 变量。
+ *
+ * 主题切换由 useTheme composable 写 <html data-theme="dark|light"> 切换,
+ * 默认未设置时跟随 prefers-color-scheme(auto)。
+ *
+ * 命名约定:
+ *   --aipt-bg-*          背景色阶
+ *   --aipt-surface-*     卡片承载色(玻璃叠加用)
+ *   --aipt-text-*        文本色阶
+ *   --aipt-border-*      描边色阶
+ *   --aipt-aurora-*      极光主题色
+ *   --aipt-gradient-*    预定义渐变
+ *   --aipt-shadow-*      阴影/光晕预设
+ *   --aipt-blur-*        backdrop-filter 强度
+ *   --aipt-radius-*      圆角阶梯
+ *   --aipt-space-*       间距阶梯
+ *   --aipt-z-*           z-index 命名层
+ *   --aipt-state-*       success/warning/danger/info 状态色
+ */
+
+:root {
+  color-scheme: dark light;
+
+  /* ----- 极光主色(深浅模式共享) -----
+   * v1.1 调淡:从原刺眼蓝紫(#7c5cff)改为柔和淡蓝系,主调由"紫"切到"晴空蓝"。
+   * 辅助色保留多色变化(粉/薄荷/琥珀)但全部降低饱和度,避免视觉过载。
+   */
+  --aipt-aurora-1: #6ea7f5; /* 柔淡蓝(主色) */
+  --aipt-aurora-2: #86c5e8; /* 淡天蓝 */
+  --aipt-aurora-3: #f0a6c8; /* 柔粉(辅助) */
+  --aipt-aurora-4: #9fe5d4; /* 柔薄荷(辅助) */
+  --aipt-aurora-5: #f5c489; /* 柔琥珀(辅助) */
+
+  --aipt-gradient-aurora: linear-gradient(
+    135deg,
+    var(--aipt-aurora-1) 0%,
+    var(--aipt-aurora-2) 55%,
+    #c3e0f0 100%
+  );
+  --aipt-gradient-aurora-soft: linear-gradient(
+    135deg,
+    rgba(110, 167, 245, 0.16) 0%,
+    rgba(134, 197, 232, 0.16) 55%,
+    rgba(195, 224, 240, 0.16) 100%
+  );
+  --aipt-gradient-pink: linear-gradient(135deg, #f0a6c8 0%, #6ea7f5 100%);
+  --aipt-gradient-mint: linear-gradient(135deg, #9fe5d4 0%, #86c5e8 100%);
+  --aipt-gradient-warm: linear-gradient(135deg, #f5c489 0%, #f0a6c8 100%);
+
+  /* ----- 状态语义色 -----
+   * success / info 跟随 aurora 调淡;warning / danger 保留辨识度,微调更柔
+   */
+  --aipt-state-success: #7eddc5;
+  --aipt-state-success-soft: rgba(126, 221, 197, 0.14);
+  --aipt-state-warning: #f5c489;
+  --aipt-state-warning-soft: rgba(245, 196, 137, 0.14);
+  --aipt-state-danger: #f08597;
+  --aipt-state-danger-soft: rgba(240, 133, 151, 0.14);
+  --aipt-state-info: #86c5e8;
+  --aipt-state-info-soft: rgba(134, 197, 232, 0.14);
+
+  /* ----- 通用阶梯 ----- */
+  --aipt-radius-sm: 6px;
+  --aipt-radius-md: 10px;
+  --aipt-radius-lg: 14px;
+  --aipt-radius-xl: 20px;
+  --aipt-radius-pill: 999px;
+
+  --aipt-space-1: 4px;
+  --aipt-space-2: 8px;
+  --aipt-space-3: 12px;
+  --aipt-space-4: 16px;
+  --aipt-space-5: 20px;
+  --aipt-space-6: 24px;
+  --aipt-space-8: 32px;
+  --aipt-space-10: 40px;
+  --aipt-space-12: 48px;
+
+  --aipt-blur-sm: 12px;
+  --aipt-blur-md: 24px;
+  --aipt-blur-lg: 40px;
+
+  --aipt-z-bg: 0;
+  --aipt-z-base: 1;
+  --aipt-z-sidebar: 80;
+  --aipt-z-topbar: 100;
+  --aipt-z-overlay: 1000;
+  --aipt-z-modal: 2000;
+
+  --aipt-sidebar-w: 240px;
+  --aipt-sidebar-w-collapsed: 68px;
+  --aipt-topbar-h: 60px;
+  --aipt-content-max-w: 1440px;
+
+  --aipt-easing-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --aipt-easing-inout: cubic-bezier(0.65, 0, 0.35, 1);
+  --aipt-duration-fast: 120ms;
+  --aipt-duration-base: 200ms;
+  --aipt-duration-slow: 320ms;
+}
+
+/* ============ DARK(默认) ============ */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* 深空底:略带蓝紫的近黑,避免纯黑无温度 */
+  --aipt-bg: #070a14;
+  --aipt-bg-deep: #050811;
+  --aipt-bg-elevated: rgba(20, 24, 40, 0.55);
+  --aipt-bg-elevated-strong: rgba(20, 24, 40, 0.78);
+
+  /* 玻璃面板的叠加层:在背景之上的半透明白 */
+  --aipt-surface: rgba(255, 255, 255, 0.04);
+  --aipt-surface-hover: rgba(255, 255, 255, 0.07);
+  --aipt-surface-active: rgba(255, 255, 255, 0.1);
+  --aipt-surface-strong: rgba(255, 255, 255, 0.08);
+  --aipt-surface-soft: rgba(255, 255, 255, 0.025);
+
+  /* 文本色 */
+  --aipt-text: rgba(255, 255, 255, 0.92);
+  --aipt-text-strong: rgba(255, 255, 255, 1);
+  --aipt-text-secondary: rgba(255, 255, 255, 0.68);
+  --aipt-text-muted: rgba(255, 255, 255, 0.42);
+  --aipt-text-faint: rgba(255, 255, 255, 0.28);
+  --aipt-text-on-accent: #0a0612;
+
+  /* 描边色 */
+  --aipt-border: rgba(255, 255, 255, 0.08);
+  --aipt-border-strong: rgba(255, 255, 255, 0.16);
+  --aipt-border-faint: rgba(255, 255, 255, 0.04);
+
+  /* 阴影/光晕(改为淡蓝调,匹配主色) */
+  --aipt-shadow-soft: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --aipt-shadow-glow: 0 0 28px rgba(110, 167, 245, 0.18);
+  --aipt-shadow-glow-strong: 0 0 44px rgba(110, 167, 245, 0.28);
+  --aipt-shadow-elevated: 0 24px 60px rgba(0, 0, 0, 0.55);
+
+  /* 兼容老 token(平滑过渡,逐步移除) */
+  --aipt-bg-card: var(--aipt-surface);
+  --aipt-primary: var(--aipt-aurora-1);
+  --aipt-header-bg: var(--aipt-bg-elevated);
+  --aipt-header-shadow: 0 1px 0 var(--aipt-border);
+  --accent-primary: var(--aipt-aurora-1);
+  --text-primary: var(--aipt-text);
+  --text-secondary: var(--aipt-text-secondary);
+  --text-soft: var(--aipt-text-muted);
+  --text-muted: var(--aipt-text-faint);
+  --surface-elevated: var(--aipt-surface);
+  --border-subtle: var(--aipt-border);
+  --shadow-soft: var(--aipt-shadow-soft);
+  --danger: var(--aipt-state-danger);
+}
+
+/* ============ LIGHT(玻璃极光浅色版,保留高级感) ============ */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --aipt-bg: #f4f6fb;
+  --aipt-bg-deep: #eceff7;
+  --aipt-bg-elevated: rgba(255, 255, 255, 0.7);
+  --aipt-bg-elevated-strong: rgba(255, 255, 255, 0.88);
+
+  --aipt-surface: rgba(255, 255, 255, 0.62);
+  --aipt-surface-hover: rgba(255, 255, 255, 0.82);
+  --aipt-surface-active: rgba(110, 167, 245, 0.08);
+  --aipt-surface-strong: rgba(255, 255, 255, 0.92);
+  --aipt-surface-soft: rgba(255, 255, 255, 0.45);
+
+  --aipt-text: #14172a;
+  --aipt-text-strong: #08091a;
+  --aipt-text-secondary: rgba(20, 23, 42, 0.72);
+  --aipt-text-muted: rgba(20, 23, 42, 0.5);
+  --aipt-text-faint: rgba(20, 23, 42, 0.3);
+  --aipt-text-on-accent: #ffffff;
+
+  --aipt-border: rgba(20, 23, 42, 0.08);
+  --aipt-border-strong: rgba(20, 23, 42, 0.16);
+  --aipt-border-faint: rgba(20, 23, 42, 0.04);
+
+  --aipt-shadow-soft: 0 8px 24px rgba(80, 110, 160, 0.12);
+  --aipt-shadow-glow: 0 0 24px rgba(110, 167, 245, 0.18);
+  --aipt-shadow-glow-strong: 0 0 36px rgba(110, 167, 245, 0.26);
+  --aipt-shadow-elevated: 0 16px 40px rgba(60, 90, 130, 0.18);
+
+  --aipt-bg-card: var(--aipt-surface);
+  --aipt-primary: #3978d4;
+  --aipt-header-bg: var(--aipt-bg-elevated);
+  --aipt-header-shadow: 0 1px 0 var(--aipt-border);
+  --accent-primary: #3978d4;
+  --text-primary: var(--aipt-text);
+  --text-secondary: var(--aipt-text-secondary);
+  --text-soft: var(--aipt-text-muted);
+  --text-muted: var(--aipt-text-faint);
+  --surface-elevated: rgba(255, 255, 255, 0.88);
+  --border-subtle: var(--aipt-border);
+  --shadow-soft: var(--aipt-shadow-soft);
+  --danger: #d4626f;
+
+  /* 浅色模式下状态色调暗以提升对比度 */
+  --aipt-state-success: #16a07a;
+  --aipt-state-warning: #b76b1d;
+  --aipt-state-danger: #d33d5f;
+  --aipt-state-info: #2f8cdd;
+}
+
+/* prefers-color-scheme 兜底:用户没有显式设置主题且系统是浅色,自动应用浅色 token */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+
+    --aipt-bg: #f4f6fb;
+    --aipt-bg-deep: #eceff7;
+    --aipt-bg-elevated: rgba(255, 255, 255, 0.7);
+    --aipt-bg-elevated-strong: rgba(255, 255, 255, 0.88);
+    --aipt-surface: rgba(255, 255, 255, 0.62);
+    --aipt-surface-hover: rgba(255, 255, 255, 0.82);
+    --aipt-surface-active: rgba(110, 167, 245, 0.08);
+    --aipt-surface-strong: rgba(255, 255, 255, 0.92);
+    --aipt-surface-soft: rgba(255, 255, 255, 0.45);
+    --aipt-text: #14172a;
+    --aipt-text-strong: #08091a;
+    --aipt-text-secondary: rgba(20, 23, 42, 0.72);
+    --aipt-text-muted: rgba(20, 23, 42, 0.5);
+    --aipt-text-faint: rgba(20, 23, 42, 0.3);
+    --aipt-text-on-accent: #ffffff;
+    --aipt-border: rgba(20, 23, 42, 0.08);
+    --aipt-border-strong: rgba(20, 23, 42, 0.16);
+    --aipt-border-faint: rgba(20, 23, 42, 0.04);
+    --aipt-shadow-soft: 0 8px 24px rgba(80, 110, 160, 0.12);
+    --aipt-shadow-glow: 0 0 24px rgba(110, 167, 245, 0.18);
+    --aipt-shadow-glow-strong: 0 0 36px rgba(110, 167, 245, 0.26);
+    --aipt-shadow-elevated: 0 16px 40px rgba(60, 90, 130, 0.18);
+    --aipt-primary: #3978d4;
+    --accent-primary: #3978d4;
+    --surface-elevated: rgba(255, 255, 255, 0.88);
+    --aipt-state-success: #16a07a;
+    --aipt-state-warning: #b76b1d;
+    --aipt-state-danger: #d33d5f;
+    --aipt-state-info: #2f8cdd;
+  }
+}
+
+/* ============ 全局基础 reset ============ */
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--aipt-bg);
+  color: var(--aipt-text);
+  font-family:
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Microsoft YaHei',
+    Arial,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  font-feature-settings:
+    'ss01' on,
+    'cv11' on;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  overflow: hidden;
+}
+
+#app {
+  position: relative;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* 滚动条玻璃化 */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--aipt-surface-strong);
+  border-radius: var(--aipt-radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background var(--aipt-duration-base);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--aipt-border-strong);
+  background-clip: padding-box;
+}
+
+::selection {
+  background: rgba(110, 167, 245, 0.32);
+  color: var(--aipt-text-strong);
+}
