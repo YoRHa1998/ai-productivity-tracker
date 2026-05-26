@@ -64,6 +64,7 @@ import {
   updateRequirement,
   appendIteration,
   listIterations,
+  mergeAutoSplitIterations,
   appendSubtaskEvent,
   DEFAULT_FORMULA,
   readFormula,
@@ -885,6 +886,53 @@ export function handleAiProductivityListIterations(res: ServerResponse, jiraKey:
     return
   }
   ok(res, listIterations(jiraKey))
+}
+
+// ────────────────────────────────────────────────────────────────────
+// v2.18.0 数据整理:合并 Cursor stop-hook 兜底产生的拆分 iteration
+//
+// 看板"数据整理"按钮的后端入口。dryRun=true 时只扫描候选,不写盘;
+// 否则按严格规则合并 + 自动写 .bak 备份。
+// ────────────────────────────────────────────────────────────────────
+
+export interface MergeSplitIterationsRequestBody {
+  /** true 时只扫描候选 + 计数,不写盘也不备份 */
+  dryRun?: boolean
+}
+
+export interface MergeSplitIterationsResponse {
+  jiraKey: string
+  dryRun: boolean
+  mergedPairs: Array<{ fromSeq: number; intoSeq: number }>
+  totalBefore: number
+  totalAfter: number
+  /** 仅真合并成功且产生备份时给出绝对路径,其它情形为 null */
+  backupPath: string | null
+}
+
+export function handleAiProductivityMergeSplitIterations(
+  res: ServerResponse,
+  jiraKey: string,
+  body: MergeSplitIterationsRequestBody | null
+): void {
+  if (!loadRequirement(jiraKey)) {
+    fail(res, 404, `需求 ${jiraKey} 未找到`)
+    return
+  }
+  const dryRun = body?.dryRun === true
+  try {
+    const result = mergeAutoSplitIterations(jiraKey, { dryRun })
+    ok(res, {
+      jiraKey,
+      dryRun,
+      mergedPairs: result.mergedPairs,
+      totalBefore: result.totalBefore,
+      totalAfter: result.totalAfter,
+      backupPath: result.backupPath
+    } satisfies MergeSplitIterationsResponse)
+  } catch (err) {
+    fail(res, 500, err instanceof Error ? err.message : '合并失败')
+  }
 }
 
 export function handleAiProductivitySummary(res: ServerResponse): void {

@@ -305,6 +305,43 @@ export function syncJiraTitle(jiraKey: string) {
   )
 }
 
+/**
+ * v2.18.0 数据整理:合并 Cursor stop-hook 兜底产生的"前一条空总结 + 后一条满总结"
+ * 拆分对。
+ *
+ * - dryRun=true:只扫描候选,不写盘,不备份
+ * - dryRun 缺省/false:扫描 + 写 .bak-<ts> 备份 + 整文件 tmp+rename 重写
+ *   返回的 backupPath 是 daemon 端的绝对路径,用户感觉占空间时可自行清理
+ *
+ * 严格识别规则(全部满足才合并):
+ *  - 两条均非 init iteration
+ *  - 同一非空 branch
+ *  - reportedAt 间隔 ∈ [0, 120_000] ms
+ *  - 前一条 conversationSummary === null
+ *  - 后一条 conversationSummary !== null
+ *  - 后一条 source === 'cursor'
+ */
+export type MergeSplitIterationsResponse = {
+  jiraKey: string
+  dryRun: boolean
+  mergedPairs: Array<{ fromSeq: number; intoSeq: number }>
+  totalBefore: number
+  totalAfter: number
+  /** 仅真合并成功且产生备份时给出绝对路径,其它情形为 null */
+  backupPath: string | null
+}
+
+export function mergeSplitIterations(jiraKey: string, options: { dryRun?: boolean } = {}) {
+  return agentRequest<MergeSplitIterationsResponse>(
+    `/ai-productivity/requirements/${encodeURIComponent(jiraKey)}/merge-split-iterations`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ dryRun: options.dryRun === true })
+    }
+  )
+}
+
 export function fetchSummary() {
   return agentRequest<SummaryMetrics>('/ai-productivity/summary')
 }

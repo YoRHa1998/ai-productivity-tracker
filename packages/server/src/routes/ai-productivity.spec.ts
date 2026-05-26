@@ -30,7 +30,8 @@ import {
   handleAiProductivityGetLesson,
   handleAiProductivityDeleteLesson,
   handleAiProductivityLessonsBundle,
-  handleAiProductivitySaveLessons
+  handleAiProductivitySaveLessons,
+  handleAiProductivityMergeSplitIterations
 } from './ai-productivity.js'
 import { upsertBinding, readBindings } from '@ai-productivity-tracker/core'
 import {
@@ -2287,5 +2288,105 @@ describe('lessons handlers (v2.16.0 P0 经验沉淀)', () => {
     expect(saved.seenInJiraKeys).toEqual(['NEW-1'])
     expect(saved.hitCount).toBe(1)
     expect(saved.trustReasons.length).toBeGreaterThan(0)
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────
+// v2.18.0 数据整理:合并 Cursor stop-hook 兜底产生的拆分 iteration
+// ────────────────────────────────────────────────────────────────────
+
+describe('handleAiProductivityMergeSplitIterations (v2.18.0)', () => {
+  let aipCleanup: () => void
+
+  beforeEach(() => {
+    const setup = setupAipRoot()
+    aipCleanup = setup.restore
+  })
+
+  afterEach(() => {
+    aipCleanup()
+  })
+
+  async function seedSplitPair(jiraKey: string) {
+    saveRequirement({ jiraKey, title: 'demo' }, {})
+    const { appendIteration, writePendingSummary } =
+      await import('@ai-productivity-tracker/core/store')
+    const branch = `feature/${jiraKey}-x`
+    appendIteration(jiraKey, { kind: 'init', branch })
+    appendIteration(jiraKey, {
+      kind: 'coding',
+      branch,
+      source: 'cursor',
+      cumulativeToken: 1000,
+      reportedAt: '2026-05-26T00:00:00.000Z'
+    })
+    writePendingSummary(
+      jiraKey,
+      { oneLine: '总结', type: 'communication', discussion: 'd' },
+      'cursor'
+    )
+    appendIteration(jiraKey, {
+      kind: 'coding',
+      branch,
+      source: 'cursor',
+      cumulativeToken: 1200,
+      reportedAt: '2026-05-26T00:00:30.000Z'
+    })
+  }
+
+  it('需求不存在 → 404', () => {
+    const mock = makeMockRes()
+    handleAiProductivityMergeSplitIterations(mock.res, 'NO-1', null)
+    expect(mock.statusCode).toBe(404)
+  })
+
+  it('dryRun=true 时不写盘,但返回候选对列表', async () => {
+    await seedSplitPair('SPLIT-1')
+    const mock = makeMockRes()
+    handleAiProductivityMergeSplitIterations(mock.res, 'SPLIT-1', { dryRun: true })
+    expect(mock.statusCode).toBe(200)
+    const body = JSON.parse(mock.body).data
+    expect(body.dryRun).toBe(true)
+    expect(body.mergedPairs.length).toBe(1)
+    expect(body.mergedPairs[0]).toEqual({ fromSeq: 3, intoSeq: 2 })
+    expect(body.totalBefore).toBe(3)
+    expect(body.totalAfter).toBe(2)
+    expect(body.backupPath).toBeNull()
+
+    // 还是 3 条:dryRun 不写盘
+    expect(listIterations('SPLIT-1').length).toBe(3)
+  })
+
+  it('真合并 → 落盘 + 自动 .bak 备份 + 返回 backupPath', async () => {
+    await seedSplitPair('SPLIT-2')
+    const mock = makeMockRes()
+    handleAiProductivityMergeSplitIterations(mock.res, 'SPLIT-2', null)
+    expect(mock.statusCode).toBe(200)
+    const body = JSON.parse(mock.body).data
+    expect(body.dryRun).toBe(false)
+    expect(body.mergedPairs.length).toBe(1)
+    expect(body.totalAfter).toBe(2)
+    expect(typeof body.backupPath).toBe('string')
+    expect(existsSync(body.backupPath)).toBe(true)
+    expect(listIterations('SPLIT-2').length).toBe(2)
+  })
+
+  it('无候选时:不写盘 + backupPath=null', async () => {
+    saveRequirement({ jiraKey: 'NOOP-1', title: 't' }, {})
+    const { appendIteration } = await import('@ai-productivity-tracker/core/store')
+    appendIteration('NOOP-1', { kind: 'init', branch: 'f/NOOP-1' })
+    appendIteration('NOOP-1', {
+      kind: 'coding',
+      branch: 'f/NOOP-1',
+      source: 'cursor',
+      cumulativeToken: 100
+    })
+    const mock = makeMockRes()
+    handleAiProductivityMergeSplitIterations(mock.res, 'NOOP-1', null)
+    expect(mock.statusCode).toBe(200)
+    const body = JSON.parse(mock.body).data
+    expect(body.mergedPairs).toEqual([])
+    expect(body.backupPath).toBeNull()
+    expect(body.totalBefore).toBe(body.totalAfter)
   })
 })

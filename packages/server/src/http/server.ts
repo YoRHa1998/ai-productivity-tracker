@@ -19,6 +19,7 @@ import {
   handleAiProductivityListRequirements,
   handleAiProductivityGetRequirement,
   handleAiProductivityListIterations,
+  handleAiProductivityMergeSplitIterations,
   handleAiProductivityPatchRequirement,
   handleAiProductivityPatchSubtask,
   handleAiProductivitySummary,
@@ -44,6 +45,7 @@ import {
   type PatchRequirementBody,
   type PatchSubtaskBody,
   type RefreshBugsBody,
+  type MergeSplitIterationsRequestBody,
   type AttachSummaryRequestBody,
   type SaveLessonsRequestBody
 } from '../routes/ai-productivity.js'
@@ -319,6 +321,14 @@ async function routeAiProductivity(
   params = matchRoute(pathname, '/ai-productivity/requirements/:jiraKey/iterations')
   if (params && method === 'GET') {
     handleAiProductivityListIterations(res, params.jiraKey!)
+    return true
+  }
+
+  params = matchRoute(pathname, '/ai-productivity/requirements/:jiraKey/merge-split-iterations')
+  if (params && method === 'POST') {
+    const raw = await readBody(req)
+    const body = raw ? (parseJson(raw) as MergeSplitIterationsRequestBody | null) : null
+    handleAiProductivityMergeSplitIterations(res, params.jiraKey!, body)
     return true
   }
 

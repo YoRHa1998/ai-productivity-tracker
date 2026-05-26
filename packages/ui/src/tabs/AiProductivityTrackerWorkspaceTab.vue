@@ -18,6 +18,7 @@ import {
   fetchSummary,
   getRequirementDetail,
   listRequirements,
+  mergeSplitIterations,
   patchRequirement,
   refreshBugs,
   syncJiraTitle,
@@ -42,6 +43,7 @@ const detailLoading = ref(false)
 const currentDetail = ref<RequirementDetail | null>(null)
 const bugRefreshing = ref(false)
 const detailRefreshing = ref(false)
+const mergeSplitRunning = ref(false)
 
 /**
  * 状态下拉的本地受控值。
@@ -294,6 +296,51 @@ async function handleRefreshBugs() {
     ElMessage.error((err as Error).message || 'Bug 拉取失败')
   } finally {
     bugRefreshing.value = false
+  }
+}
+
+/**
+ * v2.18.0 数据整理:合并 Cursor stop-hook 兜底产生的"前空 + 后满"拆分 iteration 对。
+ *
+ * 流程:
+ * 1. dryRun=true 拉候选数量
+ * 2. 候选为 0 → ElMessage.info,直接结束
+ * 3. 否则弹 confirm 提示"检测到 N 组拆分,合并后 M 条 → M-N 条,已自动备份";
+ *    用户取消则保留现状
+ * 4. 用户确认 → 调真合并 → 成功提示 + 备份路径 + 刷新抽屉
+ *
+ * 失败一律 ElMessage.error;.bak 备份保留在 daemon 数据目录,误判可手动 mv 回来。
+ */
+async function handleMergeSplitIterations() {
+  if (!currentDetail.value) return
+  const jiraKey = currentDetail.value.jiraKey
+  mergeSplitRunning.value = true
+  try {
+    const probe = await mergeSplitIterations(jiraKey, { dryRun: true })
+    if (probe.mergedPairs.length === 0) {
+      ElMessage.info('未检测到需合并的拆分记录,无需整理')
+      return
+    }
+    try {
+      await ElMessageBox.confirm(
+        `检测到 ${probe.mergedPairs.length} 组疑似拆分对话,合并后将从 ${probe.totalBefore} 条变为 ${probe.totalAfter} 条。合并前会自动写 .bak 备份到 daemon 数据目录,是否继续?`,
+        '数据整理',
+        { type: 'warning', confirmButtonText: '执行合并', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+    const result = await mergeSplitIterations(jiraKey, { dryRun: false })
+    const tip = result.backupPath
+      ? `已合并 ${result.mergedPairs.length} 组,备份:${result.backupPath}`
+      : `已合并 ${result.mergedPairs.length} 组`
+    ElMessage.success(tip)
+    currentDetail.value = await getRequirementDetail(jiraKey)
+    await loadList()
+  } catch (err) {
+    ElMessage.error((err as Error).message || '数据整理失败')
+  } finally {
+    mergeSplitRunning.value = false
   }
 }
 
@@ -1014,7 +1061,34 @@ onMounted(() => {
         <article class="aip-card aip-card--flat">
           <header class="aip-card__header">
             <h3 class="aip-card__title">Iteration 时间线</h3>
-            <span class="aip-card__meta">共 {{ currentDetail.iterations.length }} 条</span>
+            <div class="aip-drawer__timeline-header-actions">
+              <span class="aip-card__meta">共 {{ currentDetail.iterations.length }} 条</span>
+              <button
+                type="button"
+                class="aip-drawer__refresh-btn"
+                :disabled="mergeSplitRunning"
+                title="合并 Cursor stop-hook 兜底产生的拆分对话(前空 + 后满)"
+                @click="handleMergeSplitIterations"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M8 6v8a4 4 0 0 0 4 4h4M16 18l-3-3m3 3-3 3"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                  <path
+                    d="M16 6v8a4 4 0 0 1-4 4H8"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+                {{ mergeSplitRunning ? '整理中…' : '数据整理' }}
+              </button>
+            </div>
           </header>
           <ol v-if="currentDetail.iterations.length" class="aip-flow">
             <li v-for="iter in currentDetail.iterations" :key="iter.seq" class="aip-flow-step">
@@ -1680,6 +1754,13 @@ onMounted(() => {
 .aip-drawer__refresh-btn:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+/* 时间线 header 操作区:meta 与「数据整理」按钮并排靠右 */
+.aip-drawer__timeline-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
 }
 
 /* 时间线 */
