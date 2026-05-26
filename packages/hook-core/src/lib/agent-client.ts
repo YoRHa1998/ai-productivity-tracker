@@ -78,6 +78,30 @@ export interface AgentHookPayload {
   rawHookPayload?: Record<string, unknown>
 }
 
+/**
+ * v1.0.0-rc.18 Cursor `beforeSubmitPrompt` 触发时上报本轮起点。
+ *
+ * 字段约束:`conversationId` + `generationId` 必须非空,daemon 用拼接键存进
+ * cursorTurnStarts Map;projectRoot 仅用于诊断日志,daemon 不强校验。
+ */
+export interface AgentTurnStartPayload {
+  projectRoot?: string
+  conversationId: string
+  generationId: string
+}
+
+/**
+ * v1.0.0-rc.18 Cursor `afterAgentThought` 触发时上报本块 thinking 时长。
+ *
+ * daemon 在 cursorTurnStarts Map 内对应 entry.thoughtDurationMs 累加;entry 不存在
+ * (e.g. daemon 刚重启错过 beforeSubmitPrompt)时 no-op,返回 200。
+ */
+export interface AgentTurnThoughtPayload {
+  conversationId: string
+  generationId: string
+  durationMs: number
+}
+
 export interface AgentHookResponse {
   ok: true
   deduped: boolean
@@ -91,6 +115,16 @@ export interface AgentHookResponse {
 
 export type AgentHookResult =
   | { kind: 'ok'; data: AgentHookResponse }
+  | { kind: 'http-error'; status: number; message: string }
+  | { kind: 'network-error'; message: string }
+  | { kind: 'unconfigured' }
+
+/**
+ * v1.0.0-rc.18 turn-start / turn-thought 端点的统一返回类型。
+ * happy path 仅返 200,不带额外数据;失败语义与 AgentHookResult 同款。
+ */
+export type AgentSimpleResult =
+  | { kind: 'ok' }
   | { kind: 'http-error'; status: number; message: string }
   | { kind: 'network-error'; message: string }
   | { kind: 'unconfigured' }
@@ -135,4 +169,59 @@ export async function postHookToAgent(
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * v1.0.0-rc.18 提交 turn-start / turn-thought 的通用 POST 帮手。失败均归到
+ * AgentSimpleResult,调用方仅在 stderr 输出诊断,不阻塞 IDE。
+ */
+async function postJsonToAgent(
+  path: string,
+  body: unknown,
+  endpoint: { baseUrl: string; token: string } | null,
+  fetchImpl: typeof fetch,
+  timeoutMs: number
+): Promise<AgentSimpleResult> {
+  if (!endpoint) return { kind: 'unconfigured' }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetchImpl(`${endpoint.baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${endpoint.token}`,
+        Accept: 'application/json'
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      return { kind: 'http-error', status: res.status, message: text.slice(0, 500) }
+    }
+    return { kind: 'ok' }
+  } catch (err) {
+    return { kind: 'network-error', message: (err as Error).message ?? String(err) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export async function postTurnStartToAgent(
+  payload: AgentTurnStartPayload,
+  endpoint: { baseUrl: string; token: string } | null = loadAgentEndpoint(),
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 3000
+): Promise<AgentSimpleResult> {
+  return postJsonToAgent('/ai-productivity/turn-start', payload, endpoint, fetchImpl, timeoutMs)
+}
+
+export async function postTurnThoughtToAgent(
+  payload: AgentTurnThoughtPayload,
+  endpoint: { baseUrl: string; token: string } | null = loadAgentEndpoint(),
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 3000
+): Promise<AgentSimpleResult> {
+  return postJsonToAgent('/ai-productivity/turn-thought', payload, endpoint, fetchImpl, timeoutMs)
 }

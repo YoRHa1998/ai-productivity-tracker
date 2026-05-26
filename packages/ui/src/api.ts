@@ -81,6 +81,11 @@ export type IterationDetail = {
   cumulativeChangedFiles: ChangedFile[]
   milestoneNote: string
   thinkSeconds: number
+  /**
+   * v1.0.0-rc.18 纯模型思考时间(秒)。Cursor 链路通过 `afterAgentThought` hook 累加 thinking 块
+   * `duration_ms` 折算而来,与 `thinkSeconds`(本轮 wall time)解耦。Claude Code / 老数据缺失。
+   */
+  pureThinkSeconds?: number
   modelName: string
   reportedAt: string
   rawPayloadFile: string | null
@@ -437,6 +442,15 @@ export type CursorHookStatus = {
   debugMode: boolean
   /** hooks.json 仍残留老 CLI(~/.local/bin/ai-productivity) 路径,提示「将被覆盖」 */
   legacyHookDetected: boolean
+  /**
+   * v1.0.0-rc.18 起 3 个事件独立状态(老 daemon 可能不返该字段);UI 据此精准提示缺哪条。
+   * 缺省时按 hookInstalled 兜底显示「未注入」。
+   */
+  perEvent?: {
+    afterAgentResponse: boolean
+    beforeSubmitPrompt: boolean
+    afterAgentThought: boolean
+  }
 }
 
 export function fetchCursorHookStatus() {

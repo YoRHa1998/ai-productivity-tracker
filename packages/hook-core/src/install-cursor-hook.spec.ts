@@ -33,16 +33,18 @@ describe('installCursorHookFile', () => {
   })
   afterEach(() => rmSync(tmpDir, { recursive: true, force: true }))
 
-  it('全新文件:写入完整 schema(version + afterAgentResponse)', () => {
+  it('全新文件:写入完整 schema(version + 3 个 hook 入口)', () => {
     const result = installCursorHookFile({ command: 'node mcp.mjs hook', hooksPath })
     expect(result.replaced).toBe(false)
     expect(result.previousCommand).toBeNull()
 
     const parsed = JSON.parse(readFileSync(hooksPath, 'utf-8'))
     expect(parsed.version).toBe(1)
-    expect(parsed.hooks.afterAgentResponse).toEqual([
-      { command: `node mcp.mjs hook ${HOOK_MARKER}` }
-    ])
+    const expected = [{ command: `node mcp.mjs hook ${HOOK_MARKER}` }]
+    expect(parsed.hooks.afterAgentResponse).toEqual(expected)
+    // v1.0.0-rc.18:beforeSubmitPrompt + afterAgentThought 同步落同一 finalCommand
+    expect(parsed.hooks.beforeSubmitPrompt).toEqual(expected)
+    expect(parsed.hooks.afterAgentThought).toEqual(expected)
   })
 
   it('已有非本工具条目时,在末尾追加,不影响他人', () => {
@@ -125,15 +127,16 @@ describe('inspectCursorHook', () => {
     })
   })
 
-  it('marker 命中且命令是 mcp.mjs 新格式', () => {
+  it('3 个事件都装 marker 时 hookInstalled=true,识别 mcp.mjs 新格式', () => {
+    const cmd = `node /Users/x/Downloads/ai-productivity-mcp.mjs hook ${HOOK_MARKER}`
     writeFileSync(
       hooksPath,
       JSON.stringify({
         version: 1,
         hooks: {
-          afterAgentResponse: [
-            { command: `node /Users/x/Downloads/ai-productivity-mcp.mjs hook ${HOOK_MARKER}` }
-          ]
+          afterAgentResponse: [{ command: cmd }],
+          beforeSubmitPrompt: [{ command: cmd }],
+          afterAgentThought: [{ command: cmd }]
         }
       })
     )
@@ -141,15 +144,23 @@ describe('inspectCursorHook', () => {
     expect(r.hookInstalled).toBe(true)
     expect(r.debugMode).toBe(false)
     expect(r.legacyHookDetected).toBe(false)
+    expect(r.perEvent).toEqual({
+      afterAgentResponse: true,
+      beforeSubmitPrompt: true,
+      afterAgentThought: true
+    })
   })
 
   it('marker 命中且命令是老 CLI 路径 → legacyHookDetected=true', () => {
+    const cmd = `${LEGACY_CLI_PATH} hook ${HOOK_MARKER}`
     writeFileSync(
       hooksPath,
       JSON.stringify({
         version: 1,
         hooks: {
-          afterAgentResponse: [{ command: `${LEGACY_CLI_PATH} hook ${HOOK_MARKER}` }]
+          afterAgentResponse: [{ command: cmd }],
+          beforeSubmitPrompt: [{ command: cmd }],
+          afterAgentThought: [{ command: cmd }]
         }
       })
     )
@@ -159,18 +170,42 @@ describe('inspectCursorHook', () => {
   })
 
   it('DEBUG 模式命令识别', () => {
+    const cmd = `${DEBUG_ENV_PREFIX} node mcp.mjs hook ${HOOK_MARKER}`
     writeFileSync(
       hooksPath,
       JSON.stringify({
         version: 1,
         hooks: {
-          afterAgentResponse: [{ command: `${DEBUG_ENV_PREFIX} node mcp.mjs hook ${HOOK_MARKER}` }]
+          afterAgentResponse: [{ command: cmd }],
+          beforeSubmitPrompt: [{ command: cmd }],
+          afterAgentThought: [{ command: cmd }]
         }
       })
     )
     const r = inspectCursorHook(hooksPath)
     expect(r.hookInstalled).toBe(true)
     expect(r.debugMode).toBe(true)
+  })
+
+  it('v1.0.0-rc.18 仅装 afterAgentResponse(老 daemon 升级前)→ hookInstalled=false,perEvent 精准提示', () => {
+    writeFileSync(
+      hooksPath,
+      JSON.stringify({
+        version: 1,
+        hooks: {
+          afterAgentResponse: [{ command: `node mcp.mjs hook ${HOOK_MARKER}` }]
+        }
+      })
+    )
+    const r = inspectCursorHook(hooksPath)
+    expect(r.hookInstalled).toBe(false)
+    expect(r.perEvent).toEqual({
+      afterAgentResponse: true,
+      beforeSubmitPrompt: false,
+      afterAgentThought: false
+    })
+    // command 仍然可见,看板能展示「已部分安装,需重跑 install」
+    expect(r.hookCommand).toContain(HOOK_MARKER)
   })
 
   it('hooks.json 无 marker 条目 → hookInstalled=false', () => {
@@ -184,5 +219,6 @@ describe('inspectCursorHook', () => {
     const r = inspectCursorHook(hooksPath)
     expect(r.hookInstalled).toBe(false)
     expect(r.hookCommand).toBeNull()
+    expect(r.perEvent.afterAgentResponse).toBe(false)
   })
 })

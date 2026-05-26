@@ -132,6 +132,14 @@ export interface StoredIteration {
   cumulativeChangedFiles: StoredChangedFile[]
   milestoneNote: string
   thinkSeconds: number
+  /**
+   * v1.0.0-rc.18 新增:本轮内 Cursor `afterAgentThought` hook 上报的 thinking 块 `duration_ms`
+   * 累加之后取整除 1000。表示「纯模型思考时间」,与 `thinkSeconds`(本轮 wall time)解耦。
+   *
+   * - Cursor 链路:有 `afterAgentThought` hook 触发时 ≥ 0;无 thinking 模型时通常为 0。
+   * - Claude Code 链路 / 老数据:字段缺失,反序列化保留为 `undefined`,UI tooltip 自动隐藏。
+   */
+  pureThinkSeconds?: number
   modelName: string
   reportedAt: string
   /** rawPayload 落盘到 raw/<reportedAt>-<seq>.json,这里只存相对文件名;为 null 表示未落 raw */
@@ -163,6 +171,8 @@ export interface AppendIterationInput {
   cumulativeChangedFiles?: StoredChangedFile[]
   milestoneNote?: string
   thinkSeconds?: number
+  /** v1.0.0-rc.18 Cursor afterAgentThought 累加纯思考时长;Claude Code / 旧数据缺省 */
+  pureThinkSeconds?: number
   modelName?: string
   rawPayload?: Record<string, unknown>
   /** 自定义 reportedAt;缺省 now() */
@@ -210,6 +220,9 @@ function normalizeIterationRow(raw: unknown): StoredIteration | null {
     cumulativeChangedFiles: Array.isArray(r.cumulativeChangedFiles) ? r.cumulativeChangedFiles : [],
     milestoneNote: typeof r.milestoneNote === 'string' ? r.milestoneNote : '',
     thinkSeconds: typeof r.thinkSeconds === 'number' ? r.thinkSeconds : 0,
+    // v1.0.0-rc.18: 旧数据缺该字段时保持 undefined,UI 据此判断是否渲染 tooltip 第二行。
+    // 显式 0 / 数字保留;非法值(字符串等)归 undefined。
+    pureThinkSeconds: typeof r.pureThinkSeconds === 'number' ? r.pureThinkSeconds : undefined,
     modelName: typeof r.modelName === 'string' ? r.modelName : '',
     reportedAt: typeof r.reportedAt === 'string' ? r.reportedAt : '',
     rawPayloadFile: typeof r.rawPayloadFile === 'string' ? r.rawPayloadFile : null,
@@ -312,6 +325,10 @@ export function appendIteration(
     cumulativeChangedFiles: input.cumulativeChangedFiles ?? [],
     milestoneNote: input.milestoneNote ?? '',
     thinkSeconds: input.thinkSeconds ?? 0,
+    // 仅在显式传入 number 时落盘;缺省 undefined,jsonl 序列化时整字段省略,兼容老看板。
+    ...(typeof input.pureThinkSeconds === 'number'
+      ? { pureThinkSeconds: input.pureThinkSeconds }
+      : {}),
     modelName: input.modelName ?? '',
     reportedAt,
     rawPayloadFile,
@@ -496,6 +513,12 @@ export function mergeIterationPair(a: StoredIteration, b: StoredIteration): Stor
     cumulativeChangedFiles: b.cumulativeChangedFiles,
     milestoneNote: safeStr(b.milestoneNote, a.milestoneNote),
     thinkSeconds: a.thinkSeconds + b.thinkSeconds,
+    // pureThinkSeconds:与 thinkSeconds 同口径(同一轮真实增量之和)。任一缺失走兜底,
+    // 两条都缺失才保留 undefined,避免给老数据强行注入 0 改变 UI 渲染行为。
+    pureThinkSeconds:
+      typeof a.pureThinkSeconds === 'number' || typeof b.pureThinkSeconds === 'number'
+        ? (a.pureThinkSeconds ?? 0) + (b.pureThinkSeconds ?? 0)
+        : undefined,
     modelName: safeStr(b.modelName, a.modelName),
     reportedAt: b.reportedAt,
     rawPayloadFile: a.rawPayloadFile,

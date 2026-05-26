@@ -13,6 +13,8 @@ import {
   handleAiProductivityStatus,
   handleAiProductivityWatcherStatus,
   handleAiProductivityHook,
+  handleAiProductivityTurnStart,
+  handleAiProductivityTurnThought,
   handleAiProductivityCursorHookStatus,
   handleAiProductivityInstallCursorHook,
   handleAiProductivityInstallMcpEntry,
@@ -40,6 +42,8 @@ import {
   handleAiProductivitySaveLessons,
   type InitRequestBody,
   type HookRequestBody,
+  type TurnStartRequestBody,
+  type TurnThoughtRequestBody,
   type InstallCursorHookRequestBody,
   type InstallMcpEntryRequestBody,
   type PatchRequirementBody,
@@ -69,6 +73,8 @@ function isAiProductivityPanelPath(pathname: string): boolean {
     pathname === '/ai-productivity/init' ||
     pathname === '/ai-productivity/status' ||
     pathname === '/ai-productivity/hook' ||
+    pathname === '/ai-productivity/turn-start' ||
+    pathname === '/ai-productivity/turn-thought' ||
     pathname === '/ai-productivity/attach-summary'
   )
     return false
@@ -208,6 +214,20 @@ async function routeAiProductivity(
     const body = parseJson(await readBody(req))
     if (!body) return (badJsonResponse(res), true)
     await handleAiProductivityHook(res, config, body as HookRequestBody)
+    return true
+  }
+
+  if (method === 'POST' && pathname === '/ai-productivity/turn-start') {
+    const body = parseJson(await readBody(req))
+    if (!body) return (badJsonResponse(res), true)
+    handleAiProductivityTurnStart(res, body as TurnStartRequestBody)
+    return true
+  }
+
+  if (method === 'POST' && pathname === '/ai-productivity/turn-thought') {
+    const body = parseJson(await readBody(req))
+    if (!body) return (badJsonResponse(res), true)
+    handleAiProductivityTurnThought(res, body as TurnThoughtRequestBody)
     return true
   }
 

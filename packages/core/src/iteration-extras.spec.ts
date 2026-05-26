@@ -151,6 +151,33 @@ describe('buildIterationExtras (耗时/think_seconds 不变)', () => {
     expect(extras.thinkSeconds).toBe(ACTIVE_GAP_SECONDS)
   })
 
+  it('v1.0.0-rc.18 pureThinkSeconds 透传:有传则原样落,缺省 undefined,不影响 thinkSeconds', () => {
+    const withPure = buildIterationExtras({
+      gitRoot: '/tmp/repo',
+      binding: makeBinding(),
+      now: new Date('2026-05-15T00:03:00.000Z'),
+      previousReportedAt: '2026-05-15T00:00:00.000Z',
+      turnStartedAt: '2026-05-15T00:00:00.000Z',
+      source: 'cursor-hook',
+      pureThinkSeconds: 12,
+      collectDiff: () => fakeCumulativeDiff,
+      collectNumstatFn: () => fakeNumstat([])
+    })
+    // turnStartedAt 命中走 300s cap,180s 不截
+    expect(withPure.thinkSeconds).toBe(180)
+    expect(withPure.pureThinkSeconds).toBe(12)
+
+    const withoutPure = buildIterationExtras({
+      gitRoot: '/tmp/repo',
+      binding: makeBinding(),
+      now: new Date('2026-05-15T00:01:00.000Z'),
+      previousReportedAt: '2026-05-15T00:00:30.000Z',
+      collectDiff: () => fakeCumulativeDiff,
+      collectNumstatFn: () => fakeNumstat([])
+    })
+    expect(withoutPure.pureThinkSeconds).toBeUndefined()
+  })
+
   it('透传 modelName 与 cumulativeDiff 字段', () => {
     const extras = buildIterationExtras({
       gitRoot: '/tmp/repo',

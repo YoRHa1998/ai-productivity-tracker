@@ -31,7 +31,11 @@ import {
   handleAiProductivityDeleteLesson,
   handleAiProductivityLessonsBundle,
   handleAiProductivitySaveLessons,
-  handleAiProductivityMergeSplitIterations
+  handleAiProductivityMergeSplitIterations,
+  handleAiProductivityTurnStart,
+  handleAiProductivityTurnThought,
+  __resetCursorTurnStartsForTest,
+  __snapshotCursorTurnStarts
 } from './ai-productivity.js'
 import { upsertBinding, readBindings } from '@ai-productivity-tracker/core'
 import {
@@ -1420,17 +1424,17 @@ describe('handleAiProductivityCursorHookStatus', () => {
   it('hooks.json 含 ai-productivity-hook marker 时识别为已安装,且能识别 debug 前缀', () => {
     const cursorDir = join(tmpHome, '.cursor')
     mkdirSync(cursorDir, { recursive: true })
+    // v1.0.0-rc.18 完整安装要求 3 个事件都装好,任一缺失 hookInstalled=false
+    const cmd =
+      'AI_PRODUCTIVITY_DEBUG_HOOK=1 /usr/bin/node /opt/cli.mjs hook # ai-productivity-hook'
     writeFileSync(
       join(cursorDir, 'hooks.json'),
       JSON.stringify({
         version: 1,
         hooks: {
-          afterAgentResponse: [
-            {
-              command:
-                'AI_PRODUCTIVITY_DEBUG_HOOK=1 /usr/bin/node /opt/cli.mjs hook # ai-productivity-hook'
-            }
-          ]
+          afterAgentResponse: [{ command: cmd }],
+          beforeSubmitPrompt: [{ command: cmd }],
+          afterAgentThought: [{ command: cmd }]
         }
       })
     )
@@ -1442,18 +1446,26 @@ describe('handleAiProductivityCursorHookStatus', () => {
     expect(body.data.debugMode).toBe(true)
     expect(body.data.hookCommand).toContain('# ai-productivity-hook')
     expect(body.data.legacyHookDetected).toBe(false)
+    expect(body.data.perEvent).toEqual({
+      afterAgentResponse: true,
+      beforeSubmitPrompt: true,
+      afterAgentThought: true
+    })
   })
 
   it('hooks.json 仍写老 CLI 路径 ~/.local/bin/ai-productivity 时 legacyHookDetected=true', () => {
     const cursorDir = join(tmpHome, '.cursor')
     mkdirSync(cursorDir, { recursive: true })
     const legacyHomeCli = join(tmpHome, '.local', 'bin', 'ai-productivity')
+    const cmd = `${legacyHomeCli} hook # ai-productivity-hook`
     writeFileSync(
       join(cursorDir, 'hooks.json'),
       JSON.stringify({
         version: 1,
         hooks: {
-          afterAgentResponse: [{ command: `${legacyHomeCli} hook # ai-productivity-hook` }]
+          afterAgentResponse: [{ command: cmd }],
+          beforeSubmitPrompt: [{ command: cmd }],
+          afterAgentThought: [{ command: cmd }]
         }
       })
     )
@@ -1462,6 +1474,31 @@ describe('handleAiProductivityCursorHookStatus', () => {
     const body = JSON.parse(mock.body)
     expect(body.data.hookInstalled).toBe(true)
     expect(body.data.legacyHookDetected).toBe(true)
+  })
+
+  it('v1.0.0-rc.18 仅装 afterAgentResponse(老 daemon 升级前)→ hookInstalled=false', () => {
+    const cursorDir = join(tmpHome, '.cursor')
+    mkdirSync(cursorDir, { recursive: true })
+    writeFileSync(
+      join(cursorDir, 'hooks.json'),
+      JSON.stringify({
+        version: 1,
+        hooks: {
+          afterAgentResponse: [
+            { command: '/usr/bin/node /opt/cli.mjs hook # ai-productivity-hook' }
+          ]
+        }
+      })
+    )
+    const mock = makeMockRes()
+    handleAiProductivityCursorHookStatus(mock.res)
+    const body = JSON.parse(mock.body)
+    expect(body.data.hookInstalled).toBe(false)
+    expect(body.data.perEvent).toEqual({
+      afterAgentResponse: true,
+      beforeSubmitPrompt: false,
+      afterAgentThought: false
+    })
   })
 })
 
@@ -2388,5 +2425,307 @@ describe('handleAiProductivityMergeSplitIterations (v2.18.0)', () => {
     expect(body.mergedPairs).toEqual([])
     expect(body.backupPath).toBeNull()
     expect(body.totalBefore).toBe(body.totalAfter)
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────
+// v1.0.0-rc.18 turn-start / turn-thought 内存 Map 单测
+// ────────────────────────────────────────────────────────────────────
+
+describe('handleAiProductivityTurnStart (v1.0.0-rc.18)', () => {
+  beforeEach(() => __resetCursorTurnStartsForTest())
+  afterEach(() => __resetCursorTurnStartsForTest())
+
+  it('happy path:写入 entry + 返 recorded=true', () => {
+    const mock = makeMockRes()
+    const now = new Date('2026-05-26T10:00:00.000Z')
+    handleAiProductivityTurnStart(
+      mock.res,
+      { conversationId: 'conv-1', generationId: 'gen-1' },
+      { nowFn: () => now }
+    )
+    expect(mock.statusCode).toBe(200)
+    expect(JSON.parse(mock.body).data).toEqual({ ok: true, recorded: true })
+    const snap = __snapshotCursorTurnStarts()
+    expect(snap.length).toBe(1)
+    expect(snap[0][0]).toBe('conv-1|gen-1')
+    expect(snap[0][1].startedAt).toBe('2026-05-26T10:00:00.000Z')
+    expect(snap[0][1].thoughtDurationMs).toBe(0)
+  })
+
+  it('conversation_id 或 generation_id 缺失 → 200 + recorded=false + reason', () => {
+    const mock1 = makeMockRes()
+    handleAiProductivityTurnStart(mock1.res, { conversationId: 'c', generationId: '' })
+    expect(JSON.parse(mock1.body).data).toEqual({
+      ok: true,
+      recorded: false,
+      reason: 'missing_ids'
+    })
+
+    const mock2 = makeMockRes()
+    handleAiProductivityTurnStart(mock2.res, null)
+    expect(JSON.parse(mock2.body).data).toEqual({
+      ok: true,
+      recorded: false,
+      reason: 'missing_ids'
+    })
+    expect(__snapshotCursorTurnStarts().length).toBe(0)
+  })
+
+  it('同 key 重复 turn-start 覆盖既有 entry(stop hook followup 场景)', () => {
+    const earlier = new Date('2026-05-26T10:00:00.000Z')
+    const later = new Date('2026-05-26T10:05:00.000Z')
+    handleAiProductivityTurnStart(
+      makeMockRes().res,
+      { conversationId: 'c', generationId: 'g' },
+      { nowFn: () => earlier }
+    )
+    handleAiProductivityTurnStart(
+      makeMockRes().res,
+      { conversationId: 'c', generationId: 'g' },
+      { nowFn: () => later }
+    )
+    const snap = __snapshotCursorTurnStarts()
+    expect(snap.length).toBe(1)
+    expect(snap[0][1].startedAt).toBe('2026-05-26T10:05:00.000Z')
+  })
+
+  it('过期清理:超过 30min 的旧 entry 在下一次写时自动剔除', () => {
+    const t0 = new Date('2026-05-26T10:00:00.000Z')
+    handleAiProductivityTurnStart(
+      makeMockRes().res,
+      { conversationId: 'stale', generationId: 'g' },
+      { nowFn: () => t0 }
+    )
+    const t1 = new Date(t0.getTime() + 31 * 60_000)
+    handleAiProductivityTurnStart(
+      makeMockRes().res,
+      { conversationId: 'fresh', generationId: 'g' },
+      { nowFn: () => t1 }
+    )
+    const snap = __snapshotCursorTurnStarts()
+    expect(snap.map(([k]) => k)).toEqual(['fresh|g'])
+  })
+})
+
+describe('handleAiProductivityTurnThought (v1.0.0-rc.18)', () => {
+  beforeEach(() => __resetCursorTurnStartsForTest())
+  afterEach(() => __resetCursorTurnStartsForTest())
+
+  it('happy path:累加到对应 entry → 返 applied=true + totalMs', () => {
+    // 用本进程当前时间 + 偏移,避免硬编码 ISO 时间被 evictExpiredTurnStarts 当作过期
+    const t0 = new Date()
+    const t1 = new Date(t0.getTime() + 1_000)
+    const t2 = new Date(t0.getTime() + 2_000)
+    handleAiProductivityTurnStart(
+      makeMockRes().res,
+      { conversationId: 'c', generationId: 'g' },
+      { nowFn: () => t0 }
+    )
+
+    const mock = makeMockRes()
+    handleAiProductivityTurnThought(
+      mock.res,
+      {
+        conversationId: 'c',
+        generationId: 'g',
+        durationMs: 5000
+      },
+      { nowFn: () => t1 }
+    )
+    expect(JSON.parse(mock.body).data).toEqual({ ok: true, applied: true, totalMs: 5000 })
+
+    const mock2 = makeMockRes()
+    handleAiProductivityTurnThought(
+      mock2.res,
+      {
+        conversationId: 'c',
+        generationId: 'g',
+        durationMs: 3000
+      },
+      { nowFn: () => t2 }
+    )
+    expect(JSON.parse(mock2.body).data).toEqual({ ok: true, applied: true, totalMs: 8000 })
+  })
+
+  it('entry 不存在(daemon 重启错过 beforeSubmitPrompt)→ no-op + applied=false', () => {
+    const mock = makeMockRes()
+    handleAiProductivityTurnThought(mock.res, {
+      conversationId: 'unknown',
+      generationId: 'g',
+      durationMs: 5000
+    })
+    expect(JSON.parse(mock.body).data).toEqual({
+      ok: true,
+      applied: false,
+      reason: 'no_pending_turn'
+    })
+  })
+
+  it('非法 durationMs → 200 + invalid_duration', () => {
+    handleAiProductivityTurnStart(
+      makeMockRes().res,
+      { conversationId: 'c', generationId: 'g' },
+      { nowFn: () => new Date() }
+    )
+    const cases: Array<{ durationMs?: number }> = [{ durationMs: -1 }, { durationMs: NaN }, {}]
+    for (const c of cases) {
+      const mock = makeMockRes()
+      handleAiProductivityTurnThought(mock.res, {
+        conversationId: 'c',
+        generationId: 'g',
+        ...c
+      })
+      const data = JSON.parse(mock.body).data
+      expect(data.applied).toBe(false)
+      expect(data.reason).toBe('invalid_duration')
+    }
+  })
+
+  it('missing ids → 200 + missing_ids', () => {
+    const mock = makeMockRes()
+    handleAiProductivityTurnThought(mock.res, { conversationId: '', generationId: 'g' })
+    expect(JSON.parse(mock.body).data).toEqual({
+      ok: true,
+      applied: false,
+      reason: 'missing_ids'
+    })
+  })
+})
+
+// v1.0.0-rc.18 hook afterAgentResponse 端到端消费 turn-start
+
+describe('handleAiProductivityHook + cursorTurnStarts 联动 (v1.0.0-rc.18)', () => {
+  let cleanup: () => void
+
+  beforeEach(() => {
+    __resetCursorTurnStartsForTest()
+    // 必须用 TRUESIGHT_AIP_ROOT(驱动 iterations.jsonl 落盘);
+    // LOCAL_AGENT_ROOT_ENV 只是 recent-attach sentinel 用的,跟数据根不同。
+    const { restore } = setupAipRoot()
+    cleanup = restore
+  })
+  afterEach(() => {
+    __resetCursorTurnStartsForTest()
+    cleanup()
+  })
+
+  function setupGitRepoBoundTo(repoPath: string, jiraKey: string): string {
+    mkdirSync(repoPath, { recursive: true })
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repoPath })
+    execFileSync('git', ['config', 'user.email', 'a@b.c'], { cwd: repoPath })
+    execFileSync('git', ['config', 'user.name', 'a'], { cwd: repoPath })
+    writeFileSync(join(repoPath, 'README.md'), '# x\n')
+    execFileSync('git', ['add', '.'], { cwd: repoPath })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: repoPath })
+    const branch = `feature/${jiraKey}-demo`
+    execFileSync('git', ['checkout', '-q', '-b', branch], { cwd: repoPath })
+    return branch
+  }
+
+  it('有 turn-start 命中 → thinkSeconds 反映真实 wall time + pureThinkSeconds 落盘', async () => {
+    const jiraKey = 'TURN-1'
+    const repoPath = mkdtempSync(join(tmpdir(), 'aip-turn-repo-'))
+    const branch = setupGitRepoBoundTo(repoPath, jiraKey)
+    mkdirSync(join(repoPath, '.ai-productivity'), { recursive: true })
+    const t0 = new Date()
+    upsertBinding(repoPath, jiraKey, { branch, startedAt: t0.toISOString() })
+    saveRequirement({ jiraKey, title: 't' }, {})
+
+    handleAiProductivityTurnStart(
+      makeMockRes().res,
+      { conversationId: 'conv-x', generationId: 'gen-x' },
+      { nowFn: () => t0 }
+    )
+    handleAiProductivityTurnThought(
+      makeMockRes().res,
+      {
+        conversationId: 'conv-x',
+        generationId: 'gen-x',
+        durationMs: 4000
+      },
+      { nowFn: () => new Date(t0.getTime() + 1_000) }
+    )
+
+    // t0 + 180s:远超 cursor 60s fallback cap,旧逻辑会被截到 60
+    const t1 = new Date(t0.getTime() + 180_000)
+    const mock = makeMockRes()
+    await handleAiProductivityHook(
+      mock.res,
+      baseConfig,
+      {
+        projectRoot: repoPath,
+        branch,
+        tokens: 1000,
+        source: 'cursor-hook',
+        rawHookPayload: {
+          conversation_id: 'conv-x',
+          generation_id: 'gen-x',
+          model: 'claude-opus-4-7-thinking-xhigh'
+        }
+      },
+      { nowFn: () => t1 }
+    )
+    expect(mock.statusCode).toBe(200)
+    const data = JSON.parse(mock.body).data
+    expect(data.bound).toBe(true)
+
+    const iterations = listIterations(jiraKey)
+    expect(iterations.length).toBe(1)
+    const it0 = iterations[0]
+    expect(it0.source).toBe('cursor')
+    expect(it0.thinkSeconds).toBe(180)
+    expect(it0.pureThinkSeconds).toBe(4)
+    expect(__snapshotCursorTurnStarts().length).toBe(0)
+  })
+
+  it('无 turn-start(老 hook / daemon 重启)→ 退回 60s cap', async () => {
+    const jiraKey = 'TURN-2'
+    const repoPath = mkdtempSync(join(tmpdir(), 'aip-turn-repo-fb-'))
+    const branch = setupGitRepoBoundTo(repoPath, jiraKey)
+    mkdirSync(join(repoPath, '.ai-productivity'), { recursive: true })
+    const t0 = new Date()
+    upsertBinding(repoPath, jiraKey, { branch, startedAt: t0.toISOString() })
+    saveRequirement({ jiraKey, title: 't' }, {})
+
+    // 模拟「上一轮 hook」先写一次 → binding.lastReportedAt = t0
+    await handleAiProductivityHook(
+      makeMockRes().res,
+      baseConfig,
+      {
+        projectRoot: repoPath,
+        branch,
+        tokens: 100,
+        source: 'cursor-hook',
+        rawHookPayload: {
+          conversation_id: 'conv-prev',
+          generation_id: 'gen-prev'
+        }
+      },
+      { nowFn: () => t0 }
+    )
+
+    // 本轮 t0 + 200s 触发 afterAgentResponse:无 turn-start 命中,thinkSeconds 应被 cap=60
+    const t1 = new Date(t0.getTime() + 200_000)
+    const mock = makeMockRes()
+    await handleAiProductivityHook(
+      mock.res,
+      baseConfig,
+      {
+        projectRoot: repoPath,
+        branch,
+        tokens: 500,
+        source: 'cursor-hook',
+        rawHookPayload: {
+          conversation_id: 'conv-y',
+          generation_id: 'gen-y'
+        }
+      },
+      { nowFn: () => t1 }
+    )
+    const iterations = listIterations(jiraKey)
+    expect(iterations.length).toBe(2)
+    expect(iterations[1].thinkSeconds).toBe(60)
+    expect(iterations[1].pureThinkSeconds).toBeUndefined()
   })
 })

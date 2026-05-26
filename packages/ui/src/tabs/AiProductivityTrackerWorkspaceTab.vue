@@ -22,6 +22,7 @@ import {
   patchRequirement,
   refreshBugs,
   syncJiraTitle,
+  type IterationDetail,
   type RequirementDetail,
   type RequirementStatus,
   type RequirementSummary,
@@ -362,6 +363,18 @@ function formatThinkSeconds(value: number) {
   const mins = Math.floor(value / 60)
   const secs = value % 60
   return secs ? `${mins}m ${secs}s` : `${mins}m`
+}
+
+/**
+ * v1.0.0-rc.18 本轮 AI 思考 hover tooltip:
+ *  - 主指标:wall time(用户提交 → AI 答完);旧数据 / Cursor 老 hook 走 60s fallback 时也是此口径
+ *  - 副指标:纯模型思考(`afterAgentThought.duration_ms` 累加);Claude Code / 老 daemon / 非 thinking
+ *    模型 → 字段缺失,tooltip 仅显示 wall time。
+ */
+function buildThinkSecondsTooltip(iter: IterationDetail): string {
+  const wall = `Wall time(用户提交→AI 答完): ${formatThinkSeconds(iter.thinkSeconds)}`
+  if (typeof iter.pureThinkSeconds !== 'number') return wall
+  return `${wall}\n纯模型思考(thinking 块累加): ${formatThinkSeconds(iter.pureThinkSeconds)}`
 }
 
 /**
@@ -1129,8 +1142,16 @@ onMounted(() => {
                     <span :title="formatTokenTitle(iter.cumulativeToken)">{{
                       formatTokenCount(iter.cumulativeToken)
                     }}</span>
-                    · 累计耗时: {{ formatMinutes(iter.elapsedMinutes) }} · 本轮 AI 思考:
-                    {{ formatThinkSeconds(iter.thinkSeconds) }}
+                    · 累计耗时: {{ formatMinutes(iter.elapsedMinutes) }} ·
+                    <span :title="buildThinkSecondsTooltip(iter)">
+                      本轮 AI 思考: {{ formatThinkSeconds(iter.thinkSeconds)
+                      }}<span
+                        v-if="typeof iter.pureThinkSeconds === 'number'"
+                        class="aip-drawer__timeline-pure-think"
+                      >
+                        (纯思考 {{ formatThinkSeconds(iter.pureThinkSeconds) }})</span
+                      >
+                    </span>
                   </div>
                   <div
                     v-if="iter.diffFiles || iter.changedFiles.length"
@@ -1855,6 +1876,12 @@ onMounted(() => {
   font-size: 12.5px;
   color: var(--text-secondary);
   line-height: 1.6;
+}
+
+/* v1.0.0-rc.18 纯思考副字段:与 wall time 同行展示,弱化色与括号视觉一致 */
+.aip-drawer__timeline-pure-think {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .aip-drawer__timeline-note {

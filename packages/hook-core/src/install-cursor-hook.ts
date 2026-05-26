@@ -36,10 +36,19 @@ export interface CursorHookEntry {
   [key: string]: unknown
 }
 
+/**
+ * v1.0.0-rc.18 起 hooks.json 包含 3 个 ai-productivity hook 事件入口:
+ *  - `beforeSubmitPrompt`:本轮起点信号
+ *  - `afterAgentThought`:thinking 块累加
+ *  - `afterAgentResponse`:本轮终点 + token 上报
+ * 三处共用一份 `node <cli.mjs> hook` 入口,由 stdin 里的 `hook_event_name` 自分流。
+ */
 export interface CursorHooksFile {
   version?: number
   hooks?: {
     afterAgentResponse?: CursorHookEntry[]
+    beforeSubmitPrompt?: CursorHookEntry[]
+    afterAgentThought?: CursorHookEntry[]
     [key: string]: unknown
   }
   [key: string]: unknown
@@ -56,15 +65,43 @@ export interface InstallCursorHookOptions {
 export interface InstallCursorHookResult {
   hooksPath: string
   finalCommand: string
-  /** 是否覆盖了一条已经存在的 hook(命中 marker) */
+  /** v1.0.0-rc.18:任一事件命中既有 marker 即视为 replaced(粒度按 hooks.json 级,不区分 3 处) */
   replaced: boolean
-  /** 被替换的老 command 字符串(若 replaced=true) */
+  /**
+   * v1.0.0-rc.18:被替换的老 command 字符串集合。任一事件命中 marker 即收集,
+   * 顺序为 `[afterAgentResponse, beforeSubmitPrompt, afterAgentThought]`。
+   * 兼容老调用方使用首元素的场景,无被替换返 null。
+   */
   previousCommand: string | null
 }
 
 /**
- * 把 Cursor afterAgentResponse hook 写到 ~/.cursor/hooks.json。
- * 已经含 marker 的条目会被原地覆盖;否则追加新条目。其他字段保留。
+ * v1.0.0-rc.18 在指定 hooks 数组中按 marker 覆盖式注入 finalCommand;
+ * 返回是否替换、被替换的老 command。
+ */
+function upsertHookEntry(
+  entries: CursorHookEntry[],
+  finalCommand: string
+): { replaced: boolean; previous: string | null } {
+  const idx = entries.findIndex(
+    (entry) => typeof entry.command === 'string' && entry.command.includes(HOOK_MARKER)
+  )
+  if (idx >= 0) {
+    const previous = entries[idx].command
+    entries[idx] = { command: finalCommand }
+    return { replaced: true, previous }
+  }
+  entries.push({ command: finalCommand })
+  return { replaced: false, previous: null }
+}
+
+/**
+ * 把 Cursor 3 个 hook 入口写到 ~/.cursor/hooks.json:
+ *  - `afterAgentResponse`(既有)
+ *  - `beforeSubmitPrompt`(v1.0.0-rc.18 新增:本轮起点)
+ *  - `afterAgentThought`(v1.0.0-rc.18 新增:纯思考累加)
+ *
+ * 已经含 marker 的条目会被原地覆盖;否则追加。其它非 ai-productivity 条目保留不动。
  */
 export function installCursorHookFile(options: InstallCursorHookOptions): InstallCursorHookResult {
   const hooksPath = options.hooksPath ?? cursorHooksPath()
@@ -84,26 +121,26 @@ export function installCursorHookFile(options: InstallCursorHookOptions): Instal
 
   hooks.version = hooks.version ?? 1
   hooks.hooks = hooks.hooks ?? {}
+
   const afterAgent = (hooks.hooks.afterAgentResponse as CursorHookEntry[]) ?? []
+  const beforeSubmit = (hooks.hooks.beforeSubmitPrompt as CursorHookEntry[]) ?? []
+  const afterThought = (hooks.hooks.afterAgentThought as CursorHookEntry[]) ?? []
 
   const finalCommand = buildHookCommand(options.command, debug)
-  const idx = afterAgent.findIndex(
-    (entry) => typeof entry.command === 'string' && entry.command.includes(HOOK_MARKER)
-  )
-
-  let replaced = false
-  let previousCommand: string | null = null
-  if (idx >= 0) {
-    previousCommand = afterAgent[idx].command
-    afterAgent[idx] = { command: finalCommand }
-    replaced = true
-  } else {
-    afterAgent.push({ command: finalCommand })
-  }
+  const r1 = upsertHookEntry(afterAgent, finalCommand)
+  const r2 = upsertHookEntry(beforeSubmit, finalCommand)
+  const r3 = upsertHookEntry(afterThought, finalCommand)
 
   hooks.hooks.afterAgentResponse = afterAgent
+  hooks.hooks.beforeSubmitPrompt = beforeSubmit
+  hooks.hooks.afterAgentThought = afterThought
 
   writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + '\n', 'utf-8')
+
+  const replaced = r1.replaced || r2.replaced || r3.replaced
+  // 任一被替换则返回最早出现的旧值(优先 afterAgentResponse → beforeSubmit → afterThought),
+  // 与老调用方仅看 previousCommand 显示「将被覆盖」的语义保持一致。
+  const previousCommand = r1.previous ?? r2.previous ?? r3.previous ?? null
 
   return { hooksPath, finalCommand, replaced, previousCommand }
 }
@@ -114,10 +151,29 @@ export function installCursorHookFile(options: InstallCursorHookOptions): Instal
  */
 export interface CursorHookInspectResult {
   hooksFileExists: boolean
+  /**
+   * v1.0.0-rc.18 起需要 3 个 hook(afterAgentResponse + beforeSubmitPrompt + afterAgentThought)
+   * 都装才算 true。任何一处缺失或老 daemon 装的单 afterAgentResponse 都视为未完整安装,
+   * 看板 / doctor 会提示重跑 `aipt install`。
+   */
   hookInstalled: boolean
+  /** 命令字符串:从 afterAgentResponse 那条取(3 处一致时取首);3 处都缺时为 null */
   hookCommand: string | null
   debugMode: boolean
   legacyHookDetected: boolean
+  /**
+   * v1.0.0-rc.18 各事件独立装机状态。便于 UI/doctor 精准提示「缺哪条」。
+   */
+  perEvent: {
+    afterAgentResponse: boolean
+    beforeSubmitPrompt: boolean
+    afterAgentThought: boolean
+  }
+}
+
+function findMarkerEntry(entries: CursorHookEntry[] | undefined): CursorHookEntry | undefined {
+  if (!entries) return undefined
+  return entries.find((e) => typeof e?.command === 'string' && e.command.includes(HOOK_MARKER))
 }
 
 export function inspectCursorHook(hooksPath: string = cursorHooksPath()): CursorHookInspectResult {
@@ -126,21 +182,34 @@ export function inspectCursorHook(hooksPath: string = cursorHooksPath()): Cursor
     hookInstalled: false,
     hookCommand: null,
     debugMode: false,
-    legacyHookDetected: false
+    legacyHookDetected: false,
+    perEvent: {
+      afterAgentResponse: false,
+      beforeSubmitPrompt: false,
+      afterAgentThought: false
+    }
   }
   if (!existsSync(hooksPath)) return result
   result.hooksFileExists = true
   try {
     const parsed = JSON.parse(readFileSync(hooksPath, 'utf-8')) as CursorHooksFile
-    const entries = parsed.hooks?.afterAgentResponse ?? []
-    const found = entries.find(
-      (e) => typeof e?.command === 'string' && e.command.includes(HOOK_MARKER)
-    )
-    if (found?.command) {
-      result.hookInstalled = true
-      result.hookCommand = found.command
-      result.debugMode = found.command.includes(DEBUG_ENV_PREFIX)
-      result.legacyHookDetected = found.command.includes(LEGACY_CLI_PATH_PATTERN)
+    const a = findMarkerEntry(parsed.hooks?.afterAgentResponse as CursorHookEntry[] | undefined)
+    const b = findMarkerEntry(parsed.hooks?.beforeSubmitPrompt as CursorHookEntry[] | undefined)
+    const t = findMarkerEntry(parsed.hooks?.afterAgentThought as CursorHookEntry[] | undefined)
+
+    result.perEvent.afterAgentResponse = Boolean(a)
+    result.perEvent.beforeSubmitPrompt = Boolean(b)
+    result.perEvent.afterAgentThought = Boolean(t)
+
+    // v1.0.0-rc.18 完整安装要求 3 个事件都装好;任一缺失 → 用户需要重跑 install。
+    result.hookInstalled = Boolean(a && b && t)
+
+    // command / debugMode / legacy 从首个命中的 entry 取,优先级 afterAgentResponse → submit → thought
+    const primary = a ?? b ?? t
+    if (primary?.command) {
+      result.hookCommand = primary.command
+      result.debugMode = primary.command.includes(DEBUG_ENV_PREFIX)
+      result.legacyHookDetected = primary.command.includes(LEGACY_CLI_PATH_PATTERN)
     }
   } catch {
     // 解析失败:保持默认 false

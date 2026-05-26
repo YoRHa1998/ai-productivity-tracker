@@ -354,6 +354,21 @@ describe('iteration-store', () => {
         expect(merged.conversationSummary).toEqual(summary)
       })
 
+      it('v1.0.0-rc.18 pureThinkSeconds:任一存在累加,两条都缺 → undefined', () => {
+        const aWith = baseIter({ seq: 1, pureThinkSeconds: 3 })
+        const bWith = baseIter({ seq: 2, pureThinkSeconds: 5 })
+        expect(mergeIterationPair(aWith, bWith).pureThinkSeconds).toBe(8)
+
+        // 一边缺,另一边走兜底 0 + 累加;依然落 number
+        const aOnly = baseIter({ seq: 1, pureThinkSeconds: 4 })
+        const bNone = baseIter({ seq: 2 })
+        expect(mergeIterationPair(aOnly, bNone).pureThinkSeconds).toBe(4)
+
+        // 两边都缺 → undefined,jsonl 保留稀疏字段
+        const aNone = baseIter({ seq: 1 })
+        expect(mergeIterationPair(aNone, bNone).pureThinkSeconds).toBeUndefined()
+      })
+
       it('changedFiles 跨 a/b 合并去重,后者 status 胜出', () => {
         const a = baseIter({
           seq: 1,

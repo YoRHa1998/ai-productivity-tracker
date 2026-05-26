@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildDedupeKey,
   buildRawHookPayload,
+  classifyHookEvent,
   parseHookTokens,
   resolveProjectRoot,
   tryParseHookInput,
@@ -161,6 +162,30 @@ describe('buildRawHookPayload', () => {
   it('text 缺省时 text_length=0', () => {
     const payload = buildRawHookPayload({ model: 'm' } as HookInput)
     expect(payload?.text_length).toBe(0)
+  })
+})
+
+describe('classifyHookEvent (v1.0.0-rc.18)', () => {
+  it('Cursor beforeSubmitPrompt → turn-start', () => {
+    expect(classifyHookEvent('beforeSubmitPrompt')).toBe('turn-start')
+  })
+  it('Claude Code 映射名 UserPromptSubmit → turn-start', () => {
+    expect(classifyHookEvent('UserPromptSubmit')).toBe('turn-start')
+  })
+  it('Cursor afterAgentThought → turn-thought', () => {
+    expect(classifyHookEvent('afterAgentThought')).toBe('turn-thought')
+  })
+  it('Claude Code 映射名 AgentThought → turn-thought', () => {
+    expect(classifyHookEvent('AgentThought')).toBe('turn-thought')
+  })
+  it('afterAgentResponse 仍走 iteration(主路径)', () => {
+    expect(classifyHookEvent('afterAgentResponse')).toBe('iteration')
+  })
+  it('Stop / 未识别 / 空 → iteration(兜底既有行为)', () => {
+    expect(classifyHookEvent('Stop')).toBe('iteration')
+    expect(classifyHookEvent('')).toBe('iteration')
+    expect(classifyHookEvent(undefined)).toBe('iteration')
+    expect(classifyHookEvent(null)).toBe('iteration')
   })
 })
 

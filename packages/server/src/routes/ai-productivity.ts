@@ -321,6 +321,203 @@ export function handleAiProductivityWatcherStatus(
   ok(res, snap)
 }
 
+// ────────────────────────────────────────────────────────────────────
+// v1.0.0-rc.18 Cursor turn-start / turn-thought 内存 Map
+//
+// Cursor `afterAgentResponse` 单点不知道本轮真实起点,旧版只能用「上一次 hook → 本次 hook」
+// 近似 thinkSeconds + 60s cap,thinking 模型下大量被截。新链路引入两个独立 hook 事件:
+//   - `beforeSubmitPrompt` → POST /ai-productivity/turn-start (本函数)
+//   - `afterAgentThought`  → POST /ai-productivity/turn-thought (本函数)
+// 用 `${conversation_id}|${generation_id}` 作 key 暂存到本 Map,等 afterAgentResponse 触发
+// 的 /ai-productivity/hook 主路径消费(buildIterationExtras 接 turnStartedAt + pureThinkSeconds)。
+//
+// 设计点:
+//   - 仅内存:daemon 重启时丢失 → 退化到现有 60s fallback,行为兼容。
+//   - FIFO 上限 200(实测一次活跃会话 < 50 turn),超出按插入顺序剔除最旧。
+//   - 软过期:每次写/读时顺手清理 expireAt < now 的条目,无后台定时器。
+//   - 单元测试通过导出的 reset/get 函数注入,避免污染。
+// ────────────────────────────────────────────────────────────────────
+
+interface CursorTurnStartEntry {
+  startedAt: string
+  thoughtDurationMs: number
+  expireAt: number
+}
+
+const CURSOR_TURN_STARTS_LIMIT = 200
+const CURSOR_TURN_STARTS_TTL_MS = 30 * 60_000
+
+const cursorTurnStarts = new Map<string, CursorTurnStartEntry>()
+
+function buildTurnKey(conversationId: string, generationId: string): string {
+  return `${conversationId}|${generationId}`
+}
+
+function evictExpiredTurnStarts(now: number): void {
+  for (const [key, entry] of cursorTurnStarts) {
+    if (entry.expireAt <= now) cursorTurnStarts.delete(key)
+  }
+}
+
+function evictOldestIfFull(): void {
+  while (cursorTurnStarts.size > CURSOR_TURN_STARTS_LIMIT) {
+    const oldest = cursorTurnStarts.keys().next().value
+    if (oldest === undefined) break
+    cursorTurnStarts.delete(oldest)
+  }
+}
+
+/** 单测用:外部清零内存状态 */
+export function __resetCursorTurnStartsForTest(): void {
+  cursorTurnStarts.clear()
+}
+
+/** 单测用:观测内存状态 */
+export function __snapshotCursorTurnStarts(): Array<[string, CursorTurnStartEntry]> {
+  return [...cursorTurnStarts.entries()]
+}
+
+export interface TurnStartRequestBody {
+  projectRoot?: string
+  conversationId?: string
+  generationId?: string
+}
+
+export interface TurnStartResponse {
+  ok: true
+  /** happy path = true;字段缺失或 conversation_id/generation_id 空时为 false + reason */
+  recorded: boolean
+  reason?: 'missing_ids'
+}
+
+export interface TurnThoughtRequestBody {
+  conversationId?: string
+  generationId?: string
+  durationMs?: number
+}
+
+export interface TurnThoughtResponse {
+  ok: true
+  /** false 表示对应 turn-start entry 不存在(daemon 重启错过 beforeSubmitPrompt),no-op */
+  applied: boolean
+  /** 累加之后的总时长(ms),便于 daemon 调试 */
+  totalMs?: number
+  reason?: 'missing_ids' | 'no_pending_turn' | 'invalid_duration'
+}
+
+export interface TurnHandlerDeps {
+  nowFn?: () => Date
+}
+
+/**
+ * v1.0.0-rc.18 `/ai-productivity/turn-start`:Cursor `beforeSubmitPrompt` 上报本轮起点。
+ *
+ * 失败语义:`conversation_id` / `generation_id` 任一空 → 200 + reason='missing_ids' + recorded=false,
+ * hook 端 fail-open 不阻塞 IDE。HTTP 200 + envelope 与其它路由一致(便于看板 / e2e 复用 ok helper)。
+ */
+export function handleAiProductivityTurnStart(
+  res: ServerResponse,
+  body: TurnStartRequestBody | null,
+  deps: TurnHandlerDeps = {}
+): void {
+  const conversationId = typeof body?.conversationId === 'string' ? body.conversationId.trim() : ''
+  const generationId = typeof body?.generationId === 'string' ? body.generationId.trim() : ''
+  if (!conversationId || !generationId) {
+    ok(res, { ok: true, recorded: false, reason: 'missing_ids' } satisfies TurnStartResponse)
+    return
+  }
+  const nowDate = (deps.nowFn ?? (() => new Date()))()
+  const now = nowDate.getTime()
+  evictExpiredTurnStarts(now)
+
+  const key = buildTurnKey(conversationId, generationId)
+  // 已存在则覆盖:典型场景是 Cursor stop hook 强制 followup_message 重新提交,
+  // 同 generation_id 不会复用但同 conversation_id + 新 generation_id 会形成新 entry。
+  // 覆盖也是安全的(insertion order 重置),不会污染 FIFO。
+  if (cursorTurnStarts.has(key)) cursorTurnStarts.delete(key)
+  cursorTurnStarts.set(key, {
+    startedAt: nowDate.toISOString(),
+    thoughtDurationMs: 0,
+    expireAt: now + CURSOR_TURN_STARTS_TTL_MS
+  })
+  evictOldestIfFull()
+
+  ok(res, { ok: true, recorded: true } satisfies TurnStartResponse)
+}
+
+/**
+ * v1.0.0-rc.18 `/ai-productivity/turn-thought`:Cursor `afterAgentThought` 上报本块 thinking 时长。
+ *
+ * 累加到对应 turn-start entry 的 thoughtDurationMs。entry 不存在时(典型:daemon 重启错过
+ * beforeSubmitPrompt)200 + applied=false,no-op。durationMs 非有限数 / 负数 → 200 + invalid_duration。
+ */
+export function handleAiProductivityTurnThought(
+  res: ServerResponse,
+  body: TurnThoughtRequestBody | null,
+  deps: TurnHandlerDeps = {}
+): void {
+  const conversationId = typeof body?.conversationId === 'string' ? body.conversationId.trim() : ''
+  const generationId = typeof body?.generationId === 'string' ? body.generationId.trim() : ''
+  if (!conversationId || !generationId) {
+    ok(res, { ok: true, applied: false, reason: 'missing_ids' } satisfies TurnThoughtResponse)
+    return
+  }
+  const rawDuration = body?.durationMs
+  if (typeof rawDuration !== 'number' || !Number.isFinite(rawDuration) || rawDuration < 0) {
+    ok(res, { ok: true, applied: false, reason: 'invalid_duration' } satisfies TurnThoughtResponse)
+    return
+  }
+
+  const nowDate = (deps.nowFn ?? (() => new Date()))()
+  const now = nowDate.getTime()
+  evictExpiredTurnStarts(now)
+
+  const key = buildTurnKey(conversationId, generationId)
+  const entry = cursorTurnStarts.get(key)
+  if (!entry) {
+    ok(res, {
+      ok: true,
+      applied: false,
+      reason: 'no_pending_turn'
+    } satisfies TurnThoughtResponse)
+    return
+  }
+  entry.thoughtDurationMs += rawDuration
+  ok(res, {
+    ok: true,
+    applied: true,
+    totalMs: entry.thoughtDurationMs
+  } satisfies TurnThoughtResponse)
+}
+
+/**
+ * v1.0.0-rc.18 afterAgentResponse 主路径用:消费并 delete 对应 entry。
+ *
+ * 返回 null 表示没有匹配 turn-start(老 hook / daemon 重启 / 非 Cursor 链路),
+ * 调用方走原有 60s fallback。返回结构含 startedAt(ISO)与 pureThinkSeconds(秒,Math.round)。
+ */
+function consumeCursorTurnStart(
+  rawHookPayload: Record<string, unknown> | undefined,
+  source: string,
+  now: number
+): { startedAt: string; pureThinkSeconds: number } | null {
+  if (source !== 'cursor-hook' || !rawHookPayload) return null
+  const conversationId =
+    typeof rawHookPayload.conversation_id === 'string' ? rawHookPayload.conversation_id : ''
+  const generationId =
+    typeof rawHookPayload.generation_id === 'string' ? rawHookPayload.generation_id : ''
+  if (!conversationId || !generationId) return null
+  evictExpiredTurnStarts(now)
+  const key = buildTurnKey(conversationId, generationId)
+  const entry = cursorTurnStarts.get(key)
+  if (!entry) return null
+  cursorTurnStarts.delete(key)
+  return {
+    startedAt: entry.startedAt,
+    pureThinkSeconds: Math.round(entry.thoughtDurationMs / 1000)
+  }
+}
+
 export interface HookRequestBody {
   projectRoot?: string
   branch?: string
@@ -456,13 +653,18 @@ export async function handleAiProductivityHook(
       const modelName = typeof rawModel === 'string' ? rawModel : ''
       const requirementForBase = loadRequirement(issueKey)
       const initBaseCommit = requirementForBase?.initBaseCommit ?? ''
+      // v1.0.0-rc.18 消费 cursorTurnStarts:有真实 beforeSubmitPrompt 时拿到本轮起点 + 纯思考累加;
+      // 无则返 null,buildIterationExtras 走原有 60s fallback,行为完全兼容。
+      const turnStart = consumeCursorTurnStart(body.rawHookPayload, source, nowDate.getTime())
       const extras = buildIterationExtras({
         gitRoot,
         binding: result.binding,
         now: nowDate,
         previousReportedAt: result.previousReportedAt,
-        // v2.12.0 Cursor hook 链路无 turn 起点信号,只传 source 让 cap 收紧到 60s,
-        // 避免「上一轮 → 本轮」差值里用户阅读/输入时间被算成 AI 思考。
+        // v1.0.0-rc.18 turnStart 命中时走 Claude Code 同款真实口径(300s cap);否则保留 v2.12.0
+        // 收紧的 60s fallback,避免「上一轮 → 本轮」差值里用户阅读/输入时间被算成 AI 思考。
+        turnStartedAt: turnStart?.startedAt,
+        pureThinkSeconds: turnStart?.pureThinkSeconds,
         source,
         modelName,
         initBaseCommit,
@@ -478,6 +680,7 @@ export async function handleAiProductivityHook(
         cumulativeToken: result.binding.cumulativeToken,
         elapsedMinutes: extras.elapsedMinutes,
         thinkSeconds: extras.thinkSeconds,
+        pureThinkSeconds: extras.pureThinkSeconds,
         diffFiles: extras.diffFiles,
         diffInsertions: extras.diffInsertions,
         diffDeletions: extras.diffDeletions,
@@ -491,7 +694,10 @@ export async function handleAiProductivityHook(
         rawPayload: {
           source,
           dedupeKey: dedupeKey || null,
-          ...(body.rawHookPayload ?? {})
+          ...(body.rawHookPayload ?? {}),
+          // 落盘 turn-start 命中标记,便于审计「本条 iteration 是否用了真实本轮起点」
+          turnStartedAt: turnStart?.startedAt ?? null,
+          pureThinkSeconds: turnStart?.pureThinkSeconds ?? null
         }
       })
       iterationSeq = iteration.seq
@@ -627,6 +833,15 @@ export interface CursorHookStatusResponse {
   debugMode: boolean
   /** hooks.json 里仍残留老 CLI(~/.local/bin/ai-productivity) 路径,前端提示「将被覆盖」 */
   legacyHookDetected: boolean
+  /**
+   * v1.0.0-rc.18 各事件独立装机状态,看板 / doctor 用来精准提示「缺哪条 hook」。
+   * 老 daemon 缺该字段时前端按 `hookInstalled` 兜底,不破坏向前兼容。
+   */
+  perEvent?: {
+    afterAgentResponse: boolean
+    beforeSubmitPrompt: boolean
+    afterAgentThought: boolean
+  }
 }
 
 export function handleAiProductivityCursorHookStatus(res: ServerResponse): void {
@@ -646,7 +861,8 @@ export function handleAiProductivityCursorHookStatus(res: ServerResponse): void 
     hookInstalled: inspect.hookInstalled,
     hookCommand: inspect.hookCommand,
     debugMode: inspect.debugMode,
-    legacyHookDetected: inspect.legacyHookDetected
+    legacyHookDetected: inspect.legacyHookDetected,
+    perEvent: inspect.perEvent
   } satisfies CursorHookStatusResponse)
 }
 

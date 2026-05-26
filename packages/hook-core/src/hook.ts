@@ -6,7 +6,12 @@ import { cwd } from 'node:process'
 import { findAipDir, bindingsPath } from './lib/paths.js'
 import { withBindingsLock, type BindingsFile } from './lib/files.js'
 import { extractIssueKey, getCurrentBranch } from './lib/git.js'
-import { postHookToAgent } from './lib/agent-client.js'
+import {
+  postHookToAgent,
+  postTurnStartToAgent,
+  postTurnThoughtToAgent,
+  type AgentSimpleResult
+} from './lib/agent-client.js'
 
 function readStdinSync(): string {
   // Cursor / Claude 都是 spawn 子进程,stdin 是 pipe;同步读取直到 EOF
@@ -34,6 +39,11 @@ export interface HookInput {
   output_tokens?: number
   cache_read_tokens?: number
   cache_write_tokens?: number
+  /**
+   * v1.0.0-rc.18 Cursor `afterAgentThought` 专属字段:本次 thinking 块的累计时长。
+   * 由 daemon 在 cursorTurnStarts Map 上对应 entry 累加,afterAgentResponse 消费时折算秒。
+   */
+  duration_ms?: number
 
   // Claude Code / 历史 hook / 自定义集成兜底字段
   tokens?: number
@@ -153,10 +163,38 @@ export function resolveProjectRoot(input: HookInput | null): string | null {
   return null
 }
 
+function describeSimpleResult(label: string, result: AgentSimpleResult): string {
+  if (result.kind === 'ok') return `${label}.ok`
+  if (result.kind === 'unconfigured') return `${label}.fallback(agent-unconfigured)`
+  if (result.kind === 'http-error') {
+    return `${label}.fallback(http-${result.status}: ${result.message.slice(0, 80)})`
+  }
+  return `${label}.fallback(${result.kind}: ${result.message.slice(0, 80)})`
+}
+
 function detectSource(input: HookInput | null): string {
   if (input?.cursor_version) return 'cursor-hook'
   if (input?.hook_event_name === 'Stop' || input?.hook_event_name === 'stop') return 'claude-hook'
   return 'unknown-hook'
+}
+
+/**
+ * v1.0.0-rc.18 hook 事件路由:由 Cursor `hook_event_name` 决定走哪条 daemon 子路径。
+ *
+ * - `beforeSubmitPrompt` / `UserPromptSubmit` → `/ai-productivity/turn-start`(记录本轮起点)
+ * - `afterAgentThought` / `AgentThought` → `/ai-productivity/turn-thought`(累加 thinking 时长)
+ * - 其它(含未指定 / afterAgentResponse / Stop) → 既有 `/ai-productivity/hook` 路径
+ *
+ * 备注:Cursor docs 描述这两类事件用 `beforeSubmitPrompt` / `afterAgentThought`;
+ * Claude Code 命名映射到 Cursor 时是 `UserPromptSubmit` / `AgentThought`,daemon 全部接受。
+ */
+export type HookEventRoute = 'turn-start' | 'turn-thought' | 'iteration'
+
+export function classifyHookEvent(event: string | undefined | null): HookEventRoute {
+  if (!event) return 'iteration'
+  if (event === 'beforeSubmitPrompt' || event === 'UserPromptSubmit') return 'turn-start'
+  if (event === 'afterAgentThought' || event === 'AgentThought') return 'turn-thought'
+  return 'iteration'
 }
 
 /**
@@ -290,6 +328,7 @@ export async function runHook() {
   const tokens = parsedInput ? parseHookTokens(parsedInput) : 0
   const dedupeKey = buildDedupeKey(parsedInput)
   const source = detectSource(parsedInput)
+  const eventRoute = classifyHookEvent(parsedInput?.hook_event_name)
 
   // 无论后续走哪条路径,先写 sentinel 证明 hook 到达过
   writeSentinelIfDebug(rawStdin, parsedInput, projectRoot, tokens)
@@ -303,6 +342,64 @@ export async function runHook() {
   const branch = getCurrentBranch(projectRoot)
   const issueKey = branch ? extractIssueKey(branch) : null
   const now = new Date().toISOString()
+
+  // v1.0.0-rc.18 turn-start / turn-thought 子路径:仅刷新内存 Map,不涉及 token 累加 / iteration 写盘。
+  // 失败一律 fail-open(老 daemon 没该端点会返 404 / 网络异常 / 鉴权失败),debug 模式下落 hook-debug.log。
+  if (eventRoute === 'turn-start') {
+    const conversationId = parsedInput?.conversation_id ?? ''
+    const generationId = parsedInput?.generation_id ?? ''
+    let routeOutcome = 'turn-start.skipped(missing-ids)'
+    if (conversationId && generationId) {
+      const result = await postTurnStartToAgent({
+        projectRoot,
+        conversationId,
+        generationId
+      })
+      routeOutcome = describeSimpleResult('turn-start', result)
+    }
+    writeDebugLog(aipDir, {
+      at: now,
+      cwd: cwd(),
+      projectRoot,
+      branch,
+      issueKey,
+      source,
+      route: routeOutcome,
+      hookEvent: parsedInput?.hook_event_name ?? null,
+      parsedKeys: parsedInput ? Object.keys(parsedInput) : []
+    })
+    return
+  }
+
+  if (eventRoute === 'turn-thought') {
+    const conversationId = parsedInput?.conversation_id ?? ''
+    const generationId = parsedInput?.generation_id ?? ''
+    const durationMs =
+      typeof parsedInput?.duration_ms === 'number' && parsedInput.duration_ms >= 0
+        ? parsedInput.duration_ms
+        : 0
+    let routeOutcome = 'turn-thought.skipped(missing-ids)'
+    if (conversationId && generationId) {
+      const result = await postTurnThoughtToAgent({
+        conversationId,
+        generationId,
+        durationMs
+      })
+      routeOutcome = describeSimpleResult('turn-thought', result)
+    }
+    writeDebugLog(aipDir, {
+      at: now,
+      cwd: cwd(),
+      projectRoot,
+      branch,
+      issueKey,
+      source,
+      route: routeOutcome,
+      hookEvent: parsedInput?.hook_event_name ?? null,
+      durationMs
+    })
+    return
+  }
 
   // 主路径: 调本机 agent /ai-productivity/hook,由 agent 统一处理 dedupe + bindings + iteration
   const agentResult = await postHookToAgent({

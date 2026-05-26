@@ -32,6 +32,12 @@ const ITER_FILES_LIMIT = 50
 export interface IterationExtras {
   elapsedMinutes: number
   thinkSeconds: number
+  /**
+   * v1.0.0-rc.18 纯模型思考时间(秒)。Cursor `afterAgentThought` hook 每个 thinking 块带
+   * `duration_ms`,daemon 在 turn-start Map 内累加,afterAgentResponse 消费时折算成秒透传到这里。
+   * 缺省 undefined → UI tooltip 第二行隐藏。
+   */
+  pureThinkSeconds?: number
   /** 本次对话变更(自上一轮 iteration 以来的增量) */
   diffFiles: number
   diffInsertions: number
@@ -66,6 +72,11 @@ export interface BuildExtrasInput {
    * - 其它 → ACTIVE_GAP_SECONDS (300s)
    */
   source?: string
+  /**
+   * v1.0.0-rc.18 由调用方(daemon hook 路由)从 cursorTurnStarts Map 累加值折算后传入。
+   * 仅透传到返回的 `IterationExtras.pureThinkSeconds`,不参与 thinkSeconds 计算。
+   */
+  pureThinkSeconds?: number
   modelName?: string
   /** init 时记录的 HEAD sha; 空串/缺省时回退到 'HEAD' 表示「相对最新提交」 */
   initBaseCommit?: string
@@ -241,6 +252,8 @@ export function buildIterationExtras(input: BuildExtrasInput): IterationExtras {
   return {
     elapsedMinutes,
     thinkSeconds,
+    pureThinkSeconds:
+      typeof input.pureThinkSeconds === 'number' ? input.pureThinkSeconds : undefined,
     diffFiles: iterDelta.files,
     diffInsertions: iterDelta.insertions,
     diffDeletions: iterDelta.deletions,
