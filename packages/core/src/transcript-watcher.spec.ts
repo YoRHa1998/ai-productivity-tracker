@@ -862,7 +862,7 @@ describe('TranscriptWatcher.processFileForTest', () => {
       expect(raw?.flushTokens).toMatchObject({ input: 7, output: 3 })
     })
 
-    it('flushStaleBuffers:buffer 闲置 > 60s 强制 flush、triggerStopReason=stale_timeout', async () => {
+    it('flushStaleBuffers:buffer 闲置 > 30min 强制 flush、triggerStopReason=stale_timeout (v2.14.1 阈值)', async () => {
       setupBound()
       const projectDir = join(claudeRoot, '-x-fake')
       mkdirSync(projectDir, { recursive: true })
@@ -885,12 +885,16 @@ describe('TranscriptWatcher.processFileForTest', () => {
       await w.processFileForTest(f)
       expect(listIterations('ABC-1').length).toBe(0)
 
-      // buffer 刚累加 5 秒,不应被 flush
-      w.flushStaleBuffers(Date.parse('2026-05-21T03:00:05.000Z'))
+      // v2.14.1 关键回归:闲置 5 分钟仍不应被 flush(覆盖 Claude Opus thinking 长流程)
+      w.flushStaleBuffers(Date.parse('2026-05-21T03:05:00.000Z'))
       expect(listIterations('ABC-1').length).toBe(0)
 
-      // buffer 已闲置 70 秒,触发 stale flush
-      w.flushStaleBuffers(Date.parse('2026-05-21T03:01:10.000Z'))
+      // 闲置 20 分钟仍不 flush(继续覆盖长流程)
+      w.flushStaleBuffers(Date.parse('2026-05-21T03:20:00.000Z'))
+      expect(listIterations('ABC-1').length).toBe(0)
+
+      // 闲置 31 分钟,触发 stale flush
+      w.flushStaleBuffers(Date.parse('2026-05-21T03:31:00.000Z'))
       const iters = listIterations('ABC-1')
       expect(iters.length).toBe(1)
       expect(iters[0].cumulativeToken).toBe(33)
@@ -941,6 +945,280 @@ describe('TranscriptWatcher.processFileForTest', () => {
       const raw = iters[0].rawPayloadFile ? loadRawPayload('ABC-1', iters[0].rawPayloadFile) : null
       expect(raw?.triggerStopReason).toBe('end_turn')
       expect(raw?.triggerMessageUuid).toBe('c-2')
+    })
+  })
+
+  /**
+   * v2.14.1 修复:Claude Code 经验提取等长流程(Opus thinking + 多 MCP 工具)被 60s stale_timeout
+   * 误切成多条 iteration。本期把阈值从 60s 放宽到 30min,并把"会话最后活动信号"从
+   * `lastMessageTs` 解耦为 `lastSeenAt` ─ 凡是同 sessionId 任意一行 jsonl(包括 dedup 丢弃的
+   * 重复行 / user 行)都刷新它,确保 stale 判定不被「Claude 把一次 API 响应拆成多行」误伤。
+   *
+   * 实测复现样本:lessons-extract 一次执行(单 user prompt → 5min 41s tool_use 流程 → 一条
+   * end_turn),旧实现被切成 4 条 iteration(其中 2 条为 stale_timeout),修复后应聚合为 1 条。
+   */
+  describe('v2.14.1 stale_timeout 阈值放宽 + lastSeenAt 解耦', () => {
+    function setupBound(): void {
+      saveRequirement({ jiraKey: 'ABC-1', title: 'Watcher demo' }, { repoPath: repoRoot })
+      upsertBinding(repoRoot, 'ABC-1', {
+        branch: 'feature/ABC-1-watcher',
+        startedAt: '2026-05-14T00:00:00.000Z',
+        requirementStartedAt: '2026-05-14T00:00:00.000Z'
+      })
+    }
+
+    it('经验提取长流程回归:5min 多 tool_use + 同 msg.id 拆分行,以 end_turn 收尾时仅 1 行 iteration', async () => {
+      setupBound()
+      const projectDir = join(claudeRoot, '-x-fake')
+      mkdirSync(projectDir, { recursive: true })
+      const f = join(projectDir, 's1.jsonl')
+      // 模拟用户实测 dda4c788 session 的真实时序:
+      //   - 单 user prompt 开启
+      //   - 多组 tool_use(每组 msg.id 重复 2-3 次,模拟 thinking + tool_use 拆行)
+      //   - 长间歇 47s / 46s(典型 LLM thinking + tool 执行)
+      //   - 最终 end_turn 收尾
+      writeFileSync(
+        f,
+        // user prompt
+        buildUserLine({
+          cwd: repoRoot,
+          gitBranch: 'feature/ABC-1-watcher',
+          sessionId: 'sess-extract',
+          uuid: 'u-prompt',
+          timestamp: '2026-05-26T07:55:36.000Z'
+        }) +
+          // 第 1 组 tool_use(msg_01GH 重复 2 行)
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-extract',
+            messageId: 'msg_01GH',
+            stopReason: 'tool_use',
+            totalInput: 2,
+            totalOutput: 100,
+            cacheCreation: 200,
+            cacheRead: 50000,
+            uuid: 'a-01',
+            timestamp: '2026-05-26T07:55:42.000Z'
+          }) +
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-extract',
+            messageId: 'msg_01GH',
+            stopReason: 'tool_use',
+            totalInput: 2,
+            totalOutput: 100,
+            cacheCreation: 200,
+            cacheRead: 50000,
+            uuid: 'a-02',
+            timestamp: '2026-05-26T07:55:42.100Z'
+          }) +
+          // 第 2 组(msg_01VJ 重复 3 行,触发主键去重)
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-extract',
+            messageId: 'msg_01VJ',
+            stopReason: 'tool_use',
+            totalInput: 2,
+            totalOutput: 80,
+            cacheCreation: 150,
+            cacheRead: 60000,
+            uuid: 'a-03',
+            timestamp: '2026-05-26T07:57:20.162Z'
+          }) +
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-extract',
+            messageId: 'msg_01VJ',
+            stopReason: 'tool_use',
+            totalInput: 2,
+            totalOutput: 80,
+            cacheCreation: 150,
+            cacheRead: 60000,
+            uuid: 'a-04',
+            timestamp: '2026-05-26T07:57:21.110Z'
+          }) +
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-extract',
+            messageId: 'msg_01VJ',
+            stopReason: 'tool_use',
+            totalInput: 2,
+            totalOutput: 80,
+            cacheCreation: 150,
+            cacheRead: 60000,
+            uuid: 'a-05',
+            timestamp: '2026-05-26T07:57:27.257Z'
+          }) +
+          // 长间歇 47s 后:第 3 组(msg_01U4 重复 3 行)
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-extract',
+            messageId: 'msg_01U4',
+            stopReason: 'tool_use',
+            totalInput: 2,
+            totalOutput: 60,
+            cacheCreation: 100,
+            cacheRead: 70000,
+            uuid: 'a-06',
+            timestamp: '2026-05-26T07:58:15.504Z'
+          }) +
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-extract',
+            messageId: 'msg_01U4',
+            stopReason: 'tool_use',
+            totalInput: 2,
+            totalOutput: 60,
+            cacheCreation: 100,
+            cacheRead: 70000,
+            uuid: 'a-07',
+            timestamp: '2026-05-26T07:58:17.364Z'
+          }) +
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-extract',
+            messageId: 'msg_01U4',
+            stopReason: 'tool_use',
+            totalInput: 2,
+            totalOutput: 60,
+            cacheCreation: 100,
+            cacheRead: 70000,
+            uuid: 'a-08',
+            timestamp: '2026-05-26T07:59:03.410Z'
+          }) +
+          // 第 4 组(msg_01Qy)
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-extract',
+            messageId: 'msg_01Qy',
+            stopReason: 'tool_use',
+            totalInput: 2,
+            totalOutput: 40,
+            cacheCreation: 50,
+            cacheRead: 80000,
+            uuid: 'a-09',
+            timestamp: '2026-05-26T07:59:18.866Z'
+          }) +
+          // 收尾 end_turn(msg_01Fr,独立)
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-extract',
+            messageId: 'msg_01Fr',
+            stopReason: 'end_turn',
+            totalInput: 2,
+            totalOutput: 20,
+            cacheCreation: 10,
+            cacheRead: 90000,
+            uuid: 'a-10',
+            timestamp: '2026-05-26T08:01:17.779Z'
+          })
+      )
+
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+      // 流程中无任何 stale_timeout 时机被调用,但即使被调用,30min 内也不应触发
+      w.flushStaleBuffers(Date.parse('2026-05-26T07:58:30.000Z'))
+      w.flushStaleBuffers(Date.parse('2026-05-26T07:59:00.000Z'))
+      w.flushStaleBuffers(Date.parse('2026-05-26T08:01:00.000Z'))
+
+      const iters = listIterations('ABC-1')
+      expect(iters.length).toBe(1)
+      // effectiveTokens = (2+100+200) + (2+80+150) + (2+60+100) + (2+40+50) + (2+20+10) = 820
+      expect(iters[0].cumulativeToken).toBe(820)
+
+      const raw = iters[0].rawPayloadFile ? loadRawPayload('ABC-1', iters[0].rawPayloadFile) : null
+      expect(raw?.triggerStopReason).toBe('end_turn')
+      expect(raw?.triggerMessageUuid).toBe('a-10')
+      // thinkSeconds = end_turn(08:01:17) - user prompt(07:55:36) ≈ 341s
+      expect(iters[0].thinkSeconds).toBeGreaterThanOrEqual(300)
+    })
+
+    it('dedup 行刷新 lastSeenAt:msg.id 去重场景下,长间歇期 + 散列重复行也不触发 stale flush', async () => {
+      setupBound()
+      const projectDir = join(claudeRoot, '-x-fake')
+      mkdirSync(projectDir, { recursive: true })
+      const f = join(projectDir, 's1.jsonl')
+      // 第 1 行 tool_use 进 buffer,后续 5 条都是同 msg.id 的散列重复行(被 dedup 丢弃)
+      writeFileSync(
+        f,
+        buildAssistantLine({
+          cwd: repoRoot,
+          gitBranch: 'feature/ABC-1-watcher',
+          sessionId: 'sess-dedup-active',
+          messageId: 'msg_keep_active',
+          stopReason: 'tool_use',
+          totalInput: 5,
+          totalOutput: 5,
+          uuid: 'd-1',
+          timestamp: '2026-05-21T10:00:00.000Z'
+        }) +
+          // 散列重复(同 msg.id),时间戳分别在 1min/2min/5min/10min/29min
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-dedup-active',
+            messageId: 'msg_keep_active',
+            stopReason: 'tool_use',
+            totalInput: 5,
+            totalOutput: 5,
+            uuid: 'd-2',
+            timestamp: '2026-05-21T10:01:00.000Z'
+          }) +
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: 'feature/ABC-1-watcher',
+            sessionId: 'sess-dedup-active',
+            messageId: 'msg_keep_active',
+            stopReason: 'tool_use',
+            totalInput: 5,
+            totalOutput: 5,
+            uuid: 'd-3',
+            timestamp: '2026-05-21T10:29:00.000Z'
+          })
+      )
+
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+
+      // 旧实现:lastMessageTs 卡在 10:00:00,29min 闲置 > 旧 60s → stale flush
+      // 新实现:lastSeenAt 被 dedup 行刷新到 10:29:00,29min 距 now 仅几秒不应 flush
+      w.flushStaleBuffers(Date.parse('2026-05-21T10:29:05.000Z'))
+      expect(listIterations('ABC-1').length).toBe(0)
+
+      // 总流程 ~29min,即使阈值收紧到 30min 仍不应 flush
+      w.flushStaleBuffers(Date.parse('2026-05-21T10:35:00.000Z'))
+      expect(listIterations('ABC-1').length).toBe(0)
+
+      // 给一个真正的 end_turn 收尾(同 sessionId,新 msg.id),确认 buffer 完整且 token 不被双算
+      appendFileSync(
+        f,
+        buildAssistantLine({
+          cwd: repoRoot,
+          gitBranch: 'feature/ABC-1-watcher',
+          sessionId: 'sess-dedup-active',
+          messageId: 'msg_terminate',
+          stopReason: 'end_turn',
+          totalInput: 1,
+          totalOutput: 1,
+          uuid: 'd-end',
+          timestamp: '2026-05-21T10:35:30.000Z'
+        })
+      )
+      await w.processFileForTest(f)
+      const iters = listIterations('ABC-1')
+      expect(iters.length).toBe(1)
+      // 仅第 1 行(msg_keep_active)+ end_turn 行进入累加,中间 dedup 都被丢
+      expect(iters[0].cumulativeToken).toBe(12)
     })
   })
 

@@ -39,14 +39,20 @@ const SCAN_INTERVAL_MS = 30_000
  */
 const SEEN_API_MESSAGE_IDS_LIMIT = 5000
 /**
- * v2.11.1 buffer 兜底超时阈值。
+ * v2.14.1 buffer 兜底超时阈值(60s → 30min)。
  *
- * 当一个 sessionId 的 turnBuffer 在内存中累加但距上一次 assistant 消息超过此时间窗仍未
- * flush,scanAndScheduleAll 触发的兜底循环会主动强制 flush。配合主路径(Claude Code
- * `type=system subtype=stop_hook_summary` 系统行触发的 stop_hook_summary flush),
- * 用于覆盖「Claude Code 没及时写 stop_hook_summary」的极端场景。
+ * **本期(v2.14.1)调整背景**:实测 Claude Code Opus thinking + 多 MCP 工具流程(典型场景
+ * 「经验提取」一次拉数据包 + 推理 + save_lessons + attach_summary)单轮 turn 内 jsonl 行写入
+ * 间歇期常态 30~90s(LLM thinking → tool 执行 → 网络往返 → 用户确认 MCP 权限弹窗),
+ * 旧 60s 阈值会把单轮 turn 误切成 N 条 iteration、且每条 `triggerStopReason=stale_timeout`、
+ * 仅最后一条带 attach_summary 总结。30min 既能覆盖正常长流程,又能在「Claude Code 真异常
+ * 退出永远写不出 end_turn / stop_hook_summary」时兜底释放内存,语义不变。
+ *
+ * **历史背景**:本字段在 v2.11.1 引入,与 stop_hook_summary 路径配合,用于覆盖「Claude Code
+ * 没及时写 stop_hook_summary」的极端场景;独立追踪 `lastSeenAt`(本期 v2.14.1 新增)
+ * 进一步收紧"什么叫闲置"的口径,详见 `PendingTurn.lastSeenAt` 注释。
  */
-const STALE_TURN_FLUSH_MS = 60_000
+const STALE_TURN_FLUSH_MS = 30 * 60_000
 
 /**
  * v2.11.1 flushTurn 的触发来源联合类型。
@@ -100,6 +106,23 @@ interface PendingTurn {
   userPromptTs: string
   firstMessageTs: string
   lastMessageTs: string
+  /**
+   * v2.14.1 「会话最后活动信号」时间戳,**与 lastMessageTs 解耦**。
+   *
+   * 凡是同 sessionId 的任意一行 jsonl 被 watcher 识别都更新它,包括:
+   *  - 真正进入 buffer 的 assistant 消息(同步更新 lastMessageTs)
+   *  - 因 message.id 主键去重被丢弃的 assistant 重复行(不更新 lastMessageTs)
+   *  - 因 fingerprint 兜底去重被丢弃的 assistant 重复行(同上)
+   *  - user 行(routeUserMessage 路径)
+   *
+   * 目的:`flushStaleBuffers` 据此判定"会话是否真闲置",避免把"Claude 一次 API 响应被拆
+   * 成多行 + 多个 thinking/tool_use 间歇期"的活跃会话误判为闲置。**只要 jsonl 文件持续有
+   * 新行写入,会话就被视为活跃,即使新行因去重不进 buffer。**
+   *
+   * 在 routeMessage 主路径中始终与 lastMessageTs 同步;`stop_hook_summary` / `stale_timeout`
+   * 触发的 flush 不更新它(由调用点先 delete buffer 决定语义)。
+   */
+  lastSeenAt: string
   /** v2.6.0 算法:仅累加 input + output + cache_creation,排除 cache_read */
   tokenSum: number
   modelName: string
@@ -364,14 +387,25 @@ export class TranscriptWatcher {
     const turnKey = this.turnKey(msg)
 
     // v2.9.4 第一层(主):按 Claude API message.id 去重。命中即整条丢弃,不累加、不 flush。
+    //
+    // v2.14.1 关键改动:被去重丢弃的行**仍然刷新 buffer.lastSeenAt** ─ 这是「会话最后活动信号」,
+    // 与「消息进入 buffer」解耦。原因:Claude Code 把一次 API 响应拆成多行写 jsonl(thinking /
+    // tool_use 拆 2~3 行,共享同 message.id),如果只在第一行更新 lastSeenAt,后续 30~90s 的
+    // 拆分行间隙就会让 buffer 看起来「闲置」,被 stale_timeout 误 flush 切成多条 iteration。
     if (msg.apiMessageId) {
-      if (this.seenApiMessageIds.has(msg.apiMessageId)) return
+      if (this.seenApiMessageIds.has(msg.apiMessageId)) {
+        this.markSessionActive(turnKey, msg.timestamp)
+        return
+      }
       this.rememberApiMessageId(msg.apiMessageId)
     } else {
       // v2.9.4 第二层(兜底):message.id 缺失时,比对同 sessionId 上一次 flush 的 usage 指纹。
       // 命中视为 Claude Code 进一步剥离 message.id 后的 stale 复制,整条丢弃。
       const fingerprint = fingerprintTokens(msg.tokens)
-      if (this.lastFlushedFingerprint.get(turnKey) === fingerprint) return
+      if (this.lastFlushedFingerprint.get(turnKey) === fingerprint) {
+        this.markSessionActive(turnKey, msg.timestamp)
+        return
+      }
     }
 
     const existing = this.turnBuffer.get(turnKey)
@@ -382,6 +416,7 @@ export class TranscriptWatcher {
         ...existing,
         // gitRoot / issueKey / branch 沿用首个消息的值,中途切换属于异常但我们不做拦截
         lastMessageTs: msg.timestamp,
+        lastSeenAt: msg.timestamp,
         tokenSum: existing.tokenSum + delta,
         modelName: msg.model || existing.modelName,
         messageUuids: [...existing.messageUuids, msg.uuid]
@@ -400,6 +435,7 @@ export class TranscriptWatcher {
         userPromptTs,
         firstMessageTs: msg.timestamp,
         lastMessageTs: msg.timestamp,
+        lastSeenAt: msg.timestamp,
         tokenSum: delta,
         modelName: msg.model,
         messageUuids: [msg.uuid]
@@ -414,6 +450,22 @@ export class TranscriptWatcher {
   }
 
   /**
+   * v2.14.1 把同 sessionId 的 turnBuffer.lastSeenAt 推到 ts;无 buffer 时 no-op。
+   *
+   * 用于两类信号:dedup 命中丢弃的 assistant 重复行、独立的 user 行。统一通过本方法刷新
+   * 「会话最后活动信号」,让 flushStaleBuffers 判定更鲁棒。
+   *
+   * 仅当传入 ts 比既有 lastSeenAt 更新时才覆盖,避免乱序 / 重放写入回退时间戳。
+   */
+  private markSessionActive(turnKey: string, ts: string): void {
+    if (!ts) return
+    const buf = this.turnBuffer.get(turnKey)
+    if (!buf) return
+    if (buf.lastSeenAt && Date.parse(buf.lastSeenAt) >= Date.parse(ts)) return
+    this.turnBuffer.set(turnKey, { ...buf, lastSeenAt: ts })
+  }
+
+  /**
    * v2.12.0 user 行路由:把 timestamp 缓存到 pendingUserPromptTs,等下一条 assistant 行
    * 新建 PendingTurn 时消费。同 sessionId 后到的 user 行会覆盖前一次(典型场景:用户在
    * 同一会话连续提问,只有最近一次未被消费的 user timestamp 才是当前 turn 的真实起点)。
@@ -424,6 +476,10 @@ export class TranscriptWatcher {
   private routeUserMessage(msg: ParsedUserMessage): void {
     if (!msg.sessionId) return
     this.pendingUserPromptTs.set(msg.sessionId, msg.timestamp)
+    // v2.14.1 同 sessionId 若已有 buffer(典型场景:LLM 多轮 tool_use 期间用户工具结果回填),
+    // 把 user 行 timestamp 也算作「会话活动信号」,避免 stale flush 把活会话误切。
+    const turnKey = msg.sessionId
+    this.markSessionActive(turnKey, msg.timestamp)
   }
 
   /** sessionId 缺失时退化到 cwd|uuid 兜底,几乎不发生但避免 collisions */
@@ -461,24 +517,33 @@ export class TranscriptWatcher {
   }
 
   /**
-   * v2.11.1 兜底 flush:遍历所有 turnBuffer,把距上一次 assistant 消息超过
+   * v2.11.1 兜底 flush:遍历所有 turnBuffer,把距上一次会话活动超过
    * STALE_TURN_FLUSH_MS 的 turn 强制 flush。
    *
-   * 触发场景:Claude Code 异常退出 / 用户直接关掉窗口 / 系统行没及时写入,
-   * 都会让 `stop_hook_summary` 路径错过这一轮。此函数由 scanAndScheduleAll 每 30s
-   * 触发一次,确保最坏情况 ≤ 90s 内一定 flush。
+   * v2.14.1 改动:
+   *  1. 阈值从 60s 放宽到 30min(见 STALE_TURN_FLUSH_MS 注释),覆盖 Claude Code Opus
+   *     thinking + 多 MCP 工具流程的合理间歇期。
+   *  2. 判定基准从 `lastMessageTs` 改为 `lastSeenAt`(任意 jsonl 行 ─ 包括 dedup 丢弃的
+   *     重复行 / user 行 ─ 都刷新此字段),让"会话还活着"的判定更鲁棒。reportedAt 仍
+   *     落 `lastMessageTs`(stale 路径的最后一条真实 assistant ts),不污染 think 时长。
+   *
+   * 触发场景:Claude Code 异常退出 / 用户直接关掉窗口 / 系统行没及时写入,都会让
+   * `stop_hook_summary` 路径错过这一轮。此函数由 scanAndScheduleAll 每 30s 触发一次,
+   * 最坏情况 ≤ 30min + 30s 内一定 flush,避免内存中孤立 buffer 永久泄漏。
    *
    * 暴露为 public 供测试注入显式 `now` 时间戳(默认走 Date.now)。
    */
   flushStaleBuffers(now: number = Date.now()): void {
     for (const [turnKey, buf] of this.turnBuffer) {
-      const refTs = buf.lastMessageTs || buf.firstMessageTs
+      const refTs = buf.lastSeenAt || buf.lastMessageTs || buf.firstMessageTs
       const refMs = Date.parse(refTs)
       if (!Number.isFinite(refMs)) continue
       if (now - refMs > STALE_TURN_FLUSH_MS) {
+        // reportedAt 留给 flushTurn 用 buf.lastMessageTs(最后一条真实 assistant 消息时间),
+        // 这里 trigger.timestamp 仅作为 rawPayload 留痕;两者解耦,thinkSeconds 不被污染。
         this.flushTurn(turnKey, buf, {
           kind: 'stale_timeout',
-          timestamp: refTs
+          timestamp: buf.lastMessageTs || refTs
         })
       }
     }

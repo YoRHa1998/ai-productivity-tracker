@@ -12,6 +12,41 @@
 
 ### Fixed
 
+**v2.14.1 `transcript-watcher` 60s `stale_timeout` 阈值过激,导致 Claude Code 经验提取 / 长 MCP 工具流程被切成多条 iteration**
+
+实测现象(INSTANT-5321 一次「经验提取」对话):看板上同一次用户 prompt → end_turn 的对话(2026-05-26 07:55~08:01,
+5min 41s)被切成 **#75 / #76 / #77 / #78 / #79 / #80 共 6 条 iteration**(#77 / #78 `triggerStopReason=stale_timeout`),
+而 LLM 实际只主动调了一次 `attach_summary`,只有最后一条 #80 带 `conversationSummary`,前 5 条都是「无总结的孤立 coding 行」。
+用户感知是「一次对话怎么上报了七八次」。
+
+根因:`transcript-watcher.ts` 的 `STALE_TURN_FLUSH_MS = 60_000` 在两类正常间歇期被误触发:
+
+1. **Claude Opus thinking + 多 MCP 工具调用单轮 turn 内长间歇**:实测 jsonl 行写入间隔 30~90s 是常态(LLM
+   thinking → tool 执行 → 网络往返 → 用户确认 MCP 权限弹窗),60s 阈值频繁误判为"对话结束"。
+2. **`msg.id` 主键去重路径不更新 buffer 时间戳**:Claude Code 把一次 API 响应拆成多行写 jsonl(thinking / text /
+   tool_use 拆 2~3 行共享同 `message.id`),`routeMessage` 命中去重时 `return` 早退,**buffer.lastMessageTs 卡在最早的
+   第一行**,后续散落 30~90s 的去重行无法续命,让 `flushStaleBuffers` 提前 30s+ 误判 stale。
+
+修复(三处协同):
+
+- **[`STALE_TURN_FLUSH_MS`](../packages/core/src/transcript-watcher.ts) 60s → 30min**:既覆盖正常长流程,
+  又保留「Claude Code 真异常退出永远写不出 end_turn / stop_hook_summary」的兜底语义。最坏 30min + 30s 内一定 flush,
+  避免内存中孤立 buffer 永久泄漏。
+- **新增 `PendingTurn.lastSeenAt` 字段**,与 `lastMessageTs` 解耦:任何同 sessionId 的 jsonl 行(包括 `msg.id` 去重
+  丢弃的重复行 + `fingerprint` 兜底去重丢弃的行 + 独立的 `user` 行)都通过新加的 `markSessionActive()` 刷新它。
+- **`flushStaleBuffers` 改用 `lastSeenAt`** 判定闲置;`reportedAt` / `triggerMessageUuid` 仍走 `lastMessageTs`,
+  thinkSeconds / rawPayload 语义不受影响。
+
+测试覆盖:`transcript-watcher.spec.ts` 新增 `v2.14.1 stale_timeout 阈值放宽 + lastSeenAt 解耦` describe 块,
+2 条用例:
+
+1. 经验提取真实时序回归(5min 多 tool_use + 4 组 msg.id 拆分行 + 长间歇,以 end_turn 收尾 → 期望仅 1 行 iteration)
+2. dedup 行刷新 lastSeenAt 验证(29min 散落 msg.id 重复行 → 不触发 stale flush)
+
+旧测试 `buffer 闲置 > 60s 强制 flush` 同步更名为 `buffer 闲置 > 30min 强制 flush`,断言时间窗调整。
+
+---
+
 **`aipt install` 漏注入 Claude Code 的 MCP 配置(`~/.claude.json`),Claude Code 用户看板永远拿不到 MCP 数据**
 
 实测现象:用户在 Claude Code 里跑 `aipt install` 后,Cursor 看板正常,但 Claude Code 端 MCP 始终不可用 ——
