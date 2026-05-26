@@ -306,8 +306,14 @@ watch(
         <span class="aip-chip aip-chip--success">主路径</span>
       </header>
       <p class="aip-card__caption">
-        一行命令完成 <strong>MCP server + Cursor hooks.json + Claude / Cursor skill + rule</strong>
-        的注入,无需手动下载任何文件。下面卡片仅用于状态可视化与单点重装。
+        一行命令完成
+        <strong
+          >Cursor + Claude Code MCP server + Cursor hooks.json + Claude / Cursor skill +
+          rule</strong
+        >
+        的注入(自动写 <code class="aip-inline-code">~/.cursor/mcp.json</code> 与
+        <code class="aip-inline-code">~/.claude.json</code
+        >),无需手动下载任何文件。下面卡片仅用于状态可视化与单点重装。
       </p>
       <div class="aip-mcp-config__cli">
         <div class="aip-mcp-config__cli-item">

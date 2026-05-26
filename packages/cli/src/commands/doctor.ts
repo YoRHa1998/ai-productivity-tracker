@@ -1,16 +1,17 @@
 /**
  * `aipt doctor`:体检命令。
  *
- * 9 项检查(PRD §13):
+ * 10 项检查(PRD §13):
  *   1. Node 版本 ≥ 20.10
  *   2. ~/.ai-productivity-tracker/ home 目录存在 + 权限位
  *   3. runtime.json 与 daemon 状态(pid 存活 / port 端口探活)
  *   4. data 根目录可读写 + 是否有数据
  *   5. ~/.cursor/mcp.json 是否含 ai-productivity-tracker server
- *   6. ~/.cursor/hooks.json 是否含 afterAgentResponse hook
- *   7. ~/.claude/skills/ai-productivity-track/SKILL.md 是否就位
- *   8. ~/.cursor/rules/ai-productivity-track.mdc 是否就位
- *   9. 老数据 ~/.truesight-local-agent/ai-productivity/ 是否仍未迁移
+ *   6. ~/.claude.json 是否含 ai-productivity-tracker server (rc.16+ 新增)
+ *   7. ~/.cursor/hooks.json 是否含 afterAgentResponse hook
+ *   8. ~/.claude/skills/ai-productivity-track/SKILL.md 是否就位
+ *   9. ~/.cursor/rules/ai-productivity-track.mdc 是否就位
+ *   10. 老数据 ~/.truesight-local-agent/ai-productivity/ 是否仍未迁移
  *
  * 全部以 ✓/✗/⚠ 三态彩色输出(无 ANSI 颜色依赖,纯字符)。
  */
@@ -50,6 +51,7 @@ export async function runDoctor(): Promise<number> {
   await pushAsync(checks, checkDaemon())
   checks.push(checkDataRoot())
   checks.push(checkCursorMcpJson())
+  checks.push(checkClaudeMcpJson())
   checks.push(checkCursorHooks())
   checks.push(checkClaudeSkill())
   checks.push(checkCursorRule())
@@ -238,6 +240,52 @@ function checkCursorMcpJson(): CheckResult {
     return { status: 'warn', label: 'Cursor mcp.json', message: `未注入,跑 \`aipt install-mcp\`` }
   } catch (err) {
     return { status: 'fail', label: 'Cursor mcp.json', message: (err as Error).message }
+  }
+}
+
+function checkClaudeMcpJson(): CheckResult {
+  // Claude Code 把 MCP servers 放在 ~/.claude.json 顶层(rc.16+ 起 install / install-mcp
+  // 默认会同时注入此文件,之前一直漏掉)。
+  const file = join(homedir(), '.claude.json')
+  if (!existsSync(file)) {
+    return {
+      status: 'info',
+      label: 'Claude mcp.json',
+      message: `${file} 不存在(未装 Claude Code 时为正常,装了请跑 \`aipt install\` 注入)`
+    }
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf-8')) as {
+      mcpServers?: Record<string, { type?: string }>
+    }
+    const servers = parsed.mcpServers ?? {}
+    if (MCP_SERVER_KEY in servers) {
+      const entry = servers[MCP_SERVER_KEY]!
+      if (entry.type !== 'stdio') {
+        return {
+          status: 'warn',
+          label: 'Claude mcp.json',
+          message: `已含 ${MCP_SERVER_KEY},但缺少 type:'stdio',Claude Code 可能跳过该条目,跑 \`aipt install-mcp --ide=claude\` 修复`
+        }
+      }
+      return { status: 'ok', label: 'Claude mcp.json', message: `已含 ${MCP_SERVER_KEY}` }
+    }
+    for (const legacy of LEGACY_MCP_SERVER_KEYS) {
+      if (legacy in servers) {
+        return {
+          status: 'warn',
+          label: 'Claude mcp.json',
+          message: `老 key '${legacy}' 仍在,请跑 \`aipt install-mcp --ide=claude\` 升级到新 key`
+        }
+      }
+    }
+    return {
+      status: 'warn',
+      label: 'Claude mcp.json',
+      message: `未注入,跑 \`aipt install-mcp --ide=claude\``
+    }
+  } catch (err) {
+    return { status: 'fail', label: 'Claude mcp.json', message: (err as Error).message }
   }
 }
 

@@ -10,6 +10,40 @@
 
 ## [Unreleased]
 
+### Fixed
+
+**`aipt install` 漏注入 Claude Code 的 MCP 配置(`~/.claude.json`),Claude Code 用户看板永远拿不到 MCP 数据**
+
+实测现象:用户在 Claude Code 里跑 `aipt install` 后,Cursor 看板正常,但 Claude Code 端 MCP 始终不可用 ——
+`claude mcp list` 找不到 `ai-productivity-tracker`,看板 Iteration 列表无 Claude 来源数据。
+
+根因:[`packages/cli/src/commands/install.ts`](../packages/cli/src/commands/install.ts) 的 Step 1 写 MCP 配置
+时硬编码只走 `runInstallMcp({})` → 默认写 `~/.cursor/mcp.json`,**完全没处理 `--ide=claude` / `--ide=all` 分支**。
+Claude Code 的 MCP 配置实际存在 `~/.claude.json` 顶层 `mcpServers` 字段(不是 `~/.claude/` 目录里),
+entry 还必须带 `type: "stdio"`(缺失时 claude-code CLI 跳过该条目)—— 这些细节之前完全没覆盖。
+
+修复:
+
+1. **[`packages/cli/src/commands/install-mcp.ts`](../packages/cli/src/commands/install-mcp.ts) 引入双 target**:
+   - 新增 `InstallMcpTarget = 'cursor' | 'claude'` 与默认路径 `defaultMcpJsonForTarget()`
+   - Cursor entry 不带 `type`(向后兼容,Cursor 不识别此字段);Claude entry 自动带 `type: 'stdio'`
+   - Claude 文件用 `mode=0600` 写盘(`~/.claude.json` 默认私有,可能含 Jira API token 等敏感 env)
+   - 仍保留对历史老 key `ai-productivity` 的清理(两个 IDE 都做)
+   - 新增聚合入口 `runInstallMcpAll({ ide })`:`'all'`(默认)同时写两侧,任一失败不阻断另一个
+
+2. **[`install.ts`](../packages/cli/src/commands/install.ts) Step 1 调用聚合入口**,根据 `--ide` 决定写一侧或两侧
+3. **CLI argv-router**:`aipt install-mcp` 新增 `--ide=cursor|claude|all` 参数(默认 `all`),保持与 `aipt install` 行为一致
+4. **[`doctor.ts`](../packages/cli/src/commands/doctor.ts) 新增第 6 项**「Claude mcp.json」体检 ——
+   检测 `~/.claude.json` 是否含 `ai-productivity-tracker` server 与 `type: 'stdio'`,以及老 key 残留
+5. **文档同步**:README.md、`AiProductivityTrackerMcpConfigTab.vue`、`AiProductivityTrackerGuideTab.vue`、`help.ts`
+   全部更新说明,明确「`aipt install` 同时写 `~/.cursor/mcp.json` + `~/.claude.json`」
+
+**测试覆盖**:`install-mcp.spec.ts` 从 8 例扩到 15 例,新增 Claude 文件不存在 / 已含老 key / 已含新 key /
+保留顶层其它字段 / `runInstallMcpAll` 双侧同时写 / `--ide=claude` 单侧写 等场景。
+
+**升级指引**:用户机器跑 `npm i -g @ai-productivity-tracker/cli@latest` 后重新 `aipt install`,
+配套重启 Claude Code 一次(`/quit` 或 `Cmd + Q`)。
+
 ### Changed
 
 **v2.14.0 双管齐下提升 Cursor `ai_productivity_attach_summary` 主动调用率(消除"漏调 + stop-hook 补刀"双 iteration)**

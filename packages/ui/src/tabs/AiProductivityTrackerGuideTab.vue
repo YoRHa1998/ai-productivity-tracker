@@ -122,12 +122,15 @@ function copy(text: string) {
             <p>这条命令一次性完成 3 件事(全部幂等,可多次重复执行):</p>
             <ul>
               <li>
-                <strong>Cursor MCP server</strong> —— 把
-                <code class="aip-inline-code">ai-productivity-tracker</code> 写入
-                <code class="aip-inline-code">~/.cursor/mcp.json</code> 的
-                <code class="aip-inline-code">mcpServers</code> 段,命令为
+                <strong>Cursor + Claude Code MCP server</strong> —— 把
+                <code class="aip-inline-code">ai-productivity-tracker</code> 同时写入
+                <code class="aip-inline-code">~/.cursor/mcp.json</code> 与
+                <code class="aip-inline-code">~/.claude.json</code>
+                顶层的
+                <code class="aip-inline-code">mcpServers</code> 段(Claude entry 会附带
+                <code class="aip-inline-code">type: 'stdio'</code> 字段),命令统一为
                 <code class="aip-inline-code">node &lt;cli.mjs&gt; mcp</code>(绝对路径,不破坏其他
-                MCP 条目)。
+                MCP 条目,也不会污染 Claude Code 自身的 numStartups / theme / projects 等字段)。
               </li>
               <li>
                 <strong>Cursor afterAgentResponse + stop hook</strong> —— 写入
@@ -171,9 +174,9 @@ function copy(text: string) {
             </p>
             <p class="aip-guide__tip">
               想验证 daemon 是否正常工作,跑
-              <code class="aip-inline-code">{{ aiptDoctorCommand }}</code> 看 9 项体检(Node 版本 /
-              home 目录 / runtime.json / daemon /status / mcp.json / hooks.json / skill / rule /
-              老数据)。
+              <code class="aip-inline-code">{{ aiptDoctorCommand }}</code> 看 10 项体检(Node 版本 /
+              home 目录 / runtime.json / daemon /status / cursor mcp.json / claude.json / hooks.json
+              / skill / rule / 老数据)。
             </p>
           </div>
         </li>

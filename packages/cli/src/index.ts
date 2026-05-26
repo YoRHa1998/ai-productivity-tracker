@@ -17,7 +17,7 @@ import { runDoctor } from './commands/doctor.js'
 import { runHelp } from './commands/help.js'
 import { runHookCommand } from './commands/hook.js'
 import { runInstall, type InstallArgs, type InstallTargetIde } from './commands/install.js'
-import { runInstallMcp } from './commands/install-mcp.js'
+import { runInstallMcpAll, type InstallMcpAllArgs } from './commands/install-mcp.js'
 import { runMcp } from './commands/mcp.js'
 import { runMigrate, type MigrateArgs } from './commands/migrate.js'
 import { runStopCheckCommand } from './commands/stop-check.js'
@@ -67,7 +67,7 @@ export async function main(argv: string[] = process.argv): Promise<ExitCode> {
       return runInstall(parseInstallArgs(rest))
 
     case 'install-mcp':
-      return runInstallMcp({})
+      return runInstallMcpAll(parseInstallMcpArgs(rest))
 
     case 'migrate':
       return runMigrate(parseMigrateArgs(rest))
@@ -121,6 +121,21 @@ function parseInstallArgs(rest: string[]): InstallArgs {
       args.hookEntry = rest[++i]
     } else if (a === '--no-restart-daemon') {
       args.noRestartDaemon = true
+    }
+  }
+  return args
+}
+
+function parseInstallMcpArgs(rest: string[]): InstallMcpAllArgs {
+  const args: InstallMcpAllArgs = {}
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!
+    if (a.startsWith('--ide=')) {
+      const v = a.slice('--ide='.length) as InstallMcpAllArgs['ide']
+      if (v === 'cursor' || v === 'claude' || v === 'all') args.ide = v
+    } else if (a === '--ide') {
+      const v = rest[++i] as InstallMcpAllArgs['ide'] | undefined
+      if (v === 'cursor' || v === 'claude' || v === 'all') args.ide = v
     }
   }
   return args

@@ -2,9 +2,11 @@
  * `aipt install [--ide=cursor|claude|all]`:一键注入 IDE 配置。
  *
  * 含 3 件事:
- *   1. ~/.cursor/mcp.json:写入 MCP server 条目(等价 `aipt install-mcp`)
- *   2. ~/.cursor/hooks.json:写入 afterAgentResponse hook(`node <abs-cli.mjs> hook`)
- *      + Cursor stop hook(防伪造校验)
+ *   1. MCP server 注入(等价 `aipt install-mcp`):
+ *        - --ide=cursor|all → ~/.cursor/mcp.json
+ *        - --ide=claude|all → ~/.claude.json(rc.16+ 新增,之前一直漏掉)
+ *   2. ~/.cursor/hooks.json:写入 afterAgentResponse / sessionStart / stop hook
+ *      (`node <abs-cli.mjs> hook`,Cursor 专属,Claude 通过 Hook+Watcher 走 settings.json)
  *   3. ~/.claude/skills/ai-productivity-track/SKILL.md & ~/.cursor/rules/*.mdc:
  *      装入对话总结 + 经验提取 skill(委托给 @ai-productivity-tracker/server skill-sync)
  *
@@ -18,7 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { ensureDaemon } from '../lib/ensure-daemon.js'
 import { inspectRunningDaemon, stopRunningDaemon } from '../lib/restart-daemon.js'
 import { VERSION } from '../version.js'
-import { runInstallMcp } from './install-mcp.js'
+import { runInstallMcpAll } from './install-mcp.js'
 
 export type InstallTargetIde = 'cursor' | 'claude' | 'all'
 
@@ -45,12 +47,19 @@ export async function runInstall(args: InstallArgs = {}): Promise<number> {
   await maybeRestartStaleDaemon(args.noRestartDaemon === true)
 
   // Step 1: install-mcp(纯本地配置文件操作,不依赖 daemon)
-  if (ide === 'all' || ide === 'cursor') {
-    console.log('Step 1/3: 注入 ~/.cursor/mcp.json')
-    const code = await runInstallMcp({})
-    if (code !== 0) return code
-    console.log('')
-  }
+  // Cursor (~/.cursor/mcp.json) 与 Claude Code (~/.claude.json) 在 install-mcp.ts
+  // 内部按 target 分发,任一文件失败不阻断另一个,最终 worst exit code 决定是否继续。
+  const installMcpIde = ide
+  console.log(
+    installMcpIde === 'all'
+      ? 'Step 1/3: 注入 ~/.cursor/mcp.json + ~/.claude.json'
+      : installMcpIde === 'cursor'
+        ? 'Step 1/3: 注入 ~/.cursor/mcp.json'
+        : 'Step 1/3: 注入 ~/.claude.json'
+  )
+  const mcpCode = await runInstallMcpAll({ ide: installMcpIde })
+  if (mcpCode !== 0) return mcpCode
+  console.log('')
 
   // Step 2/3 都需要 daemon 在线
   let endpoint: { baseUrl: string; token: string }

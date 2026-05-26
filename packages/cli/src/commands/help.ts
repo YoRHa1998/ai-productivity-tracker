@@ -19,7 +19,8 @@ COMMANDS
     --ide=cursor|claude|all   (默认 all)
     --debug                   注入 debug 前缀(打印 stdin payload 排错)
     --no-restart-daemon       跳过 Step 0 的版本对齐(默认会停掉本机版本不一致的 daemon)
-  install-mcp        将本 cli 写到 ~/.cursor/mcp.json
+  install-mcp        将本 cli 写到 IDE 本机 MCP 配置(同时支持 Cursor 与 Claude Code)
+    --ide=cursor|claude|all   (默认 all → 同时写 ~/.cursor/mcp.json + ~/.claude.json)
   ui open            在浏览器打开看板
   migrate            把 ~/.truesight-local-agent 老数据搬到新根
   doctor             体检 daemon / hook / skill / mcp.json / 数据迁移

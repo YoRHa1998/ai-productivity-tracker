@@ -1,42 +1,109 @@
 /**
  * `aipt install-mcp`:把 ai-productivity-tracker 这一项 MCP server 配置写到
- * `~/.cursor/mcp.json`。
+ * IDE 的本机 MCP 配置文件:
  *
- * 策略:
+ *   - Cursor: `~/.cursor/mcp.json`(顶层 `mcpServers` 字典,entry 无 `type` 字段)
+ *   - Claude Code: `~/.claude.json`(顶层 `mcpServers` 字典,entry 必填 `type: "stdio"`)
+ *
+ * 行为契约:
  *   - 已存在 ai-productivity (或 ai-productivity-tracker) key → 覆盖
  *   - 不存在 → 追加
- *   - 不破坏其它 MCP server 条目
- *   - **缺省命令:`node <当前 cli.mjs 绝对路径> mcp`**(直接路径,零网络,
- *     启动 <100ms;Cursor / Claude Code 的 macOS GUI 子进程也能跑通)
+ *   - 不破坏其它 MCP server 条目,也不破坏 ~/.claude.json 顶层其它字段
+ *     (numStartups / theme / projects / userID / ...)
+ *   - 缺省命令:`node <当前 cli.mjs 绝对路径> mcp`(直接路径,零网络,启动 <100ms;
+ *     Cursor / Claude Code 的 macOS GUI 子进程也能跑通)
  *     v1.0.0-rc.3 之前默认 `npx -y @ai-productivity-tracker/cli mcp`,实测在
  *     macOS GUI 应用启 MCP 子进程时容易因为 PATH / proxy / 网络超时而失败,
  *     现已切换到绝对路径。
  *   - 用户可显式 `--command npx --args="-y,@ai-productivity-tracker/cli,mcp"`
  *     回退到 npx 模式(便于 CI / 跨机器场景共享同份 mcp.json)。
+ *
+ * v1.0.0-rc.16+ 修复:之前 `aipt install` 只动 Cursor 的 mcp.json,完全漏掉
+ * Claude Code 的 ~/.claude.json,导致 Claude Code 用户看板永远拿不到 MCP 数据。
+ * 现在 install / install-mcp 默认对两个 IDE 都写入(`--ide=cursor|claude|all`,
+ * 默认 all)。
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
+export type InstallMcpTarget = 'cursor' | 'claude'
+
 export interface InstallMcpArgs {
-  /** 写到指定路径(测试 / 自定义 IDE 时用),缺省为 ~/.cursor/mcp.json */
+  /**
+   * 注入到哪个 IDE 的 MCP 配置文件:
+   *   - 'cursor' → ~/.cursor/mcp.json (entry 不带 type 字段)
+   *   - 'claude' → ~/.claude.json (entry 带 type: 'stdio')
+   * 缺省 'cursor'(单 target 调用时保持与 rc.15 之前的行为一致;
+   * 真正的"装两个 IDE"统一走 `runInstallMcpAll` / `aipt install`)。
+   */
+  target?: InstallMcpTarget
+  /** 写到指定路径(测试 / 自定义 IDE 时用),缺省按 target 选 */
   configPath?: string
-  /** 自定义入口命令(默认 `node`,即用绝对路径跑当前 cli.mjs) */
+  /** 自定义入口命令(默认 `process.execPath`,即用绝对路径跑当前 cli.mjs) */
   command?: string
   args?: string[]
 }
 
+/**
+ * `aipt install-mcp` / `aipt install` 默认调用入口:同时注入 Cursor + Claude Code。
+ * 任一文件写失败不阻断另一个,聚合返回最严重的 exit code。
+ */
+export interface InstallMcpAllArgs {
+  /** 'cursor' | 'claude' | 'all'(默认 'all') */
+  ide?: 'cursor' | 'claude' | 'all'
+  command?: string
+  args?: string[]
+}
+
+interface McpEntry {
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+  type?: string
+  // Claude Code 同 server 可能带 url / headers 等其它字段(http / sse type),
+  // 但我们只写 stdio,这里只声明会用到的字段。
+  [k: string]: unknown
+}
+
 interface McpJson {
-  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>
+  mcpServers?: Record<string, McpEntry>
   [key: string]: unknown
 }
 
 export const MCP_SERVER_KEY = 'ai-productivity-tracker'
 export const LEGACY_MCP_SERVER_KEYS = ['ai-productivity']
 
+/**
+ * 给 install / 看板复用的"装两个 IDE"聚合入口。
+ * 任一 target 失败会打印 warn,但继续装另一个;最终 exit code 取两者最大值。
+ */
+export async function runInstallMcpAll(args: InstallMcpAllArgs = {}): Promise<number> {
+  const ide = args.ide ?? 'all'
+  let worst = 0
+  if (ide === 'all' || ide === 'cursor') {
+    const code = await runInstallMcp({
+      target: 'cursor',
+      command: args.command,
+      args: args.args
+    })
+    if (code > worst) worst = code
+  }
+  if (ide === 'all' || ide === 'claude') {
+    const code = await runInstallMcp({
+      target: 'claude',
+      command: args.command,
+      args: args.args
+    })
+    if (code > worst) worst = code
+  }
+  return worst
+}
+
 export async function runInstallMcp(args: InstallMcpArgs = {}): Promise<number> {
-  const file = args.configPath ?? defaultCursorMcpJson()
+  const target: InstallMcpTarget = args.target ?? 'cursor'
+  const file = args.configPath ?? defaultMcpJsonForTarget(target)
   const dir = dirname(file)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
@@ -71,25 +138,40 @@ export async function runInstallMcp(args: InstallMcpArgs = {}): Promise<number> 
   }
 
   const hadEntry = MCP_SERVER_KEY in data.mcpServers
-  data.mcpServers[MCP_SERVER_KEY] = {
+  const entry: McpEntry = {
     command,
     args: cmdArgs
   }
+  // Claude Code 官方 schema 要求每个 server 带 `type`,缺失时启动会跳过该 entry。
+  // Cursor 不需要也不识别该字段,显式区分写入。
+  if (target === 'claude') {
+    entry.type = 'stdio'
+  }
+  data.mcpServers[MCP_SERVER_KEY] = entry
 
-  writeFileSync(file, JSON.stringify(data, null, 2) + '\n')
+  const payload = JSON.stringify(data, null, 2) + '\n'
+  // ~/.claude.json 默认 mode=0600(私有,可能含 Jira API token 等敏感 env),
+  // ~/.cursor/mcp.json 由 Cursor 创建时默认 0644。
+  // 写时统一指定 mode,Node 已存在文件时也会沿用新 mode(rewrite 覆盖)。
+  const fileMode = target === 'claude' ? 0o600 : 0o644
+  writeFileSync(file, payload, { mode: fileMode })
 
   const verb = hadEntry ? '已更新' : '已新增'
-  console.log(`${verb} MCP 配置: ${file}`)
+  const ideLabel = target === 'claude' ? 'Claude Code' : 'Cursor'
+  console.log(`${verb} ${ideLabel} MCP 配置: ${file}`)
   console.log(`  ${MCP_SERVER_KEY}: ${command} ${cmdArgs.join(' ')}`)
   if (replacedLegacy) {
     console.log(`  (顺手清除了老 key: ${LEGACY_MCP_SERVER_KEYS.join(', ')})`)
   }
-  console.log('')
-  console.log('重启 IDE (Cursor / Claude Code 等) 让 MCP 配置生效。')
   return 0
 }
 
-function defaultCursorMcpJson(): string {
+export function defaultMcpJsonForTarget(target: InstallMcpTarget): string {
+  if (target === 'claude') {
+    // Claude Code(claude-code CLI)统一把 mcpServers 放在 ~/.claude.json 顶层。
+    // 注意不是 ~/.claude/ 目录里(那个目录管 skills / settings / sessions 等)。
+    return join(homedir(), '.claude.json')
+  }
   return join(homedir(), '.cursor', 'mcp.json')
 }
 

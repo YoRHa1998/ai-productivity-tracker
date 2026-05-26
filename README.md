@@ -37,14 +37,29 @@ aipt ui open
 
 ### IDE 内 MCP 配置示例
 
-`aipt install` 会自动写入 `~/.cursor/mcp.json`,效果等价于:
+`aipt install` 会自动写入 `~/.cursor/mcp.json`(Cursor)与 `~/.claude.json`(Claude Code),
+效果分别等价于:
 
 ```json
+// ~/.cursor/mcp.json
 {
   "mcpServers": {
     "ai-productivity-tracker": {
-      "command": "npx",
-      "args": ["-y", "@ai-productivity-tracker/cli", "mcp"]
+      "command": "/abs/path/to/node",
+      "args": ["/abs/path/to/cli.mjs", "mcp"]
+    }
+  }
+}
+```
+
+```json
+// ~/.claude.json (顶层会保留 Claude Code 自身的 numStartups / theme / projects 等字段)
+{
+  "mcpServers": {
+    "ai-productivity-tracker": {
+      "type": "stdio",
+      "command": "/abs/path/to/node",
+      "args": ["/abs/path/to/cli.mjs", "mcp"]
     }
   }
 }
@@ -52,20 +67,23 @@ aipt ui open
 
 无需配置任何环境变量或 token —— daemon 启动时自动生成,MCP 子进程通过 lockfile 拿。
 
+> `aipt install --ide=cursor` / `aipt install --ide=claude` 可单独只装某一侧。
+
 ---
 
 ## 常用命令
 
-| 命令                        | 作用                                                                 |
-| --------------------------- | -------------------------------------------------------------------- |
-| `aipt install`              | 一键完整安装(写 mcp.json + 注入 hook + 装 skill)                     |
-| `aipt install --ide=cursor` | 仅装 Cursor                                                          |
-| `aipt daemon`               | 前台启动 HTTP daemon(看 daemon 日志时用)                             |
-| `aipt ui open`              | 浏览器打开看板                                                       |
-| `aipt doctor`               | 体检:Node 版本 / runtime / hook / skill / mcp.json / 老数据迁移 9 项 |
-| `aipt migrate`              | 从 `truesight-agent` 平迁老数据                                      |
-| `aipt version`              | 打印版本                                                             |
-| `aipt --help`               | 完整帮助                                                             |
+| 命令                        | 作用                                                                  |
+| --------------------------- | --------------------------------------------------------------------- |
+| `aipt install`              | 一键完整安装(写 cursor + claude mcp 配置 + 注入 hook + 装 skill)      |
+| `aipt install --ide=cursor` | 仅装 Cursor(~/.cursor/mcp.json + hooks.json + rule)                   |
+| `aipt install --ide=claude` | 仅装 Claude Code(~/.claude.json + skill)                              |
+| `aipt daemon`               | 前台启动 HTTP daemon(看 daemon 日志时用)                              |
+| `aipt ui open`              | 浏览器打开看板                                                        |
+| `aipt doctor`               | 体检:Node 版本 / runtime / hook / skill / mcp.json / 老数据迁移 10 项 |
+| `aipt migrate`              | 从 `truesight-agent` 平迁老数据                                       |
+| `aipt version`              | 打印版本                                                              |
+| `aipt --help`               | 完整帮助                                                              |
 
 > 短别名 `aipt` 与全名 `ai-productivity-tracker` 等价。
 
