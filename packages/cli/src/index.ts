@@ -119,6 +119,8 @@ function parseInstallArgs(rest: string[]): InstallArgs {
       args.debug = true
     } else if (a === '--hook-entry') {
       args.hookEntry = rest[++i]
+    } else if (a === '--no-restart-daemon') {
+      args.noRestartDaemon = true
     }
   }
   return args

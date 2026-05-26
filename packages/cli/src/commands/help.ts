@@ -18,6 +18,7 @@ COMMANDS
   install            一键注入 hook + skill 到 IDE 配置
     --ide=cursor|claude|all   (默认 all)
     --debug                   注入 debug 前缀(打印 stdin payload 排错)
+    --no-restart-daemon       跳过 Step 0 的版本对齐(默认会停掉本机版本不一致的 daemon)
   install-mcp        将本 cli 写到 ~/.cursor/mcp.json
   ui open            在浏览器打开看板
   migrate            把 ~/.truesight-local-agent 老数据搬到新根

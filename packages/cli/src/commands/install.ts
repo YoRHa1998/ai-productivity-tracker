@@ -16,6 +16,8 @@
 import { fileURLToPath } from 'node:url'
 
 import { ensureDaemon } from '../lib/ensure-daemon.js'
+import { inspectRunningDaemon, stopRunningDaemon } from '../lib/restart-daemon.js'
+import { VERSION } from '../version.js'
 import { runInstallMcp } from './install-mcp.js'
 
 export type InstallTargetIde = 'cursor' | 'claude' | 'all'
@@ -25,10 +27,22 @@ export interface InstallArgs {
   debug?: boolean
   /** 自定义 hook 入口绝对路径(默认 = 当前 cli 入口) */
   hookEntry?: string
+  /**
+   * v2.18.1 默认 install 时若发现本机 daemon 的运行版本与当前 cli 版本不一致,
+   * 自动停掉老 daemon(后续 ensureDaemon 拉新)。如果用户因为某些罕见原因不想
+   * 自动重启(例如调试老 daemon 行为),传 `--no-restart-daemon` 跳过该步骤。
+   */
+  noRestartDaemon?: boolean
 }
 
 export async function runInstall(args: InstallArgs = {}): Promise<number> {
   const ide = args.ide ?? 'all'
+
+  // Step 0: 版本对齐 —— npm 升级 cli 后,本机老 daemon 进程仍跑旧 ESM bundle,
+  // 导致 install 注入的新 Hook / skill 与运行中 daemon 接口错位(已踩过坑:
+  // rc.13 → rc.14 升级后,看板「数据整理」按钮调用 rc.14 新增的
+  // /merge-split-iterations 端点,被 rc.12 daemon 进程返 404)。
+  await maybeRestartStaleDaemon(args.noRestartDaemon === true)
 
   // Step 1: install-mcp(纯本地配置文件操作,不依赖 daemon)
   if (ide === 'all' || ide === 'cursor') {
@@ -119,4 +133,54 @@ function resolveCliEntry(): string {
   } catch {
     return ''
   }
+}
+
+/**
+ * v2.18.1 Step 0:如果本机正在跑的 daemon 与当前 cli 版本不一致(或 daemon 已挂
+ * 但 lockfile 残留),停掉它让后续 Step 2 的 ensureDaemon 拉新版本。
+ *
+ * 不主动失败:停机超时 / 不在跑 / 已是同版本 都正常返回,install 流程继续。
+ * 老 daemon 通过 SIGTERM 优雅停机(自己会清 runtime.json + 关 watcher);超时
+ * fallback SIGKILL,然后 stopRunningDaemon 兜底强清 lockfile,保证下一步
+ * ensureDaemon 能起干净新 daemon。
+ */
+async function maybeRestartStaleDaemon(skip: boolean): Promise<void> {
+  if (skip) {
+    console.log('Step 0/3: 跳过 daemon 版本检查(--no-restart-daemon)')
+    console.log('')
+    return
+  }
+  const info = await inspectRunningDaemon()
+  if (!info.running) {
+    if (info.lock) {
+      console.log(
+        `Step 0/3: 发现 runtime.json 残留(pid=${info.lock.pid} 已退),清理后由后续步骤拉新 daemon`
+      )
+      // 复用 stopRunningDaemon 的兜底清理路径
+      await stopRunningDaemon()
+    } else {
+      console.log('Step 0/3: 本机暂无 daemon 在运行,后续步骤将自动拉起')
+    }
+    console.log('')
+    return
+  }
+  const daemonVersion = info.daemonVersion ?? '(unknown)'
+  if (daemonVersion === VERSION) {
+    console.log(`Step 0/3: daemon 已是当前 cli 版本 (v${VERSION}),复用`)
+    console.log('')
+    return
+  }
+  console.log(`Step 0/3: 检测到旧版本 daemon (v${daemonVersion} → v${VERSION}),正在优雅停机...`)
+  const stop = await stopRunningDaemon()
+  if (stop.status === 'graceful') {
+    console.log(`  ✓ 旧 daemon (pid=${stop.pid}) 已优雅停机 (耗时 ${stop.durationMs}ms)`)
+  } else if (stop.status === 'forced') {
+    console.log(`  ⚠ 旧 daemon (pid=${stop.pid}) 优雅停机超时,已 SIGKILL 强制结束`)
+  } else if (stop.status === 'timeout') {
+    console.warn(
+      `  ⚠ 旧 daemon (pid=${stop.pid}) SIGKILL 后仍未退,继续执行;若新 daemon 起不来请手动 kill -9 ${stop.pid}`
+    )
+  }
+  console.log('  下一步会自动拉起新版本 daemon')
+  console.log('')
 }
