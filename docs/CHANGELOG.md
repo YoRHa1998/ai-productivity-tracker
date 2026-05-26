@@ -10,6 +10,50 @@
 
 ## [Unreleased]
 
+### Added
+
+**v1.0.0-rc.18 Cursor 链路 `thinkSeconds` 精准化:接入 `beforeSubmitPrompt` / `afterAgentThought` 两个 hook 事件**
+
+旧版 Cursor `afterAgentResponse` 单点没有本轮起点信号,只能用「上一次 hook → 本次 hook」近似 thinkSeconds + 60s
+cap(`ACTIVE_GAP_SECONDS_CURSOR`)。对 `claude-opus-4-7-thinking-xhigh` 等 thinking 模型,实测一次 turn 真实 wall
+time 常态 60s ~ 5min,被 60s cap 大量截断 — INSTANT-5321 近 9 条 iteration 抽样 5 条严格 = 60s。看板表象就是
+「AI 思考时间普遍在 1m 中以内,实际更久」。
+
+本期接入 Cursor 3.5.x 已支持的两个 hook 事件,把这块口径补到 Claude Code 同等精度:
+
+- **`beforeSubmitPrompt`**:用户提交 prompt 瞬间触发,带 `conversation_id` / `generation_id`,记录本轮真实起点。
+- **`afterAgentThought`**:每个 thinking 块结束触发,带 `duration_ms`,累加得「纯模型思考时间」。
+
+链路:
+
+1. daemon 新增 `POST /ai-productivity/turn-start` / `/turn-thought` 端点,内存 Map `cursorTurnStarts` 按
+   `${conversation_id}|${generation_id}` 暂存 `{ startedAt, thoughtDurationMs }`,FIFO 上限 200、30min TTL 过期清理。
+2. `aipt hook` 入口按 `hook_event_name` 分流到 turn-start / turn-thought / iteration 三条 daemon 路径。
+3. `afterAgentResponse` 路径消费对应 entry,把 `turnStartedAt` + `pureThinkSeconds` 透传给 `buildIterationExtras`
+   → iteration 落盘时 `thinkSeconds` 走真实 wall time(沿用 300s cap),并新增 `pureThinkSeconds` 字段。
+4. `install-cursor-hook` 同步把 `beforeSubmitPrompt` + `afterAgentThought` + `afterAgentResponse` 3 个事件并行
+   注入 `~/.cursor/hooks.json`,marker `# ai-productivity-hook` 共用,旧 daemon / 老 hook 走 60s fallback 兼容。
+5. 看板 timeline 「本轮 AI 思考」加 hover tooltip,wall time + 纯思考双行展示;纯思考字段缺失(Claude Code / 老
+   数据)时仅显示 wall time。
+
+向前兼容:`StoredIteration.pureThinkSeconds` / `IterationRow.pureThinkSeconds` 都是可选字段,老数据反序列化
+保留 `undefined`,UI / boost 公式零影响。`inspectCursorHook` 返回 `perEvent` 子结构,任一事件缺失则
+`hookInstalled=false`,看板/doctor 据此精准提示「缺哪条」。
+
+用户升级路径:`npm i -g @ai-productivity-tracker/cli@latest` → `aipt install` → 重启 IDE。
+新写入的 hooks.json 同时含 3 个事件,marker 覆盖式更新,不影响其它 IDE 工具条目。
+
+测试覆盖:
+
+- `hook-core/src/hook.spec.ts` 新增 `classifyHookEvent` 6 例用例
+- `hook-core/src/install-cursor-hook.spec.ts` 既有 3 例改造 + 新增「仅装老 afterAgentResponse → hookInstalled=false」
+- `server/src/routes/ai-productivity.spec.ts` 新增 `handleAiProductivityTurnStart` / `handleAiProductivityTurnThought`
+  共 9 例 + `handleAiProductivityHook + cursorTurnStarts 联动` 2 例端到端(命中真实 180s wall + 4s 纯思考;无命中 60s fallback)
+- `core/src/iteration-extras.spec.ts` 新增 pureThinkSeconds 透传单测
+- `core/src/store/iteration-store.spec.ts` `mergeIterationPair` 补 pureThinkSeconds 合并 3 个边界
+
+基线:710 例全绿(从 690 增量 20 例)。
+
 ### Fixed
 
 **v2.14.1 `transcript-watcher` 60s `stale_timeout` 阈值过激,导致 Claude Code 经验提取 / 长 MCP 工具流程被切成多条 iteration**
