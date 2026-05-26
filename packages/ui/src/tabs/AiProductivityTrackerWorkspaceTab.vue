@@ -27,6 +27,8 @@ import {
   type SummaryMetrics
 } from '../api'
 import { fetchCurrentSession } from '../lib/session'
+import { useNumberFlow } from '../composables/useNumberFlow'
+import SparkLine from '../charts/SparkLine.vue'
 import '../styles/aip-shared.css'
 
 const loading = ref(false)
@@ -395,6 +397,95 @@ function iterationChipClass(kind: string) {
   return 'aip-chip--primary'
 }
 
+/**
+ * 14 天 metric 趋势:基于 requirements 数组按 `latestIterationAt` 分桶。
+ *
+ * daemon 暂未提供按日聚合接口,前端做一次轻量分桶用于 sparkline / trend chart。
+ * 数据稀疏时(< 14 天)前面 padding 0,保持长度恒为 14。
+ */
+function bucketByDays<T>(
+  list: T[],
+  days: number,
+  pick: (item: T) => { date: string | null; value: number }
+): number[] {
+  const buckets = new Array<number>(days).fill(0)
+  const now = new Date()
+  now.setHours(0, 0, 0, 0)
+  const cutoffMs = now.getTime() - (days - 1) * 86400_000
+  for (const item of list) {
+    const { date, value } = pick(item)
+    if (!date) continue
+    const t = Date.parse(date)
+    if (Number.isNaN(t)) continue
+    if (t < cutoffMs) continue
+    const dayStart = new Date(t)
+    dayStart.setHours(0, 0, 0, 0)
+    const idx = Math.floor((dayStart.getTime() - cutoffMs) / 86400_000)
+    if (idx < 0 || idx >= days) continue
+    buckets[idx] += value
+  }
+  return buckets
+}
+
+const TREND_DAYS = 14
+
+const trendRequirements = computed<number[]>(() =>
+  bucketByDays(requirements.value, TREND_DAYS, (r) => ({
+    date: r.createdAt,
+    value: 1
+  }))
+)
+
+const trendBoostAvg = computed<number[]>(() => {
+  const sums = new Array<number>(TREND_DAYS).fill(0)
+  const counts = new Array<number>(TREND_DAYS).fill(0)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const cutoffMs = today.getTime() - (TREND_DAYS - 1) * 86400_000
+  for (const r of requirements.value) {
+    if (r.metrics.boost == null) continue
+    const t = r.latestIterationAt ? Date.parse(r.latestIterationAt) : Date.parse(r.updatedAt)
+    if (Number.isNaN(t) || t < cutoffMs) continue
+    const idx = Math.floor((t - cutoffMs) / 86400_000)
+    if (idx < 0 || idx >= TREND_DAYS) continue
+    sums[idx] += r.metrics.boost
+    counts[idx] += 1
+  }
+  return sums.map((s, i) => (counts[i] ? Number((s / counts[i]).toFixed(2)) : 0))
+})
+
+const trendBugs = computed<number[]>(() =>
+  bucketByDays(requirements.value, TREND_DAYS, (r) => ({
+    date: r.bugsRefreshedAt ?? r.updatedAt,
+    value: r.linkedBugCount
+  }))
+)
+
+const trendToken = computed<number[]>(() =>
+  bucketByDays(requirements.value, TREND_DAYS, (r) => ({
+    date: r.latestIterationAt ?? r.updatedAt,
+    value: r.metrics.latestCumulativeToken
+  }))
+)
+
+/** v1.0 数字滚动:首屏从 0 滚到目标值,后续指标变化亦有平滑过渡 */
+const totalReqFlow = useNumberFlow(
+  computed(() => summary.value?.totalRequirements ?? 0),
+  { duration: 900 }
+)
+const totalBugFlow = useNumberFlow(
+  computed(() => summary.value?.totalBugCount ?? 0),
+  { duration: 900 }
+)
+const totalTokenFlow = useNumberFlow(
+  computed(() => summary.value?.totalToken ?? 0),
+  { duration: 1200 }
+)
+const avgBoostFlow = useNumberFlow(
+  computed(() => summary.value?.averageBoost ?? 0),
+  { duration: 900 }
+)
+
 async function loadCurrentOwner() {
   try {
     const session = await fetchCurrentSession()
@@ -412,88 +503,93 @@ onMounted(() => {
 
 <template>
   <section class="aip-workspace">
-    <!-- 指标卡 -->
+    <!-- 页面 header:标题 + 副标题 + 主操作 -->
+    <header class="aip-workspace__header">
+      <div class="aip-workspace__heading">
+        <h1 class="aip-workspace__page-title aipt-aurora-text">需求看板</h1>
+        <p class="aip-workspace__page-sub">
+          全部由本机 daemon 实时聚合 · 共追踪 {{ summary?.totalRequirements ?? 0 }} 个 Jira 需求
+        </p>
+      </div>
+      <div class="aip-workspace__heading-actions">
+        <button
+          type="button"
+          class="aip-workspace__icon-btn"
+          :class="{ 'is-loading': loading }"
+          title="刷新需求列表与汇总"
+          @click="loadList"
+        >
+          <i class="i-lucide-refresh-cw"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- 指标卡 (内嵌 sparkline) -->
     <div class="aip-workspace__metrics">
-      <div class="aip-metric">
-        <div class="aip-metric__icon aip-metric__icon--primary">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M9 11h6M9 15h4M5 21V5a2 2 0 0 1 2-2h7l5 5v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linejoin="round"
-            />
-          </svg>
+      <article class="aip-metric aip-metric--with-spark">
+        <div class="aip-metric__top">
+          <div class="aip-metric__icon aip-metric__icon--primary">
+            <i class="i-lucide-layout-list"></i>
+          </div>
+          <div class="aip-metric__body">
+            <span class="aip-metric__label">跟踪需求数</span>
+            <strong class="aip-metric__value aipt-num">{{ Math.round(totalReqFlow) }}</strong>
+            <span class="aip-metric__hint"
+              >进行中 {{ summary?.inProgressCount ?? 0 }} · 已完成
+              {{ summary?.finishedCount ?? 0 }}</span
+            >
+          </div>
         </div>
-        <div class="aip-metric__body">
-          <span class="aip-metric__label">跟踪需求数</span>
-          <strong class="aip-metric__value">{{ summary?.totalRequirements ?? 0 }}</strong>
-          <span class="aip-metric__hint"
-            >进行中 {{ summary?.inProgressCount ?? 0 }} · 已完成
-            {{ summary?.finishedCount ?? 0 }}</span
-          >
-        </div>
-      </div>
+        <SparkLine :data="trendRequirements" color="#6ea7f5" :height="36" />
+      </article>
 
-      <div class="aip-metric aip-metric--highlight">
-        <div class="aip-metric__icon aip-metric__icon--success">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path
-              d="m13 2-1 11h7l-9 9 1-11H4l9-9Z"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linejoin="round"
-            />
-          </svg>
+      <article class="aip-metric aip-metric--with-spark aip-metric--highlight">
+        <div class="aip-metric__top">
+          <div class="aip-metric__icon aip-metric__icon--success">
+            <i class="i-lucide-zap"></i>
+          </div>
+          <div class="aip-metric__body">
+            <span class="aip-metric__label">平均提效倍数</span>
+            <strong class="aip-metric__value aipt-num">{{
+              summary?.averageBoost == null ? '-' : `${avgBoostFlow.toFixed(2)}×`
+            }}</strong>
+            <span class="aip-metric__hint">公式可在 设置 · 基础 调整</span>
+          </div>
         </div>
-        <div class="aip-metric__body">
-          <span class="aip-metric__label">平均提效倍数</span>
-          <strong class="aip-metric__value">{{
-            formatBoost(summary?.averageBoost ?? null)
-          }}</strong>
-          <span class="aip-metric__hint">公式可在 Settings 页调整</span>
-        </div>
-      </div>
+        <SparkLine :data="trendBoostAvg" color="#9fe5d4" :height="36" />
+      </article>
 
-      <div class="aip-metric">
-        <div class="aip-metric__icon aip-metric__icon--warm">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M9 9V7a3 3 0 0 1 6 0v2m-9 4h12l-1 9H7l-1-9Z"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linejoin="round"
-            />
-          </svg>
+      <article class="aip-metric aip-metric--with-spark">
+        <div class="aip-metric__top">
+          <div class="aip-metric__icon aip-metric__icon--warm">
+            <i class="i-lucide-bug"></i>
+          </div>
+          <div class="aip-metric__body">
+            <span class="aip-metric__label">总关联 Bug</span>
+            <strong class="aip-metric__value aipt-num">{{ Math.round(totalBugFlow) }}</strong>
+            <span class="aip-metric__hint">来自 Jira 关联查询</span>
+          </div>
         </div>
-        <div class="aip-metric__body">
-          <span class="aip-metric__label">总关联 Bug</span>
-          <strong class="aip-metric__value">{{ summary?.totalBugCount ?? 0 }}</strong>
-          <span class="aip-metric__hint">来自 Jira 关联查询</span>
-        </div>
-      </div>
+        <SparkLine :data="trendBugs" color="#f0a6c8" :height="36" />
+      </article>
 
-      <div class="aip-metric">
-        <div class="aip-metric__icon aip-metric__icon--muted">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6" />
-            <path
-              d="M12 7v5l3 2"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
+      <article class="aip-metric aip-metric--with-spark">
+        <div class="aip-metric__top">
+          <div class="aip-metric__icon aip-metric__icon--muted">
+            <i class="i-lucide-coins"></i>
+          </div>
+          <div class="aip-metric__body">
+            <span class="aip-metric__label">总 Token</span>
+            <strong
+              class="aip-metric__value aipt-num"
+              :title="formatTokenTitle(summary?.totalToken ?? 0)"
+              >{{ formatTokenCount(Math.round(totalTokenFlow)) }}</strong
+            >
+            <span class="aip-metric__hint">Hook 自动累计</span>
+          </div>
         </div>
-        <div class="aip-metric__body">
-          <span class="aip-metric__label">总 Token</span>
-          <strong class="aip-metric__value" :title="formatTokenTitle(summary?.totalToken ?? 0)">{{
-            formatTokenCount(summary?.totalToken ?? 0)
-          }}</strong>
-          <span class="aip-metric__hint">Hook 自动累计</span>
-        </div>
-      </div>
+        <SparkLine :data="trendToken" color="#86c5e8" :height="36" />
+      </article>
     </div>
 
     <!-- 工具栏 -->
@@ -1060,20 +1156,108 @@ onMounted(() => {
 <style scoped>
 .aip-workspace {
   display: grid;
-  gap: 16px;
-  padding: 24px;
+  gap: var(--aipt-space-5);
+  padding: 0;
+  max-width: var(--aipt-content-max-w);
+  margin: 0 auto;
 }
 
+/* ===== Page header ===== */
+.aip-workspace__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--aipt-space-4);
+  flex-wrap: wrap;
+}
+
+.aip-workspace__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aip-workspace__page-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.aip-workspace__page-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--aipt-text-muted);
+}
+
+.aip-workspace__heading-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aipt-space-2);
+}
+
+.aip-workspace__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-surface);
+  border: 1px solid var(--aipt-border);
+  color: var(--aipt-text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--aipt-duration-base) var(--aipt-easing-out),
+    color var(--aipt-duration-base) var(--aipt-easing-out);
+}
+
+.aip-workspace__icon-btn:hover {
+  background: var(--aipt-surface-hover);
+  color: var(--aipt-text);
+}
+
+.aip-workspace__icon-btn i {
+  font-size: 16px;
+}
+
+.aip-workspace__icon-btn.is-loading i {
+  animation: aip-spin 1s linear infinite;
+}
+
+/* ===== Metrics ===== */
 .aip-workspace__metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--aipt-space-3);
+}
+
+.aip-metric--with-spark {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipt-space-2);
+  padding: var(--aipt-space-4) var(--aipt-space-4);
+}
+
+.aip-metric__top {
+  display: flex;
+  align-items: center;
+  gap: var(--aipt-space-3);
+}
+
+.aip-metric__top .aip-metric__body {
+  flex: 1;
+}
+
+.aip-metric__top .aip-metric__icon i {
+  font-size: 18px;
 }
 
 .aip-workspace__toolbar-count {
   margin-left: auto;
   font-size: 12px;
-  color: var(--text-soft);
+  color: var(--aipt-text-muted);
 }
 
 .aip-workspace__refresh-spin {
@@ -1088,7 +1272,7 @@ onMounted(() => {
 
 /* 表格 wrap 调整 progress 条颜色 */
 .aip-workspace__table :deep(.el-progress-bar__inner) {
-  background: linear-gradient(90deg, var(--accent-primary, #4f6ef5), #6b8af7);
+  background: var(--aipt-gradient-aurora);
 }
 
 .aip-workspace__table :deep(.el-progress) {
@@ -1096,17 +1280,26 @@ onMounted(() => {
 }
 
 .aip-workspace__table :deep(.el-progress-bar__outer) {
-  background: rgba(96, 114, 153, 0.12);
+  background: var(--aipt-surface-strong);
 }
 
 .aip-workspace__table :deep(.el-table__row) {
   cursor: pointer;
+  transition: background var(--aipt-duration-base) var(--aipt-easing-out);
+}
+
+.aip-workspace__table :deep(.el-table__row:hover) {
+  box-shadow: inset 0 0 0 1px rgba(110, 167, 245, 0.2);
 }
 
 .aip-workspace__boost {
   font-weight: 700;
-  font-size: 13.5px;
-  color: #2d9a53;
+  font-size: 14px;
+  background: var(--aipt-gradient-mint);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1237,14 +1430,47 @@ onMounted(() => {
 
 /* Boost Hero */
 .aip-drawer__boost {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 18px 20px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(52, 199, 89, 0.08), rgba(79, 110, 245, 0.06));
-  border: 1px solid rgba(52, 199, 89, 0.18);
+  padding: 20px 22px;
+  border-radius: var(--aipt-radius-lg);
+  background: var(--aipt-surface);
+  border: 1px solid var(--aipt-border);
+  backdrop-filter: blur(var(--aipt-blur-md)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--aipt-blur-md)) saturate(140%);
+  overflow: hidden;
+  box-shadow: var(--aipt-shadow-glow);
+}
+
+.aip-drawer__boost::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--aipt-gradient-aurora-soft);
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.aip-drawer__boost::after {
+  content: '';
+  position: absolute;
+  right: -100px;
+  top: -100px;
+  width: 260px;
+  height: 260px;
+  background: var(--aipt-gradient-mint);
+  opacity: 0.18;
+  filter: blur(60px);
+  pointer-events: none;
+  border-radius: 50%;
+}
+
+.aip-drawer__boost > * {
+  position: relative;
+  z-index: 1;
 }
 
 .aip-drawer__boost-side {
@@ -1344,13 +1570,17 @@ onMounted(() => {
 }
 
 .aip-drawer__boost-main {
-  font-size: 36px;
+  font-size: 38px;
   font-weight: 800;
-  color: #2d9a53;
+  background: var(--aipt-gradient-mint);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  text-shadow: 0 2px 12px rgba(52, 199, 89, 0.18);
+  filter: drop-shadow(0 4px 18px rgba(159, 229, 212, 0.32));
 }
 
 .aip-drawer__boost-caption {
@@ -1655,8 +1885,10 @@ onMounted(() => {
 
 @media (max-width: 640px) {
   .aip-workspace {
-    padding: 18px;
-    gap: 14px;
+    gap: var(--aipt-space-4);
+  }
+  .aip-workspace__page-title {
+    font-size: 22px;
   }
 }
 </style>

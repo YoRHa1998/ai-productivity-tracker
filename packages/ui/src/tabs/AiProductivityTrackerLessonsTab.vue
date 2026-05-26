@@ -24,6 +24,7 @@ import {
   type LessonSummary,
   type LessonType
 } from '../api'
+import DonutMetric from '../charts/DonutMetric.vue'
 import '../styles/aip-shared.css'
 
 /**
@@ -166,6 +167,28 @@ const stats = computed(() => {
   return counts
 })
 
+const TYPE_COLOR: Record<LessonType, string> = {
+  pitfall: '#f08597',
+  rule: '#6ea7f5',
+  'best-practice': '#9fe5d4',
+  'split-suggestion': '#f5c489',
+  tooling: 'rgba(255,255,255,0.28)'
+}
+
+const typeDistribution = computed(() => {
+  const slices: Array<{ name: string; value: number; color: string }> = []
+  for (const opt of TYPE_OPTIONS) {
+    const v = stats.value[opt.value]
+    if (v <= 0) continue
+    slices.push({
+      name: TYPE_META[opt.value].label,
+      value: v,
+      color: TYPE_COLOR[opt.value]
+    })
+  }
+  return slices
+})
+
 async function refresh(): Promise<void> {
   loading.value = true
   errorMessage.value = ''
@@ -237,53 +260,42 @@ onMounted(() => {
 
 <template>
   <section class="aip-lessons">
-    <header class="aip-hero aip-hero--compact aip-lessons__hero">
-      <div class="aip-hero__left">
-        <div class="aip-hero__icon" aria-hidden="true">
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M3 19a2 2 0 0 1 2-2h14"></path>
-            <path d="M5 5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14V5z"></path>
-            <path d="M9 9h6"></path>
-            <path d="M9 13h4"></path>
-          </svg>
-        </div>
-        <div class="aip-hero__info">
-          <div class="aip-hero__title-row">
-            <h2>复盘经验</h2>
-            <span class="aip-chip aip-chip--solid aip-hero__badge">P0</span>
-          </div>
-          <p>
-            每个需求结束时使用关键词「经验提取」由 IDE LLM 触发 lessons-extract
-            skill,落盘的多维度经验在此统一展示。
-          </p>
-        </div>
+    <header class="aip-lessons__page-header">
+      <div class="aip-lessons__heading">
+        <h1 class="aip-lessons__page-title aipt-aurora-text">复盘经验</h1>
+        <p class="aip-lessons__page-sub">
+          每个需求结束时用「经验提取」触发 lessons-extract skill,5 维度可复用经验沉淀于此
+        </p>
       </div>
-      <div class="aip-hero__cta">
-        <ElButton size="small" @click="copyTriggerHint">复制触发口令</ElButton>
+      <div class="aip-lessons__heading-actions">
+        <ElButton size="small" plain @click="copyTriggerHint">复制触发口令</ElButton>
         <ElButton size="small" :loading="loading" type="primary" @click="refresh">刷新</ElButton>
       </div>
     </header>
 
-    <div class="aip-lessons__metrics">
-      <div
-        v-for="meta in TYPE_OPTIONS"
-        :key="meta.value"
-        class="aip-lessons__metric"
-        @click="filterType = filterType === meta.value ? '' : meta.value"
-        :class="{ 'aip-lessons__metric--active': filterType === meta.value }"
-      >
-        <span class="aip-chip" :class="TYPE_META[meta.value].chip">{{ meta.label }}</span>
-        <span class="aip-lessons__metric-count">{{ stats[meta.value] }}</span>
+    <div class="aip-lessons__overview">
+      <div class="aip-lessons__metrics">
+        <button
+          v-for="meta in TYPE_OPTIONS"
+          :key="meta.value"
+          type="button"
+          class="aip-lessons__metric aipt-glass aipt-glow"
+          :class="{ 'is-active': filterType === meta.value }"
+          @click="filterType = filterType === meta.value ? '' : meta.value"
+        >
+          <span class="aip-lessons__metric-dot" :style="{ background: TYPE_COLOR[meta.value] }" />
+          <span class="aip-lessons__metric-label">{{ meta.label }}</span>
+          <span class="aip-lessons__metric-count aipt-num">{{ stats[meta.value] }}</span>
+        </button>
       </div>
+      <DonutMetric
+        title="经验类型占比"
+        subtitle="点击左侧分类卡可一键筛选"
+        :data="typeDistribution"
+        :center-value="lessons.length"
+        center-label="总数"
+        :height="180"
+      />
     </div>
 
     <div class="aip-toolbar aip-lessons__toolbar">
@@ -557,70 +569,124 @@ onMounted(() => {
 <style scoped>
 .aip-lessons {
   display: grid;
-  gap: 16px;
-  padding: 24px;
+  gap: var(--aipt-space-5);
+  max-width: var(--aipt-content-max-w);
+  margin: 0 auto;
 }
 
-.aip-lessons__hero {
+.aip-lessons__page-header {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--aipt-space-4);
+  flex-wrap: wrap;
+}
+
+.aip-lessons__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aip-lessons__page-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.aip-lessons__page-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--aipt-text-muted);
+}
+
+.aip-lessons__heading-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aipt-space-2);
+}
+
+.aip-lessons__overview {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--aipt-space-3);
+  align-items: stretch;
+}
+
+@media (max-width: 960px) {
+  .aip-lessons__overview {
+    grid-template-columns: 1fr;
+  }
 }
 
 .aip-lessons__metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px;
+  gap: var(--aipt-space-3);
+  align-content: start;
 }
 
 .aip-lessons__metric {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--border-subtle, rgba(96, 114, 153, 0.12));
-  background: var(--surface-elevated, #fff);
+  gap: var(--aipt-space-3);
+  padding: var(--aipt-space-3) var(--aipt-space-4);
   cursor: pointer;
-  transition:
-    transform 0.2s,
-    box-shadow 0.2s,
-    border-color 0.2s;
+  border-radius: var(--aipt-radius-md);
+  font: inherit;
+  color: inherit;
+  text-align: left;
 }
 
-.aip-lessons__metric:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+.aip-lessons__metric.is-active {
+  border-color: rgba(110, 167, 245, 0.5);
+  background: rgba(110, 167, 245, 0.14);
+  box-shadow: var(--aipt-shadow-glow);
 }
 
-.aip-lessons__metric--active {
-  border-color: var(--accent-primary, #4f6ef5);
-  box-shadow: 0 4px 14px rgba(79, 110, 245, 0.18);
+.aip-lessons__metric-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 12px currentColor;
+}
+
+.aip-lessons__metric-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--aipt-text-secondary);
+}
+
+.aip-lessons__metric.is-active .aip-lessons__metric-label {
+  color: var(--aipt-text);
 }
 
 .aip-lessons__metric-count {
   font-size: 18px;
-  font-weight: 700;
-  color: var(--text-primary);
+  font-weight: 800;
+  color: var(--aipt-text-strong);
+  letter-spacing: -0.02em;
 }
 
 .aip-lessons__toolbar {
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--aipt-space-2);
 }
 
 .aip-lessons__toolbar-count {
   margin-left: auto;
   font-size: 12px;
-  color: var(--text-soft);
+  color: var(--aipt-text-muted);
 }
 
 .aip-lessons__title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--aipt-text);
   line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -641,7 +707,16 @@ onMounted(() => {
 
 .aip-lessons__time {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--aipt-text-secondary);
+}
+
+.aip-lessons__table {
+  border-radius: var(--aipt-radius-lg);
+  overflow: hidden;
+  background: var(--aipt-surface);
+  border: 1px solid var(--aipt-border);
+  backdrop-filter: blur(var(--aipt-blur-md)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--aipt-blur-md)) saturate(140%);
 }
 
 .aip-lessons__table :deep(.el-table__row) {
@@ -651,20 +726,20 @@ onMounted(() => {
 .aip-lessons__drawer-loading {
   padding: 36px;
   text-align: center;
-  color: var(--text-secondary);
+  color: var(--aipt-text-secondary);
 }
 
 .aip-lessons__drawer {
   display: grid;
-  gap: 18px;
+  gap: 20px;
   padding: 28px 32px;
 }
 
 .aip-lessons__drawer-header {
   display: grid;
-  gap: 8px;
-  border-bottom: 1px solid var(--border-subtle, rgba(96, 114, 153, 0.12));
-  padding-bottom: 16px;
+  gap: 10px;
+  border-bottom: 1px solid var(--aipt-border);
+  padding-bottom: 18px;
 }
 
 .aip-lessons__drawer-meta {
@@ -675,32 +750,33 @@ onMounted(() => {
 
 .aip-lessons__drawer-title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text-primary);
-  line-height: 1.45;
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--aipt-text-strong);
+  line-height: 1.35;
+  letter-spacing: -0.02em;
 }
 
 .aip-lessons__drawer-subtitle {
   margin: 0;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--aipt-text-secondary);
   line-height: 1.55;
 }
 
 .aip-lessons__drawer-section h4 {
   margin: 0 0 6px 0;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: 0.04em;
+  color: var(--aipt-text-muted);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .aip-lessons__drawer-section p {
   margin: 0;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--aipt-text-secondary);
   line-height: 1.7;
   white-space: pre-wrap;
 }
@@ -721,10 +797,11 @@ onMounted(() => {
 
 .aip-lessons__drawer-files code {
   font-size: 12px;
-  color: var(--text-primary);
-  background: rgba(96, 114, 153, 0.08);
+  color: var(--aipt-text);
+  background: var(--aipt-surface);
   padding: 2px 6px;
   border-radius: 4px;
+  border: 1px solid var(--aipt-border-faint);
 }
 
 .aip-lessons__drawer-footer {
@@ -733,8 +810,8 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   font-size: 11px;
-  color: var(--text-soft);
-  border-top: 1px solid var(--border-subtle, rgba(96, 114, 153, 0.1));
+  color: var(--aipt-text-muted);
+  border-top: 1px solid var(--aipt-border);
   padding-top: 14px;
 }
 
@@ -742,5 +819,14 @@ onMounted(() => {
   margin-left: auto;
   font-family: 'Menlo', 'Monaco', monospace;
   letter-spacing: 0.04em;
+}
+
+@media (max-width: 640px) {
+  .aip-lessons {
+    gap: var(--aipt-space-4);
+  }
+  .aip-lessons__page-title {
+    font-size: 22px;
+  }
 }
 </style>
