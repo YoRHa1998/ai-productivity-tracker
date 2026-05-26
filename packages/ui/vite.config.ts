@@ -1,9 +1,12 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type PluginOption } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import UnoCSS from 'unocss/vite'
 import { fileURLToPath } from 'node:url'
 
+// UnoCSS 的 vite plugin 在 monorepo 中可能被 vitest 拉的 vite@5 干扰类型推导,
+// 显式 cast 到 vite@6 的 PluginOption 避免 vue-tsc 报跨版本类型不兼容。
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [UnoCSS() as PluginOption, vue()],
   base: './',
   resolve: {
     alias: {
@@ -20,7 +23,9 @@ export default defineConfig({
       output: {
         manualChunks: {
           'element-plus': ['element-plus'],
-          marked: ['marked']
+          // echarts/core + 按需 chart/component 单独拆 chunk,首屏 lazy 加载
+          echarts: ['echarts/core', 'echarts/charts', 'echarts/components', 'echarts/renderers'],
+          'vue-echarts': ['vue-echarts']
         }
       }
     }
