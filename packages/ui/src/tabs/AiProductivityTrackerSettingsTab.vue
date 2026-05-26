@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElButton, ElForm, ElFormItem, ElInput, ElInputNumber, ElMessage } from 'element-plus'
 
 import {
@@ -10,10 +10,12 @@ import {
   type FormulaSettings,
   type JiraPluginConfigPayload
 } from '../api'
-import AipAgentStatusCard from '../components/AipAgentStatusCard.vue'
+import { useAgentContext } from '../composables/useAgentContext'
 import '../styles/aip-shared.css'
 
-const agentReady = ref(false)
+const { state: agentState } = useAgentContext()
+const agentReady = computed(() => agentState.value.agent.ok)
+const initialized = ref(false)
 
 const formula = reactive<FormulaSettings>({
   kBug: 0.15,
@@ -85,27 +87,30 @@ async function handleSaveJiraConfig(): Promise<void> {
   }
 }
 
-async function handleAgentReady(ready: boolean): Promise<void> {
-  agentReady.value = ready
-  if (!ready) return
-  await Promise.allSettled([loadFormula(), loadJiraConfig()])
-}
-
-onMounted(() => {
-  // AipAgentStatusCard 的 onMounted 会触发 emit('ready', ...) 由 handleAgentReady 处理。
-  // 这里无需额外初始化,保留生命周期钩子用于未来扩展。
-})
+// agent 在线后(useAgentContext 30s 轮询发现 daemon 起来)首次加载表单数据
+watch(
+  agentReady,
+  async (ready) => {
+    if (!ready || initialized.value) return
+    initialized.value = true
+    await Promise.allSettled([loadFormula(), loadJiraConfig()])
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
   <section class="aip-settings">
-    <AipAgentStatusCard variant="business" @ready="handleAgentReady" />
+    <p v-if="!agentReady" class="aip-settings__offline aipt-glass">
+      <span class="aipt-status-dot aipt-status-dot--danger"></span>
+      <span>Daemon 当前离线,基础配置暂时无法读写。请到「设置 · Daemon 状态」检查并启动。</span>
+    </p>
 
     <!-- 提效公式 -->
-    <article class="aip-card">
+    <article class="aip-card aip-card--accent">
       <header class="aip-card__header">
         <h3 class="aip-card__title">
-          <span class="aip-card__title-icon">∑</span>
+          <span class="aip-card__title-icon"><i class="i-lucide-sigma"></i></span>
           提效公式
         </h3>
       </header>
@@ -147,10 +152,10 @@ onMounted(() => {
     </article>
 
     <!-- Jira 凭证 -->
-    <article class="aip-card">
+    <article class="aip-card aip-card--accent">
       <header class="aip-card__header">
         <h3 class="aip-card__title">
-          <span class="aip-card__title-icon">J</span>
+          <span class="aip-card__title-icon"><i class="i-lucide-ticket"></i></span>
           Jira 查询凭证
         </h3>
         <span v-if="jiraConfig.configured" class="aip-chip aip-chip--success">已配置</span>
@@ -218,19 +223,35 @@ onMounted(() => {
 <style scoped>
 .aip-settings {
   display: grid;
-  gap: 16px;
-  padding: 24px;
+  gap: var(--aipt-space-4);
+}
+
+.aip-settings__offline {
+  display: flex;
+  align-items: center;
+  gap: var(--aipt-space-2);
+  margin: 0;
+  padding: var(--aipt-space-3) var(--aipt-space-4);
+  border-radius: var(--aipt-radius-md);
+  font-size: 13px;
+  color: var(--aipt-state-danger);
 }
 
 .aip-settings__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 16px;
+  gap: var(--aipt-space-3) var(--aipt-space-4);
 }
 
 .aip-settings__form-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--aipt-space-2);
+}
+
+@media (max-width: 640px) {
+  .aip-settings__grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

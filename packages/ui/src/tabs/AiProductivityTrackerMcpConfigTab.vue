@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElButton, ElMessage, ElMessageBox } from 'element-plus'
 
 import {
@@ -12,7 +12,7 @@ import {
   type TrackSkillStatus,
   type WatcherStatus
 } from '../api'
-import AipAgentStatusCard from '../components/AipAgentStatusCard.vue'
+import { useAgentContext } from '../composables/useAgentContext'
 import '../styles/aip-shared.css'
 
 const installCliCommand = 'npm install -g @ai-productivity-tracker/cli'
@@ -21,7 +21,9 @@ const aiptInstallCursorOnlyCommand = 'aipt install --ide=cursor'
 const aiptInstallClaudeOnlyCommand = 'aipt install --ide=claude'
 const aiptDoctorCommand = 'aipt doctor'
 
-const agentReady = ref(false)
+const { state: agentState } = useAgentContext()
+const agentReady = computed(() => agentState.value.agent.ok)
+const initialized = ref(false)
 
 const watcher = ref<WatcherStatus | null>(null)
 const watcherLoading = ref(false)
@@ -276,22 +278,29 @@ async function confirmInstallDebug(): Promise<void> {
   }
 }
 
-async function handleAgentReady(ready: boolean): Promise<void> {
-  agentReady.value = ready
-  if (!ready) return
-  await Promise.allSettled([loadWatcher(), loadCursorHook(), loadTrackSkill()])
-}
+watch(
+  agentReady,
+  async (ready) => {
+    if (!ready || initialized.value) return
+    initialized.value = true
+    await Promise.allSettled([loadWatcher(), loadCursorHook(), loadTrackSkill()])
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
   <section class="aip-settings">
-    <AipAgentStatusCard variant="mcp" @ready="handleAgentReady" />
+    <p v-if="!agentReady" class="aip-settings__offline aipt-glass">
+      <span class="aipt-status-dot aipt-status-dot--danger"></span>
+      <span>Daemon 当前离线,以下「一键注入」按钮暂时无法工作,先到 Daemon 状态页排查。</span>
+    </p>
 
     <!-- 推荐:命令行一键集成 -->
     <article class="aip-card aip-card--accent">
       <header class="aip-card__header">
         <h3 class="aip-card__title">
-          <span class="aip-card__title-icon">⚡</span>
+          <span class="aip-card__title-icon"><i class="i-lucide-zap"></i></span>
           推荐:命令行一键集成
         </h3>
         <span class="aip-chip aip-chip--success">主路径</span>
@@ -359,7 +368,7 @@ async function handleAgentReady(ready: boolean): Promise<void> {
     <article class="aip-card">
       <header class="aip-card__header">
         <h3 class="aip-card__title">
-          <span class="aip-card__title-icon">▶</span>
+          <span class="aip-card__title-icon"><i class="i-lucide-play"></i></span>
           Cursor 自动追踪(afterAgentResponse Hook)
         </h3>
         <span :class="cursorHookStatusClass">{{ cursorHookStatusLabel }}</span>
@@ -402,7 +411,7 @@ async function handleAgentReady(ready: boolean): Promise<void> {
     <article class="aip-card">
       <header class="aip-card__header">
         <h3 class="aip-card__title">
-          <span class="aip-card__title-icon">✎</span>
+          <span class="aip-card__title-icon"><i class="i-lucide-edit-3"></i></span>
           AI 对话总结 Skill / Rule
         </h3>
         <span :class="trackSkillSummaryClass">{{ trackSkillSummaryLabel }}</span>
@@ -516,7 +525,7 @@ async function handleAgentReady(ready: boolean): Promise<void> {
     <article class="aip-card">
       <header class="aip-card__header">
         <h3 class="aip-card__title">
-          <span class="aip-card__title-icon">◎</span>
+          <span class="aip-card__title-icon"><i class="i-lucide-eye"></i></span>
           Claude Code 自动追踪(Transcript Watcher)
         </h3>
         <span v-if="watcher?.running" class="aip-chip aip-chip--success">运行中</span>
@@ -545,58 +554,68 @@ async function handleAgentReady(ready: boolean): Promise<void> {
 <style scoped>
 .aip-settings {
   display: grid;
-  gap: 16px;
-  padding: 24px;
+  gap: var(--aipt-space-4);
+}
+
+.aip-settings__offline {
+  display: flex;
+  align-items: center;
+  gap: var(--aipt-space-2);
+  margin: 0;
+  padding: var(--aipt-space-3) var(--aipt-space-4);
+  border-radius: var(--aipt-radius-md);
+  font-size: 13px;
+  color: var(--aipt-state-danger);
 }
 
 .aip-settings__form-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--aipt-space-2);
 }
 
 .aip-settings__watcher {
   display: flex;
-  gap: 10px;
+  gap: var(--aipt-space-2);
   align-items: center;
   flex-wrap: wrap;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: rgba(96, 114, 153, 0.04);
-  border: 1px solid rgba(96, 114, 153, 0.08);
+  padding: var(--aipt-space-3) var(--aipt-space-3);
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-surface-soft);
+  border: 1px solid var(--aipt-border-faint);
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--aipt-text-secondary);
 }
 
 .aip-settings__watcher-label {
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--aipt-text);
   font-size: 12.5px;
 }
 
 .aip-settings__watcher-meta {
   font-size: 12px;
-  color: var(--text-soft);
+  color: var(--aipt-text-muted);
 }
 
 .aip-settings__watcher-meta-warn {
-  color: var(--color-warning, #d97706);
+  color: var(--aipt-state-warning);
 }
 
 .aip-settings__track-grid {
   display: grid;
-  gap: 8px;
+  gap: var(--aipt-space-2);
 }
 
 .aip-settings__track-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: rgba(96, 114, 153, 0.04);
-  border: 1px solid rgba(96, 114, 153, 0.08);
+  gap: var(--aipt-space-3);
+  padding: var(--aipt-space-3) var(--aipt-space-4);
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-surface-soft);
+  border: 1px solid var(--aipt-border-faint);
   font-size: 13px;
 }
 
@@ -607,42 +626,48 @@ async function handleAgentReady(ready: boolean): Promise<void> {
 }
 
 .aip-settings__legacy-warning {
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: rgba(255, 149, 0, 0.08);
-  border: 1px solid rgba(255, 149, 0, 0.2);
+  padding: var(--aipt-space-3) var(--aipt-space-4);
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-state-warning-soft);
+  border: 1px solid rgba(245, 196, 137, 0.3);
   font-size: 12.5px;
   line-height: 1.6;
-  color: var(--text-secondary);
+  color: var(--aipt-state-warning);
 }
 
 /* ===== 命令行一键集成块 ===== */
 .aip-mcp-config__cli {
   display: grid;
-  gap: 10px;
+  gap: var(--aipt-space-2);
 }
 
 .aip-mcp-config__cli-item {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(52, 199, 89, 0.04);
-  border: 1px solid rgba(52, 199, 89, 0.18);
+  gap: var(--aipt-space-3);
+  padding: var(--aipt-space-3) var(--aipt-space-4);
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-surface-soft);
+  border: 1px solid var(--aipt-border-faint);
+  transition: border-color var(--aipt-duration-base) var(--aipt-easing-out);
+}
+
+.aip-mcp-config__cli-item:hover {
+  border-color: var(--aipt-border-strong);
 }
 
 .aip-mcp-config__cli-step {
   flex-shrink: 0;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  background: #2d9a53;
-  color: #fff;
+  background: var(--aipt-gradient-aurora);
+  color: var(--aipt-text-on-accent);
   font-size: 12px;
   font-weight: 700;
-  line-height: 24px;
+  line-height: 26px;
   text-align: center;
+  box-shadow: var(--aipt-shadow-glow);
 }
 
 .aip-mcp-config__cli-body {
@@ -654,32 +679,36 @@ async function handleAgentReady(ready: boolean): Promise<void> {
 
 .aip-mcp-config__cli-body strong {
   font-size: 13.5px;
-  color: var(--text-primary);
+  color: var(--aipt-text);
 }
 
 .aip-mcp-config__cli-cmd {
   display: inline-block;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: rgba(15, 23, 42, 0.88);
-  color: #f8fafc;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  padding: 7px 12px;
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-bg-deep);
+  border: 1px solid var(--aipt-border);
+  color: var(--aipt-text);
+  font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
   font-size: 12.5px;
   letter-spacing: 0.02em;
   cursor: pointer;
   user-select: all;
   word-break: break-all;
-  transition: filter 0.15s;
+  transition:
+    border-color var(--aipt-duration-base) var(--aipt-easing-out),
+    background var(--aipt-duration-base) var(--aipt-easing-out);
 }
 
 .aip-mcp-config__cli-cmd:hover {
-  filter: brightness(1.12);
+  border-color: var(--aipt-aurora-2);
+  background: var(--aipt-surface-hover);
 }
 
 .aip-mcp-config__cli-hint {
   margin: 0;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--aipt-text-secondary);
   line-height: 1.6;
 }
 
@@ -689,7 +718,7 @@ async function handleAgentReady(ready: boolean): Promise<void> {
 }
 
 .aip-mcp-config__inline-cmd:hover {
-  filter: brightness(1.06);
+  color: var(--aipt-aurora-2);
 }
 
 .aip-mcp-config__hook-path {

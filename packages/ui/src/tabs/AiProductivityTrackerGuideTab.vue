@@ -50,40 +50,24 @@ function copy(text: string) {
 
 <template>
   <section class="aip-guide">
-    <!-- Hero -->
-    <div class="aip-hero">
-      <div class="aip-hero__left">
-        <div class="aip-hero__icon">
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M4 19V5a2 2 0 0 1 2-2h11l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linejoin="round"
-            />
-            <path
-              d="M14 3v4h4M8 12h8M8 16h6M8 8h4"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </div>
-        <div class="aip-hero__info">
-          <div class="aip-hero__title-row">
-            <h3>使用说明</h3>
-            <span class="aip-chip aip-chip--solid">本地优先</span>
-          </div>
-          <p>
-            全程在用户机器跑:`aipt mcp` 自动拉起 daemon,数据全部落到
-            <code class="aip-inline-code">~/.ai-productivity-tracker/data/</code>,看板由 daemon
-            同源托管在 <code class="aip-inline-code">{{ dashboardOrigin }}</code
-            >,不依赖任何远端 API。
-          </p>
-        </div>
+    <!-- Hero(渐变大标题 + 副标题) -->
+    <header class="aip-guide__hero aipt-glass aipt-glass--accent">
+      <div class="aip-guide__hero-glow"></div>
+      <div class="aip-guide__hero-icon aipt-aurora-bg">
+        <i class="i-lucide-rocket"></i>
       </div>
-    </div>
+      <div class="aip-guide__hero-info">
+        <span class="aip-guide__hero-badge aipt-chip-v2 aipt-chip-v2--accent">本地优先</span>
+        <h1 class="aip-guide__hero-title aipt-aurora-text">使用说明</h1>
+        <p class="aip-guide__hero-sub">
+          npm 全局安装 <code class="aip-inline-code">@ai-productivity-tracker/cli</code> 后,
+          <code class="aip-inline-code">aipt mcp</code> 自动拉起 daemon。数据全部落
+          <code class="aip-inline-code">~/.ai-productivity-tracker/data/</code>,看板由 daemon 同源
+          托管在 <code class="aip-inline-code">{{ dashboardOrigin }}</code
+          >,不依赖任何远端 API。
+        </p>
+      </div>
+    </header>
 
     <!-- 接入 3 步 -->
     <article class="aip-card">
@@ -553,7 +537,7 @@ function copy(text: string) {
     <article class="aip-card">
       <header class="aip-card__header">
         <h3 class="aip-card__title">
-          <span class="aip-card__title-icon">↻</span>
+          <span class="aip-card__title-icon"><i class="i-lucide-refresh-cw"></i></span>
           从老版本 truesight-agent 迁移
         </h3>
         <span class="aip-chip aip-chip--muted">仅老用户</span>
@@ -684,69 +668,150 @@ function copy(text: string) {
 <style scoped>
 .aip-guide {
   display: grid;
-  gap: 16px;
-  padding: 24px;
+  gap: var(--aipt-space-4);
+  max-width: var(--aipt-content-max-w);
+  margin: 0 auto;
 }
 
+/* ===== Hero ===== */
+.aip-guide__hero {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: var(--aipt-space-5);
+  padding: var(--aipt-space-6) var(--aipt-space-6);
+}
+
+.aip-guide__hero-glow {
+  position: absolute;
+  inset: -1px;
+  background:
+    radial-gradient(ellipse at 12% 0%, rgba(110, 167, 245, 0.3) 0%, transparent 55%),
+    radial-gradient(ellipse at 90% 100%, rgba(159, 229, 212, 0.2) 0%, transparent 50%);
+  filter: blur(30px);
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+.aip-guide__hero-icon {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--aipt-radius-lg);
+  color: var(--aipt-text-on-accent);
+  flex-shrink: 0;
+  box-shadow: var(--aipt-shadow-glow-strong);
+}
+
+.aip-guide__hero-icon i {
+  font-size: 28px;
+}
+
+.aip-guide__hero-info {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipt-space-2);
+  min-width: 0;
+}
+
+.aip-guide__hero-badge {
+  align-self: flex-start;
+}
+
+.aip-guide__hero-title {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.aip-guide__hero-sub {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--aipt-text-secondary);
+}
+
+/* ===== Tip ===== */
 .aip-guide__tip {
   margin: 0;
-  padding: 8px 12px;
-  border-radius: 6px;
-  background: rgba(255, 169, 0, 0.08);
-  border: 1px solid rgba(255, 169, 0, 0.18);
-  font-size: 12px;
-  line-height: 1.65;
-  color: var(--text-secondary);
+  padding: var(--aipt-space-2) var(--aipt-space-3);
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-state-warning-soft);
+  border: 1px solid rgba(245, 196, 137, 0.3);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--aipt-text-secondary);
 }
 
+/* ===== Bullets ===== */
 .aip-guide__bullet-list {
   margin: 0;
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 8px;
+  gap: var(--aipt-space-2);
 }
 
 .aip-guide__bullet-list li {
-  padding: 10px 12px 10px 28px;
-  border-radius: 8px;
-  background: rgba(96, 114, 153, 0.04);
-  border: 1px solid rgba(96, 114, 153, 0.08);
+  padding: var(--aipt-space-3) var(--aipt-space-3) var(--aipt-space-3) 32px;
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-surface-soft);
+  border: 1px solid var(--aipt-border-faint);
   font-size: 13px;
-  line-height: 1.65;
-  color: var(--text-secondary);
+  line-height: 1.7;
+  color: var(--aipt-text-secondary);
   position: relative;
 }
 
 .aip-guide__bullet-list li::before {
   content: '';
   position: absolute;
-  left: 12px;
-  top: 17px;
+  left: 14px;
+  top: 19px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent-primary, #4f6ef5);
-  opacity: 0.7;
+  background: var(--aipt-aurora-1);
+  box-shadow: 0 0 8px rgba(110, 167, 245, 0.55);
 }
 
 .aip-guide__bullet-list--troubleshoot li::before {
-  background: #d48200;
+  background: var(--aipt-state-warning);
+  box-shadow: 0 0 8px rgba(245, 196, 137, 0.5);
 }
 
 .aip-guide__nested {
-  margin: 6px 0 0 16px;
+  margin: var(--aipt-space-2) 0 0 var(--aipt-space-4);
   padding: 0;
   display: grid;
   gap: 4px;
   font-size: 12.5px;
-  color: var(--text-secondary);
+  color: var(--aipt-text-secondary);
+}
+
+@media (max-width: 720px) {
+  .aip-guide__hero {
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+  }
+  .aip-guide__hero-title {
+    font-size: 24px;
+  }
 }
 
 @media (max-width: 640px) {
   .aip-guide {
-    padding: 18px;
-    gap: 14px;
+    gap: var(--aipt-space-3);
   }
 }
 </style>
