@@ -8,6 +8,12 @@ export interface RequirementMetrics {
   completion: number
   latestCumulativeToken: number
   latestElapsedMinutes: number
+  /**
+   * 各 iteration `thinkSeconds`(本轮 wall time:用户提交 → AI 答完)的累加值。
+   * 与 `latestElapsedMinutes`(任务从开始到现在的墙钟耗时,含用户离开/阅读的空闲)区分:
+   * 这个值只累计 AI 实际参与的 turn 时长,反映「AI 纯思考时间」。
+   */
+  totalThinkSeconds: number
   bugPenalty: number
   tokenPenalty: number
 }
@@ -35,6 +41,10 @@ export function computeMetrics(params: {
   const codingRuns = params.iterations.filter(
     (it) => it.kind === 'coding' || it.kind === 'first_coding'
   ).length
+  const totalThinkSeconds = params.iterations.reduce(
+    (sum, it) => sum + (typeof it.thinkSeconds === 'number' ? it.thinkSeconds : 0),
+    0
+  )
 
   const bugPenalty = 1 + params.linkedBugCount * params.formula.kBug
 
@@ -56,6 +66,7 @@ export function computeMetrics(params: {
     completion: computeCompletion(params.subtasks),
     latestCumulativeToken: latestToken,
     latestElapsedMinutes: latestElapsed,
+    totalThinkSeconds,
     bugPenalty: Number(bugPenalty.toFixed(4)),
     tokenPenalty: Number(tokenPenalty.toFixed(4))
   }

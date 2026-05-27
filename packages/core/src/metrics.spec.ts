@@ -93,6 +93,21 @@ describe('metrics', () => {
     expect(m.boost).not.toBeNull()
   })
 
+  it('computeMetrics 累加各轮 thinkSeconds 为 totalThinkSeconds', () => {
+    const m = computeMetrics({
+      manualEstimateMinutes: 480,
+      iterations: [
+        iter({ seq: 1, kind: 'init', thinkSeconds: 0 }),
+        iter({ seq: 2, kind: 'coding', thinkSeconds: 120 }),
+        iter({ seq: 3, kind: 'coding', thinkSeconds: 90 })
+      ],
+      subtasks: [],
+      linkedBugCount: 0,
+      formula: DEFAULT_FORMULA
+    })
+    expect(m.totalThinkSeconds).toBe(210)
+  })
+
   it('computeMetrics 无 iteration 时 boost 为 null', () => {
     const m = computeMetrics({
       manualEstimateMinutes: 480,

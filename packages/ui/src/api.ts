@@ -41,6 +41,8 @@ export type RequirementMetrics = {
   completion: number
   latestCumulativeToken: number
   latestElapsedMinutes: number
+  /** 各 iteration thinkSeconds(本轮 wall time)累加值,反映 AI 纯思考时间(剔除空闲) */
+  totalThinkSeconds: number
   bugPenalty: number
   tokenPenalty: number
 }

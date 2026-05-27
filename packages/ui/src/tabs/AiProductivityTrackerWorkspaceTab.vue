@@ -366,6 +366,20 @@ function formatThinkSeconds(value: number) {
 }
 
 /**
+ * 累计 AI 思考时间(各 iteration thinkSeconds 之和)展示。数值可达小时级,
+ * 因此 ≥1h 时按 h/min 呈现,与 formatMinutes 的口径保持一致;不足 1 分钟回退到秒。
+ */
+function formatThinkDuration(value: number) {
+  if (!value || value <= 0) return '0min'
+  if (value < 60) return `${value}s`
+  const totalMins = Math.floor(value / 60)
+  if (totalMins < 60) return `${totalMins}min`
+  const hours = Math.floor(totalMins / 60)
+  const mins = totalMins % 60
+  return mins ? `${hours}h ${mins}min` : `${hours}h`
+}
+
+/**
  * v1.0.0-rc.18 本轮 AI 思考 hover tooltip:
  *  - 主指标:wall time(用户提交 → AI 答完);旧数据 / Cursor 老 hook 走 60s fallback 时也是此口径
  *  - 副指标:纯模型思考(`afterAgentThought.duration_ms` 累加);Claude Code / 老 daemon / 非 thinking
@@ -972,10 +986,21 @@ onMounted(() => {
             </svg>
           </div>
           <div class="aip-drawer__boost-side">
-            <span class="aip-drawer__boost-label">AI 实际</span>
-            <span class="aip-drawer__boost-value">{{
-              formatMinutes(currentDetail.metrics.latestElapsedMinutes)
-            }}</span>
+            <span class="aip-drawer__boost-label">任务耗时</span>
+            <span
+              class="aip-drawer__boost-value"
+              title="任务从开始到现在的墙钟耗时(含用户离开 / 阅读的空闲),也是提效倍数公式的分母"
+            >
+              {{ formatMinutes(currentDetail.metrics.latestElapsedMinutes) }}
+            </span>
+            <span class="aip-drawer__boost-subdivider" />
+            <span class="aip-drawer__boost-sublabel">AI 思考累计</span>
+            <span
+              class="aip-drawer__boost-subvalue"
+              title="各轮对话 thinkSeconds(用户提交 → AI 答完)的累加值,剔除空闲后 AI 实际参与的时长"
+            >
+              {{ formatThinkDuration(currentDetail.metrics.totalThinkSeconds) }}
+            </span>
           </div>
         </div>
 
@@ -983,7 +1008,7 @@ onMounted(() => {
         <article class="aip-card aip-card--flat">
           <header class="aip-card__header">
             <h3 class="aip-card__title">指标</h3>
-            <span class="aip-card__meta">复杂度：{{ currentDetail.complexity }}</span>
+            <!-- <span class="aip-card__meta">复杂度：{{ currentDetail.complexity }}</span> -->
           </header>
           <div class="aip-drawer__metrics-grid">
             <div class="aip-drawer__metric">
@@ -1144,13 +1169,7 @@ onMounted(() => {
                     }}</span>
                     · 累计耗时: {{ formatMinutes(iter.elapsedMinutes) }} ·
                     <span :title="buildThinkSecondsTooltip(iter)">
-                      本轮 AI 思考: {{ formatThinkSeconds(iter.thinkSeconds)
-                      }}<span
-                        v-if="typeof iter.pureThinkSeconds === 'number'"
-                        class="aip-drawer__timeline-pure-think"
-                      >
-                        (纯思考 {{ formatThinkSeconds(iter.pureThinkSeconds) }})</span
-                      >
+                      本轮 AI 思考: {{ formatThinkSeconds(iter.thinkSeconds) }}
                     </span>
                   </div>
                   <div
@@ -1596,6 +1615,27 @@ onMounted(() => {
   gap: 6px;
 }
 
+.aip-drawer__boost-subdivider {
+  width: 24px;
+  height: 1px;
+  margin: 4px 0 2px;
+  background: rgba(96, 114, 153, 0.2);
+}
+
+.aip-drawer__boost-sublabel {
+  font-size: 10px;
+  color: var(--text-soft);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.aip-drawer__boost-subvalue {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 .aip-drawer__boost-edit-btn {
   display: inline-flex;
   align-items: center;
@@ -1876,12 +1916,6 @@ onMounted(() => {
   font-size: 12.5px;
   color: var(--text-secondary);
   line-height: 1.6;
-}
-
-/* v1.0.0-rc.18 纯思考副字段:与 wall time 同行展示,弱化色与括号视觉一致 */
-.aip-drawer__timeline-pure-think {
-  color: var(--text-muted);
-  font-size: 12px;
 }
 
 .aip-drawer__timeline-note {
