@@ -36,6 +36,18 @@ const daemonText = computed(() => {
   return `Daemon · v${version ?? '?'}${port ? ` · :${port}` : ''}`
 })
 
+const daemonVersion = computed(() => {
+  const v = agentState.value.agent.version
+  return v ? `v${v}` : ''
+})
+
+const daemonPort = computed(() => {
+  const p = agentState.value.agent.port
+  return p ? `:${p}` : ''
+})
+
+const daemonOnline = computed(() => agentState.value.agent.ok)
+
 const refreshing = ref(false)
 
 async function handleRefresh() {
@@ -110,11 +122,22 @@ const dotClass = (state: DotState) => {
         <span class="aipt-topbar__status-item" :title="daemonText">
           <span :class="dotClass(daemonDot)"></span>
           <span class="aipt-topbar__status-label">Daemon</span>
+          <template v-if="daemonOnline">
+            <span v-if="daemonVersion" class="aipt-topbar__status-meta aipt-num">{{
+              daemonVersion
+            }}</span>
+            <span v-if="daemonPort" class="aipt-topbar__status-meta aipt-num">{{
+              daemonPort
+            }}</span>
+          </template>
+          <span v-else class="aipt-topbar__status-meta aipt-topbar__status-meta--danger">离线</span>
         </span>
+        <span class="aipt-topbar__status-divider" aria-hidden="true"></span>
         <span class="aipt-topbar__status-item" title="Cursor afterAgentResponse Hook">
           <span :class="dotClass(hookDot)"></span>
           <span class="aipt-topbar__status-label">Hook</span>
         </span>
+        <span class="aipt-topbar__status-divider" aria-hidden="true"></span>
         <span class="aipt-topbar__status-item" title="AI 对话追踪 Skill / Hook 注入态">
           <span :class="dotClass(skillDot)"></span>
           <span class="aipt-topbar__status-label">Skill</span>
@@ -329,6 +352,33 @@ const dotClass = (state: DotState) => {
   text-transform: uppercase;
 }
 
+.aipt-topbar__status-meta {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--aipt-text-secondary);
+  letter-spacing: 0;
+  padding: 1px 6px;
+  border-radius: var(--aipt-radius-sm);
+  background: var(--aipt-surface-hover);
+  border: 1px solid var(--aipt-border);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.aipt-topbar__status-meta--danger {
+  color: var(--aipt-danger, #d4380d);
+  background: transparent;
+  border-color: transparent;
+  padding: 0;
+}
+
+.aipt-topbar__status-divider {
+  width: 1px;
+  height: 12px;
+  background: var(--aipt-border);
+  flex-shrink: 0;
+}
+
 .aipt-topbar__btn {
   display: inline-flex;
   align-items: center;
@@ -376,6 +426,22 @@ const dotClass = (state: DotState) => {
   }
 }
 
+@media (max-width: 1180px) {
+  .aipt-topbar__status-meta {
+    /* 中等宽度下只保留端口,版本号隐去避免挤压 */
+  }
+  .aipt-topbar__status-item .aipt-topbar__status-meta:first-of-type {
+    /* version meta 在窄屏隐藏 */
+  }
+}
+
+@media (max-width: 1024px) {
+  .aipt-topbar__status-item
+    .aipt-topbar__status-meta:not(.aipt-topbar__status-meta--danger):first-of-type {
+    display: none;
+  }
+}
+
 @media (max-width: 860px) {
   .aipt-topbar__center {
     display: none;
@@ -383,9 +449,15 @@ const dotClass = (state: DotState) => {
   .aipt-topbar__status-label {
     display: none;
   }
+  .aipt-topbar__status-divider {
+    display: none;
+  }
   .aipt-topbar__status {
     padding: 6px 10px;
     gap: var(--aipt-space-2);
+  }
+  .aipt-topbar__status-meta {
+    display: none;
   }
 }
 
