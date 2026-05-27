@@ -986,18 +986,18 @@ onMounted(() => {
             </svg>
           </div>
           <div class="aip-drawer__boost-side">
-            <span class="aip-drawer__boost-label">任务耗时</span>
+            <span class="aip-drawer__boost-label">墙钟耗时</span>
             <span
               class="aip-drawer__boost-value"
-              title="任务从开始到现在的墙钟耗时(含用户离开 / 阅读的空闲),也是提效倍数公式的分母"
+              title="任务从开始到现在的墙钟耗时(含用户离开 / 阅读 / 并行其它任务的空闲);并行多任务时墙钟会膨胀,新公式通过权重削减它的影响"
             >
               {{ formatMinutes(currentDetail.metrics.latestElapsedMinutes) }}
             </span>
             <span class="aip-drawer__boost-subdivider" />
-            <span class="aip-drawer__boost-sublabel">AI 思考累计</span>
+            <span class="aip-drawer__boost-sublabel">AI 工作累计</span>
             <span
               class="aip-drawer__boost-subvalue"
-              title="各轮对话 thinkSeconds(用户提交 → AI 答完)的累加值,剔除空闲后 AI 实际参与的时长"
+              title="各轮对话 thinkSeconds(用户提交 → AI 答完)的累加值,剔除空闲后 AI 实际参与的时长。在并行多任务场景下比墙钟更准。"
             >
               {{ formatThinkDuration(currentDetail.metrics.totalThinkSeconds) }}
             </span>
@@ -1022,11 +1022,13 @@ onMounted(() => {
               </strong>
             </div>
             <div class="aip-drawer__metric">
-              <span>Bug 惩罚</span>
-              <strong>×{{ currentDetail.metrics.bugPenalty }}</strong>
+              <span title="boost 公式分母 = 加权耗时 × tokenPenalty">加权耗时</span>
+              <strong :title="`= (1 − wThink) × 墙钟 + wThink × (AI 工作累计 / 60),单位:分钟`">
+                {{ formatMinutes(currentDetail.metrics.effectiveMinutes) }}
+              </strong>
             </div>
             <div class="aip-drawer__metric">
-              <span>Token 惩罚</span>
+              <span title="可选 token 软上限惩罚,默认关闭时恒为 ×1">Token 惩罚</span>
               <strong>×{{ currentDetail.metrics.tokenPenalty }}</strong>
             </div>
             <div class="aip-drawer__metric aip-drawer__metric--full">

@@ -810,17 +810,22 @@ describe('Panel handlers', () => {
     let mock = makeMockRes()
     handleAiProductivityGetFormula(mock.res)
     let body = JSON.parse(mock.body)
-    expect(body.data.kBug).toBeGreaterThan(0)
+    expect(body.data.wThink).toBeGreaterThanOrEqual(0)
+    expect(body.data.wThink).toBeLessThanOrEqual(1)
+    expect(body.data.tokenPenaltyEnabled).toBe(false)
+    expect(typeof body.data.tokenSoftCapK).toBe('number')
 
     mock = makeMockRes()
-    handleAiProductivityPatchFormula(mock.res, { kBug: 0.3 })
+    handleAiProductivityPatchFormula(mock.res, { wThink: 0.5, tokenPenaltyEnabled: true })
     body = JSON.parse(mock.body)
-    expect(body.data.kBug).toBe(0.3)
+    expect(body.data.wThink).toBe(0.5)
+    expect(body.data.tokenPenaltyEnabled).toBe(true)
 
     mock = makeMockRes()
     handleAiProductivityGetFormula(mock.res)
     body = JSON.parse(mock.body)
-    expect(body.data.kBug).toBe(0.3)
+    expect(body.data.wThink).toBe(0.5)
+    expect(body.data.tokenPenaltyEnabled).toBe(true)
   })
 
   it('jira-config get/patch', () => {

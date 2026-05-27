@@ -43,7 +43,17 @@ export type RequirementMetrics = {
   latestElapsedMinutes: number
   /** 各 iteration thinkSeconds(本轮 wall time)累加值,反映 AI 纯思考时间(剔除空闲) */
   totalThinkSeconds: number
-  bugPenalty: number
+  /**
+   * v1.0.0-rc.9 起 boost 分母「加权耗时(分钟)」:
+   *   effectiveMinutes = (1 - wThink) × latestElapsedMinutes + wThink × (totalThinkSeconds / 60)
+   * 默认 wThink=0.7 偏向 AI 实参时间,墙钟权重 0.3,对并行多任务场景更稳健。
+   */
+  effectiveMinutes: number
+  /**
+   * v1.0.0-rc.9 起可选 token 软上限惩罚倍数(=1 表示未生效):
+   *   tokenPenalty = 1 + max(0, cumulativeToken/1000 - tokenSoftCapK) / tokenSoftCapK
+   * 仅当 `formula.tokenPenaltyEnabled === true` 且 `tokenSoftCapK > 0` 时启用,否则恒为 1。
+   */
   tokenPenalty: number
 }
 
@@ -161,11 +171,17 @@ export type SummaryMetrics = {
   totalToken: number
 }
 
+/**
+ * v1.0.0-rc.9 起的精简公式配置(老 4 字段 kBug / kToken / tokenPriceUsdPer1k / hourlyCostUsd 全部废弃,
+ * daemon 端 readFormula 会静默丢弃老字段,无需用户迁移)。
+ */
 export type FormulaSettings = {
-  kBug: number
-  kToken: number
-  tokenPriceUsdPer1k: number
-  hourlyCostUsd: number
+  /** AI 工作时间权重 ∈ [0, 1],墙钟时间权重 = 1 - wThink。默认 0.7 偏向 AI 实参时间。 */
+  wThink: number
+  /** 是否启用 token 软上限惩罚。关闭(默认)时 boost 公式只看时间。 */
+  tokenPenaltyEnabled: boolean
+  /** token 软上限(单位 k tokens),仅在 enabled 且 > 0 时生效。默认 200(=200k tokens)。 */
+  tokenSoftCapK: number
 }
 
 export type JiraPluginConfigPayload = {

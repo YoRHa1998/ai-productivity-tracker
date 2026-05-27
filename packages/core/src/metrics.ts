@@ -14,7 +14,16 @@ export interface RequirementMetrics {
    * 这个值只累计 AI 实际参与的 turn 时长,反映「AI 纯思考时间」。
    */
   totalThinkSeconds: number
-  bugPenalty: number
+  /**
+   * 公式分母里的「加权耗时(分钟)」= wElapsed × latestElapsedMinutes + wThink × (totalThinkSeconds / 60)。
+   * 在 UI 上直接展示这个数,让用户一眼看清 boost = manualEstimateMinutes / effectiveMinutes(× tokenPenalty)。
+   */
+  effectiveMinutes: number
+  /**
+   * 当前公式下 token 软上限带来的惩罚倍数:
+   * - `tokenPenaltyEnabled=false` 或 `tokenSoftCapK<=0` 时恒为 1
+   * - 否则 = 1 + max(0, tokens/1000 - cap) / cap,超过软上限部分按比例线性放大分母
+   */
   tokenPenalty: number
 }
 
@@ -32,6 +41,7 @@ export function computeMetrics(params: {
   manualEstimateMinutes: number
   iterations: StoredIteration[]
   subtasks: StoredSubtask[]
+  /** 仅作为列表/详情展示用,不再参与 boost 公式(v1.0.0-rc.9 起 Bug 惩罚被移除) */
   linkedBugCount: number
   formula: FormulaSettings
 }): RequirementMetrics {
@@ -46,18 +56,21 @@ export function computeMetrics(params: {
     0
   )
 
-  const bugPenalty = 1 + params.linkedBugCount * params.formula.kBug
+  const wThink = clamp01(params.formula.wThink)
+  const wElapsed = 1 - wThink
+  const thinkMinutes = totalThinkSeconds / 60
+  const effectiveMinutes = wElapsed * latestElapsed + wThink * thinkMinutes
 
-  const tokenCostUsd = (latestToken / 1000) * params.formula.tokenPriceUsdPer1k
-  const costMinutes =
-    params.formula.hourlyCostUsd > 0 ? (tokenCostUsd / params.formula.hourlyCostUsd) * 60 : 0
-  const tokenPenalty = 1 + costMinutes * params.formula.kToken
+  const tokenPenalty =
+    params.formula.tokenPenaltyEnabled && params.formula.tokenSoftCapK > 0
+      ? 1 +
+        Math.max(0, latestToken / 1000 - params.formula.tokenSoftCapK) /
+          params.formula.tokenSoftCapK
+      : 1
 
   let boost: number | null = null
-  if (latestElapsed > 0 && params.manualEstimateMinutes > 0) {
-    boost = Number(
-      (params.manualEstimateMinutes / (latestElapsed * bugPenalty * tokenPenalty)).toFixed(2)
-    )
+  if (effectiveMinutes > 0 && params.manualEstimateMinutes > 0 && tokenPenalty > 0) {
+    boost = Number((params.manualEstimateMinutes / (effectiveMinutes * tokenPenalty)).toFixed(2))
   }
 
   return {
@@ -67,9 +80,16 @@ export function computeMetrics(params: {
     latestCumulativeToken: latestToken,
     latestElapsedMinutes: latestElapsed,
     totalThinkSeconds,
-    bugPenalty: Number(bugPenalty.toFixed(4)),
+    effectiveMinutes: Number(effectiveMinutes.toFixed(2)),
     tokenPenalty: Number(tokenPenalty.toFixed(4))
   }
+}
+
+function clamp01(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+  if (value < 0) return 0
+  if (value > 1) return 1
+  return value
 }
 
 export interface SummaryMetrics {
