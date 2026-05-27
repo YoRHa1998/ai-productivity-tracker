@@ -12,7 +12,7 @@
 
 ### Changed (Breaking)
 
-**v1.0.0-rc.9 提效公式精简 + 并行多任务场景修正**
+**v1.0.0-rc.22 提效公式精简 + 并行多任务场景修正**
 
 旧公式 `boost = manualEstimateMinutes / (elapsedMinutes × bugPenalty × tokenPenalty)` 在**并行开发多个 Jira 需求**时严重偏低:`elapsedMinutes` 是任务从 init 到现在的墙钟耗时,只要任务还没结束,墙钟就会持续累加,即使用户把绝大多数时间花在其它分支;同时 `tokenPriceUsdPer1k` × `hourlyCostUsd` 这一对参数在不同模型 / 订阅下不可比,业务上很难解释。
 

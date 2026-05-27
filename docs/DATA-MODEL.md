@@ -309,7 +309,7 @@ attach_summary handler 同进程同步写,stop-check 后读。失效自动清理
 
 提效倍数(boost)公式参数。看板「业务配置」Tab 可编辑。
 
-**v1.0.0-rc.9 起公式精简版**:把 boost 分母从「墙钟 × Bug惩罚 × Token惩罚」三因子收敛为「加权耗时 + 可选 Token 软上限」两因子,移除业务上不易解释的时薪 / token 单价配置;Bug 数从公式中剥离,仅作为关联信息展示。
+**v1.0.0-rc.22 起公式精简版**:把 boost 分母从「墙钟 × Bug惩罚 × Token惩罚」三因子收敛为「加权耗时 + 可选 Token 软上限」两因子,移除业务上不易解释的时薪 / token 单价配置;Bug 数从公式中剥离,仅作为关联信息展示。
 
 ```ts
 interface FormulaSettings {
@@ -338,7 +338,7 @@ tokenPenalty      = (tokenPenaltyEnabled && tokenSoftCapK > 0)
 boost             = manualEstimateMinutes / (effectiveMinutes × tokenPenalty)
 ```
 
-**老字段兼容**:`v1.0.0-rc.8` 及之前的 `kBug` / `kToken` / `tokenPriceUsdPer1k` / `hourlyCostUsd` 字段在 `readFormula` 中被静默丢弃,无需手工迁移;`writeFormula` 下次保存会覆盖成新 schema。
+**老字段兼容**:`v1.0.0-rc.21` 及之前的 `kBug` / `kToken` / `tokenPriceUsdPer1k` / `hourlyCostUsd` 字段在 `readFormula` 中被静默丢弃,无需手工迁移;`writeFormula` 下次保存会覆盖成新 schema。
 
 ---
 

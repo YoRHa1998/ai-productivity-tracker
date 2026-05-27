@@ -41,7 +41,7 @@ export function computeMetrics(params: {
   manualEstimateMinutes: number
   iterations: StoredIteration[]
   subtasks: StoredSubtask[]
-  /** 仅作为列表/详情展示用,不再参与 boost 公式(v1.0.0-rc.9 起 Bug 惩罚被移除) */
+  /** 仅作为列表/详情展示用,不再参与 boost 公式(v1.0.0-rc.22 起 Bug 惩罚被移除) */
   linkedBugCount: number
   formula: FormulaSettings
 }): RequirementMetrics {

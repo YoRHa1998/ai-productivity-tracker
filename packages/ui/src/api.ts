@@ -44,13 +44,13 @@ export type RequirementMetrics = {
   /** 各 iteration thinkSeconds(本轮 wall time)累加值,反映 AI 纯思考时间(剔除空闲) */
   totalThinkSeconds: number
   /**
-   * v1.0.0-rc.9 起 boost 分母「加权耗时(分钟)」:
+   * v1.0.0-rc.22 起 boost 分母「加权耗时(分钟)」:
    *   effectiveMinutes = (1 - wThink) × latestElapsedMinutes + wThink × (totalThinkSeconds / 60)
    * 默认 wThink=0.7 偏向 AI 实参时间,墙钟权重 0.3,对并行多任务场景更稳健。
    */
   effectiveMinutes: number
   /**
-   * v1.0.0-rc.9 起可选 token 软上限惩罚倍数(=1 表示未生效):
+   * v1.0.0-rc.22 起可选 token 软上限惩罚倍数(=1 表示未生效):
    *   tokenPenalty = 1 + max(0, cumulativeToken/1000 - tokenSoftCapK) / tokenSoftCapK
    * 仅当 `formula.tokenPenaltyEnabled === true` 且 `tokenSoftCapK > 0` 时启用,否则恒为 1。
    */
@@ -172,7 +172,7 @@ export type SummaryMetrics = {
 }
 
 /**
- * v1.0.0-rc.9 起的精简公式配置(老 4 字段 kBug / kToken / tokenPriceUsdPer1k / hourlyCostUsd 全部废弃,
+ * v1.0.0-rc.22 起的精简公式配置(老 4 字段 kBug / kToken / tokenPriceUsdPer1k / hourlyCostUsd 全部废弃,
  * daemon 端 readFormula 会静默丢弃老字段,无需用户迁移)。
  */
 export type FormulaSettings = {

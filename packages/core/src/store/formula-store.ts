@@ -3,7 +3,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { ensureRoot, formulaPath } from './paths.js'
 
 /**
- * 提效公式配置(v1.0.0-rc.9 起精简版本)。
+ * 提效公式配置(v1.0.0-rc.22 起精简版本)。
  *
  * 设计目标:把 boost 计算从「墙钟 × Bug惩罚 × Token惩罚」三因子收敛为
  * 「加权时间 + 可选 Token 软上限」两因子,移除业务上不易解释的时薪 / token 单价配置。
