@@ -125,6 +125,33 @@ entry 还必须带 `type: "stdio"`(缺失时 claude-code CLI 跳过该条目)—
 
 ### Changed
 
+**v1.0.0-rc.19 stop hook `FOLLOWUP_REASON` 文案优化:去掉"防伪造校验"措辞,改为更友好的"AI 提效追踪 · 待上报"提示**
+
+实测背景:[stop-check.ts](../packages/hook-core/src/stop-check.ts) 在 sentinel 缺失 / 超窗时会向 LLM 注入
+`FOLLOWUP_REASON` 文案当作 followup_message,文案是 LLM 与 IDE 用户都会看到的"对外面"。
+v2.10.0 起这条文案以「`[ai-productivity 防伪造校验] 本轮未通过 MCP 工具调用 ai_productivity_attach_summary。`」
+开头 — "防伪造校验"是面向开发者的内部术语,把内部时序防御机制(sentinel 90s 窗)直白暴露给最终用户;
+个别用户在 IDE 里看到这条会误以为「AI 在伪造数据」「自己被监控」,引发不必要的疑虑。
+
+本期把 `FOLLOWUP_REASON` 重写为 LLM 友好 + 用户友好的语气:
+
+```
+[AI 提效追踪 · 待上报] 检测到本轮尚未通过 ai_productivity_attach_summary 上报对话总结。
+请立即补充调用(参数:oneLine + type + changeScope/discussion),
+调用成功即视为本轮完成 —— 不必在答复中提示上报状态或重复总结内容。
+```
+
+行为零变化:
+
+- 文案是导出常量 `FOLLOWUP_REASON`,Cursor 方言写到 `followup_message`,Claude Code 方言写到 `decision:block.reason`,两端字段格式与触发逻辑完全不动
+- 测试 spec 直接引用 `FOLLOWUP_REASON` 常量值断言,不依赖具体字符串字面量,本次改动天然回归无破坏
+- sentinel 时间窗 / loop_count 防御 / abort 过滤 / agent 可达性检查所有前置全部保留
+
+文档侧"防伪造校验"作为内部技术名词在 `docs/CHANGELOG.md` / `docs/PRD.md` / `docs/HOOK-PROTOCOL.md` 等
+开发者文档里继续保留(描述 sentinel 90s 窗 / hook-state 目录设计意图),不影响最终用户视角。
+
+---
+
 **v2.14.0 双管齐下提升 Cursor `ai_productivity_attach_summary` 主动调用率(消除"漏调 + stop-hook 补刀"双 iteration)**
 
 实测现象(INSTANT-5321 iterations.jsonl 最近 5 轮):`#18 主动 → #19 漏调 → #20 补刀 → #21 漏调 → #22 补刀`,
