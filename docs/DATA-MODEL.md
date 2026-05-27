@@ -309,16 +309,36 @@ attach_summary handler 同进程同步写,stop-check 后读。失效自动清理
 
 提效倍数(boost)公式参数。看板「业务配置」Tab 可编辑。
 
+**v1.0.0-rc.9 起公式精简版**:把 boost 分母从「墙钟 × Bug惩罚 × Token惩罚」三因子收敛为「加权耗时 + 可选 Token 软上限」两因子,移除业务上不易解释的时薪 / token 单价配置;Bug 数从公式中剥离,仅作为关联信息展示。
+
 ```ts
 interface FormulaSettings {
-  kBug: number // bug 系数,默认 0.5
-  kToken: number // token 系数,默认 0.01
-  tokenPriceUsdPer1k: number // 每千 token 价格,默认 0.003
-  hourlyCostUsd: number // 人工小时成本,默认 50
+  /**
+   * AI 工作时间权重 ∈ [0, 1],墙钟时间权重 = 1 - wThink。默认 0.7 偏向 AI 实参时间。
+   * 并行多任务时墙钟会膨胀,把权重往 AI 工作时间推可以削减误差。
+   */
+  wThink: number
+  /** 是否启用 token 软上限惩罚。关闭(默认)时 boost 公式只看时间。 */
+  tokenPenaltyEnabled: boolean
+  /** token 软上限(单位 k tokens),仅在 enabled 且 > 0 时生效。默认 200(=200k tokens)。 */
+  tokenSoftCapK: number
 }
 ```
 
-boost 实时计算公式见 `@ai-productivity-tracker/core metrics.ts`。
+**boost 公式**(实现见 `@ai-productivity-tracker/core metrics.ts`):
+
+```
+thinkMinutes      = totalThinkSeconds / 60
+effectiveMinutes  = (1 - wThink) × latestElapsedMinutes + wThink × thinkMinutes
+
+tokenPenalty      = (tokenPenaltyEnabled && tokenSoftCapK > 0)
+                    ? 1 + max(0, latestCumulativeToken/1000 - tokenSoftCapK) / tokenSoftCapK
+                    : 1
+
+boost             = manualEstimateMinutes / (effectiveMinutes × tokenPenalty)
+```
+
+**老字段兼容**:`v1.0.0-rc.8` 及之前的 `kBug` / `kToken` / `tokenPriceUsdPer1k` / `hourlyCostUsd` 字段在 `readFormula` 中被静默丢弃,无需手工迁移;`writeFormula` 下次保存会覆盖成新 schema。
 
 ---
 

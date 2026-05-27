@@ -10,6 +10,29 @@
 
 ## [Unreleased]
 
+### Changed (Breaking)
+
+**v1.0.0-rc.9 提效公式精简 + 并行多任务场景修正**
+
+旧公式 `boost = manualEstimateMinutes / (elapsedMinutes × bugPenalty × tokenPenalty)` 在**并行开发多个 Jira 需求**时严重偏低:`elapsedMinutes` 是任务从 init 到现在的墙钟耗时,只要任务还没结束,墙钟就会持续累加,即使用户把绝大多数时间花在其它分支;同时 `tokenPriceUsdPer1k` × `hourlyCostUsd` 这一对参数在不同模型 / 订阅下不可比,业务上很难解释。
+
+本期把公式收敛为「加权耗时 + 可选 Token 软上限」两因子:
+
+```
+thinkMinutes      = totalThinkSeconds / 60   # 累加每轮 turn wall time,剔除空闲
+effectiveMinutes  = (1 − wThink) × latestElapsedMinutes + wThink × thinkMinutes
+tokenPenalty      = tokenPenaltyEnabled && tokenSoftCapK > 0
+                    ? 1 + max(0, latestCumulativeToken/1000 − tokenSoftCapK) / tokenSoftCapK
+                    : 1
+boost             = manualEstimateMinutes / (effectiveMinutes × tokenPenalty)
+```
+
+`formula.json` schema 由 4 字段(`kBug` / `kToken` / `tokenPriceUsdPer1k` / `hourlyCostUsd`)替换为 3 字段(`wThink` / `tokenPenaltyEnabled` / `tokenSoftCapK`),默认值 `0.7 / false / 200`。`linkedBugCount` 不再进入公式,只在「关联 Bug」区块展示。`RequirementMetrics` 同步移除 `bugPenalty`,新增 `effectiveMinutes`(同时保留 `tokenPenalty` 但语义变更:仅可选 token 软上限,默认恒为 1)。
+
+**迁移**:零操作。`readFormula` 静默丢弃老 4 字段;`writeFormula` 下次保存覆盖成新 schema。已落盘的 `iterations.jsonl` / `requirement.json` 无 schema 变化,所有历史 boost 在下次读取时按新公式自动重算。
+
+**用户感知**:设置页公式卡片从 4 个 InputNumber 改成「1 滑块(AI 工作时间权重 ∈ [0,1])+ 1 开关(token 惩罚)+ 1 软上限输入」;需求详情指标格的「Bug 惩罚」替换为「加权耗时」,直接展示分母拆解,boost 推导一目了然。
+
 ### Added
 
 **v1.0.0-rc.18 Cursor 链路 `thinkSeconds` 精准化:接入 `beforeSubmitPrompt` / `afterAgentThought` 两个 hook 事件**
