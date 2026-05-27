@@ -249,11 +249,19 @@ export function buildIterationExtras(input: BuildExtrasInput): IterationExtras {
     }
   }
 
+  // v1.0.0-rc.20 钳制:纯思考(afterAgentThought 累加)逻辑上是总思考的子集,
+  // 不可能 > thinkSeconds。但二者来源不同 cap(纯思考无上限 / 总思考 Cursor 60s),
+  // 历史上出现过 pure=396 > think=300 的反逻辑(seq 121),这里统一钳到 ≤ thinkSeconds。
+  // 保持「未传 → undefined」语义不变,UI 据缺省隐藏第二行。
+  const pureThinkSeconds =
+    typeof input.pureThinkSeconds === 'number'
+      ? Math.min(Math.max(0, input.pureThinkSeconds), thinkSeconds)
+      : undefined
+
   return {
     elapsedMinutes,
     thinkSeconds,
-    pureThinkSeconds:
-      typeof input.pureThinkSeconds === 'number' ? input.pureThinkSeconds : undefined,
+    pureThinkSeconds,
     diffFiles: iterDelta.files,
     diffInsertions: iterDelta.insertions,
     diffDeletions: iterDelta.deletions,

@@ -680,4 +680,49 @@ describe('registerAiProductivityTools', () => {
       })
     )
   })
+
+  // v2.15.0 per-turn 经验内联:用户回复「记录」后只传本轮单条 lesson + iterationSeqs,
+  // MCP 层须把 iterationSeqs / scope 原样透传给 client(agent 端据此写 lesson-handled sentinel)。
+  it('ai_productivity_save_lessons v2.15.0:per-turn 单条 + iterationSeqs 原样透传', async () => {
+    const saveSpy = vi.fn().mockResolvedValue({
+      saved: [{ id: 'lsn-INSTANT-300-7', type: 'pitfall', title: '本轮坑' }],
+      savedCount: 1,
+      replaced: [],
+      rejected: []
+    })
+    const server = new FakeServer()
+    registerAiProductivityTools(
+      server as unknown as Parameters<typeof registerAiProductivityTools>[0],
+      fakeClient({ saveLessons: saveSpy } as Partial<AgentClient>)
+    )
+    const tool = server.tools.find((t) => t.name === 'ai_productivity_save_lessons')!
+    const result = await tool.handler({
+      jiraKey: 'INSTANT-300',
+      lessons: [
+        {
+          jiraKey: 'INSTANT-300',
+          type: 'pitfall',
+          title: '本轮坑',
+          content: 'fire-and-forget 时序不可控',
+          scope: 'project',
+          projectSlug: 'pt-app',
+          iterationSeqs: [7]
+        }
+      ]
+    })
+    expect(result.isError).toBeUndefined()
+    expect(saveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jiraKey: 'INSTANT-300',
+        lessons: [
+          expect.objectContaining({
+            jiraKey: 'INSTANT-300',
+            iterationSeqs: [7],
+            scope: 'project',
+            projectSlug: 'pt-app'
+          })
+        ]
+      })
+    )
+  })
 })

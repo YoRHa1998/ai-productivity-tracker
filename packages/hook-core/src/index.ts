@@ -38,11 +38,14 @@ export {
 export {
   loadAgentEndpoint,
   postHookToAgent,
+  fetchLatestCandidate,
   DEFAULT_AGENT_BASE,
   AGENT_CONFIG_PATH,
   type AgentHookPayload,
   type AgentHookResponse,
-  type AgentHookResult
+  type AgentHookResult,
+  type LatestCandidateResponse,
+  type LatestCandidateResult
 } from './lib/agent-client.js'
 
 export { findAipDir, bindingsPath, AIP_DIR_NAME, BINDINGS_FILE } from './lib/paths.js'
@@ -64,7 +67,11 @@ export {
   recentAttachSentinelPath,
   sentinelDir,
   writeRecentAttachSentinel,
-  type RecentAttachPayload
+  lessonHandledSentinelPath,
+  readLessonHandledSentinel,
+  writeLessonHandledSentinel,
+  type RecentAttachPayload,
+  type LessonHandledPayload
 } from './lib/sentinel.js'
 
 export {
@@ -75,6 +82,7 @@ export {
 
 export {
   FOLLOWUP_REASON,
+  LESSON_HINT_REASON,
   runStopCheck,
   runStopCheckCli,
   type StopCheckOptions,

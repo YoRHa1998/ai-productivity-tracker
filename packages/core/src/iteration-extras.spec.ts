@@ -178,6 +178,36 @@ describe('buildIterationExtras (耗时/think_seconds 不变)', () => {
     expect(withoutPure.pureThinkSeconds).toBeUndefined()
   })
 
+  it('v1.0.0-rc.20 pureThinkSeconds > thinkSeconds 时钳到 thinkSeconds(修反逻辑,复现 seq 121)', () => {
+    // Cursor 链路 cap=60s:两次 hook 间隔 120s,thinkSeconds 被钳到 60。
+    // afterAgentThought 累加出 396s 纯思考(无上限),逻辑上不可能 > 总思考,应被钳到 60。
+    const extras = buildIterationExtras({
+      gitRoot: '/tmp/repo',
+      binding: makeBinding(),
+      now: new Date('2026-05-15T00:02:00.000Z'),
+      previousReportedAt: '2026-05-15T00:00:00.000Z',
+      source: 'cursor-hook',
+      pureThinkSeconds: 396,
+      collectDiff: () => fakeCumulativeDiff,
+      collectNumstatFn: () => fakeNumstat([])
+    })
+    expect(extras.thinkSeconds).toBe(ACTIVE_GAP_SECONDS_CURSOR)
+    expect(extras.pureThinkSeconds).toBe(ACTIVE_GAP_SECONDS_CURSOR)
+  })
+
+  it('v1.0.0-rc.20 负数 pureThinkSeconds 钳到 0', () => {
+    const extras = buildIterationExtras({
+      gitRoot: '/tmp/repo',
+      binding: makeBinding(),
+      now: new Date('2026-05-15T00:01:00.000Z'),
+      previousReportedAt: '2026-05-15T00:00:30.000Z',
+      pureThinkSeconds: -5,
+      collectDiff: () => fakeCumulativeDiff,
+      collectNumstatFn: () => fakeNumstat([])
+    })
+    expect(extras.pureThinkSeconds).toBe(0)
+  })
+
   it('透传 modelName 与 cumulativeDiff 字段', () => {
     const extras = buildIterationExtras({
       gitRoot: '/tmp/repo',

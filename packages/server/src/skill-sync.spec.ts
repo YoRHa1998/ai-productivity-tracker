@@ -688,7 +688,7 @@ describe('lessons-extract skill 同步注入(v2.16.0)', () => {
   it('install 时同步写入 lessons-extract 到 ~/.claude/skills 与 ~/.cursor/rules', async () => {
     const res = await installAiTrackSkillBundle()
 
-    expect(res.lessonsExtract.version).toBe('1.2.0')
+    expect(res.lessonsExtract.version).toBe('1.3.0')
     expect(res.lessonsExtract.claude.path).toBe(
       path.join(tmpHome, '.claude', 'skills', 'lessons-extract', 'SKILL.md')
     )
@@ -712,7 +712,7 @@ describe('lessons-extract skill 同步注入(v2.16.0)', () => {
 
   it('inspect:bundle 状态包含 lessonsExtract.{claude,cursor} 同步态', async () => {
     const empty = await inspectAiTrackSkillBundle()
-    expect(empty.lessonsExtract.version).toBe('1.2.0')
+    expect(empty.lessonsExtract.version).toBe('1.3.0')
     expect(empty.lessonsExtract.claude.installed).toBe(false)
     expect(empty.lessonsExtract.cursor.installed).toBe(false)
 

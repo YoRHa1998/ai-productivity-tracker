@@ -31,6 +31,7 @@ import {
   handleAiProductivityDeleteLesson,
   handleAiProductivityLessonsBundle,
   handleAiProductivitySaveLessons,
+  handleAiProductivityLatestCandidate,
   handleAiProductivityMergeSplitIterations,
   handleAiProductivityTurnStart,
   handleAiProductivityTurnThought,
@@ -43,12 +44,15 @@ import {
   saveRequirement,
   writeLessons,
   listIterations,
+  appendIteration,
   peekPendingSummary,
   PENDING_SUMMARY_FILE,
   NUMSTAT_SNAPSHOT_FILE,
   LOCAL_AGENT_ROOT_ENV,
   readRecentAttachSentinel,
-  recentAttachSentinelPath
+  recentAttachSentinelPath,
+  readLessonHandledSentinel,
+  lessonHandledSentinelPath
 } from '@ai-productivity-tracker/core/store'
 import type { ServerConfig as ServiceConfig } from '../config.js'
 
@@ -1945,6 +1949,122 @@ describe('handleAiProductivityAttachSummary (v2.7.0 pending model + v2.10.0 sent
     expect(mock.statusCode).toBe(400)
     expect(JSON.parse(mock.body).message).toMatch(/oneLine/)
     expect(existsSync(recentAttachSentinelPath('ABC-700'))).toBe(false)
+  })
+})
+
+describe('handleAiProductivityLatestCandidate (v2.15.0 per-turn 强候选兜底端点)', () => {
+  let aipRootCtx: ReturnType<typeof setupAipRoot>
+
+  beforeEach(() => {
+    aipRootCtx = setupAipRoot()
+  })
+  afterEach(() => {
+    aipRootCtx.restore()
+  })
+
+  it('需求不存在 → 404', () => {
+    const mock = makeMockRes()
+    handleAiProductivityLatestCandidate(mock.res, 'NOPE-1')
+    expect(mock.statusCode).toBe(404)
+  })
+
+  it('只有 init iteration(无非 init)→ seq:null,strongCandidate:false', () => {
+    saveRequirement({ jiraKey: 'CAND-1', title: 'demo' }, {})
+    appendIteration('CAND-1', { kind: 'init', branch: 'f/CAND-1' })
+    const mock = makeMockRes()
+    handleAiProductivityLatestCandidate(mock.res, 'CAND-1')
+    expect(mock.statusCode).toBe(200)
+    const body = JSON.parse(mock.body)
+    expect(body.data).toEqual({ seq: null, strongCandidate: false, reasons: [] })
+  })
+
+  it('最新非 init iteration 被 max_tokens 截断 → strongCandidate:true + reasons 含异常中断', () => {
+    saveRequirement({ jiraKey: 'CAND-2', title: 'demo', manualEstimateMinutes: 60 }, {})
+    appendIteration('CAND-2', { kind: 'init', branch: 'f/CAND-2' })
+    appendIteration('CAND-2', {
+      kind: 'coding',
+      branch: 'f/CAND-2',
+      thinkSeconds: 10,
+      cumulativeToken: 1000,
+      rawPayload: { triggerStopReason: 'max_tokens' }
+    })
+    const mock = makeMockRes()
+    handleAiProductivityLatestCandidate(mock.res, 'CAND-2')
+    expect(mock.statusCode).toBe(200)
+    const body = JSON.parse(mock.body)
+    expect(body.data.seq).toBe(2)
+    expect(body.data.strongCandidate).toBe(true)
+    expect(body.data.reasons.some((r: string) => r.includes('异常中断'))).toBe(true)
+  })
+
+  it('最新非 init iteration 正常(短思考 + end_turn)→ strongCandidate:false', () => {
+    saveRequirement({ jiraKey: 'CAND-3', title: 'demo', manualEstimateMinutes: 60 }, {})
+    appendIteration('CAND-3', { kind: 'init', branch: 'f/CAND-3' })
+    appendIteration('CAND-3', {
+      kind: 'coding',
+      branch: 'f/CAND-3',
+      thinkSeconds: 12,
+      cumulativeToken: 1000,
+      rawPayload: { triggerStopReason: 'end_turn' }
+    })
+    const mock = makeMockRes()
+    handleAiProductivityLatestCandidate(mock.res, 'CAND-3')
+    const body = JSON.parse(mock.body)
+    expect(body.data.seq).toBe(2)
+    expect(body.data.strongCandidate).toBe(false)
+    expect(body.data.reasons).toEqual([])
+  })
+})
+
+describe('handleAiProductivitySaveLessons v2.15.0 写 lesson-handled sentinel', () => {
+  let aipRootCtx: ReturnType<typeof setupAipRoot>
+  let agentRoot: string
+  let prevLocalAgentRoot: string | undefined
+
+  beforeEach(() => {
+    aipRootCtx = setupAipRoot()
+    agentRoot = mkdtempSync(join(tmpdir(), 'aip-lesson-handled-route-'))
+    prevLocalAgentRoot = process.env[LOCAL_AGENT_ROOT_ENV]
+    process.env[LOCAL_AGENT_ROOT_ENV] = agentRoot
+  })
+  afterEach(() => {
+    if (prevLocalAgentRoot === undefined) delete process.env[LOCAL_AGENT_ROOT_ENV]
+    else process.env[LOCAL_AGENT_ROOT_ENV] = prevLocalAgentRoot
+    rmSync(agentRoot, { recursive: true, force: true })
+    aipRootCtx.restore()
+  })
+
+  it('lesson 带 iterationSeqs → 落盘后对每个 seq 写 lesson-handled sentinel', () => {
+    saveRequirement({ jiraKey: 'HANDLED-1', title: 'demo' }, {})
+    const mock = makeMockRes()
+    handleAiProductivitySaveLessons(mock.res, {
+      jiraKey: 'HANDLED-1',
+      lessons: [
+        {
+          jiraKey: 'HANDLED-1',
+          type: 'pitfall',
+          title: '本轮坑',
+          content: 'fire-and-forget 时序不可控',
+          iterationSeqs: [3, 5]
+        }
+      ]
+    })
+    expect(mock.statusCode).toBe(200)
+    expect(JSON.parse(mock.body).data.savedCount).toBe(1)
+    expect(readLessonHandledSentinel('HANDLED-1', 3)).not.toBeNull()
+    expect(readLessonHandledSentinel('HANDLED-1', 5)).not.toBeNull()
+    expect(readLessonHandledSentinel('HANDLED-1', 4)).toBeNull()
+  })
+
+  it('lesson 无 iterationSeqs → 不写任何 sentinel', () => {
+    saveRequirement({ jiraKey: 'HANDLED-2', title: 'demo' }, {})
+    const mock = makeMockRes()
+    handleAiProductivitySaveLessons(mock.res, {
+      jiraKey: 'HANDLED-2',
+      lessons: [{ jiraKey: 'HANDLED-2', type: 'rule', title: 'r', content: 'c' }]
+    })
+    expect(mock.statusCode).toBe(200)
+    expect(existsSync(lessonHandledSentinelPath('HANDLED-2', 1))).toBe(false)
   })
 })
 

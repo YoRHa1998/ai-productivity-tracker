@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs'
 
-import { loadAgentEndpoint } from './lib/agent-client.js'
-import { gcSentinels, readRecentAttachSentinel, RECENT_ATTACH_WINDOW_MS } from './lib/sentinel.js'
+import { loadAgentEndpoint, fetchLatestCandidate } from './lib/agent-client.js'
+import {
+  gcSentinels,
+  readRecentAttachSentinel,
+  readLessonHandledSentinel,
+  writeLessonHandledSentinel,
+  RECENT_ATTACH_WINDOW_MS
+} from './lib/sentinel.js'
 import { isRequirementInitialized, resolveTrackingContext } from './lib/tracking-context.js'
 
 /**
@@ -35,6 +41,19 @@ export const FOLLOWUP_REASON = [
   '调用成功即视为本轮完成 —— 不必在答复中提示上报状态或重复总结内容。'
 ].join(' ')
 
+/**
+ * v2.15.0 per-turn 经验沉淀兜底文案.
+ *
+ * 与 FOLLOWUP_REASON 的关键区别:这不是"漏调 attach 强制重答",而是"轻提示 LLM 补一行经验询问"。
+ * 严格约束 LLM 只追加一行、不重答正文、不重复总结,把 stop hook 二次触发的噪声压到最低。
+ * inject_followup(attach 漏调)永远优先,本兜底只在 attach 正常时才可能触发,二者绝不叠加。
+ */
+export const LESSON_HINT_REASON = [
+  '[AI 提效追踪 · 经验沉淀] 本轮可能命中值得复用的经验。',
+  '请仅在答复末尾追加一行:「💡 本轮可沉淀一条经验:<≤40字>。回复"记录"即保存。」',
+  '不要重答正文、不要重复本轮总结 —— 只补这一行经验询问即可。'
+].join(' ')
+
 export interface StopCheckOptions {
   /** 注入 stdin(测试用) */
   stdin?: string
@@ -66,6 +85,8 @@ export type StopOutcomeKind =
   | 'skipped_agent_unreachable'
   | 'skipped_loop_guard'
   | 'allowed_recent_attach'
+  | 'allowed_no_candidate'
+  | 'inject_lesson_hint'
   | 'inject_followup'
 
 export interface StopCheckOutcome {
@@ -147,6 +168,20 @@ function buildOutput(dialect: StopDialect): string {
   return JSON.stringify({ decision: 'block', reason: FOLLOWUP_REASON })
 }
 
+/**
+ * 构造 lesson-hint 输出.复用 attach-followup 同款通道(Cursor followup_message / Claude decision:block),
+ * 故同样受 loop_count / stop_hook_active loop guard 保护,不会无限注入.
+ * reasons 仅作为可观测信息附在文案尾部,主体提示保持稳定(便于 spec 断言 LESSON_HINT_REASON 子串).
+ */
+function buildLessonHintOutput(dialect: StopDialect, reasons: string[] = []): string {
+  const suffix = reasons.length > 0 ? ` (信号:${reasons.join('; ')})` : ''
+  const reason = LESSON_HINT_REASON + suffix
+  if (dialect === 'cursor') {
+    return JSON.stringify({ followup_message: reason })
+  }
+  return JSON.stringify({ decision: 'block', reason })
+}
+
 async function pingAgent(
   endpoint: { baseUrl: string; token: string } | null,
   fetchImpl: typeof fetch,
@@ -204,9 +239,11 @@ export async function runStopCheck(opts: StopCheckOptions = {}): Promise<StopChe
     return { kind: 'skipped_requirement_missing', dialect, output: null }
   }
 
+  // endpoint / fetchImpl 解析一次,供 ping 与后续 latest-candidate 查询共用
+  const endpoint = opts.agentEndpoint === undefined ? loadAgentEndpoint() : opts.agentEndpoint
+  const fetchImpl = opts.fetchImpl ?? fetch
+
   if (!opts.skipAgentReachability) {
-    const endpoint = opts.agentEndpoint === undefined ? loadAgentEndpoint() : opts.agentEndpoint
-    const fetchImpl = opts.fetchImpl ?? fetch
     const ok = await pingAgent(endpoint, fetchImpl)
     if (!ok) return { kind: 'skipped_agent_unreachable', dialect, output: null }
   }
@@ -216,15 +253,56 @@ export async function runStopCheck(opts: StopCheckOptions = {}): Promise<StopChe
   }
 
   const sentinel = readRecentAttachSentinel(ctx.issueKey, opts.agentRootOverride)
-  if (sentinel) {
-    const calledAtMs = Date.parse(sentinel.calledAt)
-    const nowMs = opts.now ? opts.now() : Date.now()
-    if (Number.isFinite(calledAtMs) && nowMs - calledAtMs < RECENT_ATTACH_WINDOW_MS) {
-      return { kind: 'allowed_recent_attach', dialect, output: null }
-    }
+  const nowMs = opts.now ? opts.now() : Date.now()
+  const attachRecent =
+    !!sentinel &&
+    Number.isFinite(Date.parse(sentinel.calledAt)) &&
+    nowMs - Date.parse(sentinel.calledAt) < RECENT_ATTACH_WINDOW_MS
+
+  // attach 漏调 / 超窗 → 优先强制补调,绝不叠加 lesson hint
+  if (!attachRecent) {
+    return { kind: 'inject_followup', dialect, output: buildOutput(dialect) }
   }
 
-  return { kind: 'inject_followup', dialect, output: buildOutput(dialect) }
+  // attach 正常 → per-turn 经验沉淀兜底:查"最新已 flush 非 init iteration 是否强候选 && 未 handled"
+  return maybeInjectLessonHint(ctx.issueKey, dialect, endpoint, fetchImpl, opts)
+}
+
+/**
+ * attach 正常时的 per-turn 经验沉淀兜底.
+ *
+ * - 查 daemon latest-candidate(最新非 init iteration 的 strongCandidate 判定)
+ * - 命中强候选 && 该 (jiraKey, seq) 尚未 handled → 写 handled sentinel + 注入 lesson hint
+ * - 其余一切情况(无候选 / 非强候选 / 已 handled / 任何错误)→ allowed_no_candidate(静默放行)
+ *
+ * 全程 fail-open:此兜底绝不应阻塞 stop,任何异常都退化为放行.
+ */
+async function maybeInjectLessonHint(
+  jiraKey: string,
+  dialect: StopDialect,
+  endpoint: { baseUrl: string; token: string } | null,
+  fetchImpl: typeof fetch,
+  opts: StopCheckOptions
+): Promise<StopCheckOutcome> {
+  try {
+    const candidate = await fetchLatestCandidate(jiraKey, endpoint, fetchImpl)
+    if (candidate.kind !== 'ok' || candidate.data.seq == null || !candidate.data.strongCandidate) {
+      return { kind: 'allowed_no_candidate', dialect, output: null }
+    }
+    const seq = candidate.data.seq
+    if (readLessonHandledSentinel(jiraKey, seq, opts.agentRootOverride)) {
+      return { kind: 'allowed_no_candidate', dialect, output: null }
+    }
+    // 写 handled sentinel,保证同一 (jiraKey, seq) 候选最多打扰一次
+    writeLessonHandledSentinel(jiraKey, seq, undefined, opts.agentRootOverride)
+    return {
+      kind: 'inject_lesson_hint',
+      dialect,
+      output: buildLessonHintOutput(dialect, candidate.data.reasons)
+    }
+  } catch {
+    return { kind: 'allowed_no_candidate', dialect, output: null }
+  }
 }
 
 /** CLI 入口:解析 stdin → 跑校验 → 必要时 print 到 stdout.异常一律 fail-open. */

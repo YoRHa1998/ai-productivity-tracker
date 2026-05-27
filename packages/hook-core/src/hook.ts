@@ -10,7 +10,8 @@ import {
   postHookToAgent,
   postTurnStartToAgent,
   postTurnThoughtToAgent,
-  type AgentSimpleResult
+  type AgentSimpleResult,
+  type AgentTurnThoughtResult
 } from './lib/agent-client.js'
 
 function readStdinSync(): string {
@@ -170,6 +171,24 @@ function describeSimpleResult(label: string, result: AgentSimpleResult): string 
     return `${label}.fallback(http-${result.status}: ${result.message.slice(0, 80)})`
   }
   return `${label}.fallback(${result.kind}: ${result.message.slice(0, 80)})`
+}
+
+/**
+ * turn-thought 专属:200 happy path 上区分 `applied` / `no_pending_turn`。
+ * 关键观测点 —— `turn-thought.ok(dropped:no_pending_turn)` 即代表本块 thinking 被
+ * afterAgentResponse 抢先 consume 后丢弃,是跨进程竞态的直接证据。
+ */
+function describeTurnThoughtResult(result: AgentTurnThoughtResult): string {
+  if (result.kind === 'ok') {
+    return result.applied
+      ? `turn-thought.ok(applied totalMs=${result.totalMs ?? '?'})`
+      : `turn-thought.ok(dropped:${result.reason ?? 'unknown'})`
+  }
+  if (result.kind === 'unconfigured') return 'turn-thought.fallback(agent-unconfigured)'
+  if (result.kind === 'http-error') {
+    return `turn-thought.fallback(http-${result.status}: ${result.message.slice(0, 80)})`
+  }
+  return `turn-thought.fallback(${result.kind}: ${result.message.slice(0, 80)})`
 }
 
 function detectSource(input: HookInput | null): string {
@@ -379,13 +398,21 @@ export async function runHook() {
         ? parsedInput.duration_ms
         : 0
     let routeOutcome = 'turn-thought.skipped(missing-ids)'
+    let applied: boolean | null = null
+    let totalMs: number | null = null
+    let reason: string | null = null
     if (conversationId && generationId) {
       const result = await postTurnThoughtToAgent({
         conversationId,
         generationId,
         durationMs
       })
-      routeOutcome = describeSimpleResult('turn-thought', result)
+      routeOutcome = describeTurnThoughtResult(result)
+      if (result.kind === 'ok') {
+        applied = result.applied
+        totalMs = result.totalMs ?? null
+        reason = result.reason ?? null
+      }
     }
     writeDebugLog(aipDir, {
       at: now,
@@ -396,7 +423,12 @@ export async function runHook() {
       source,
       route: routeOutcome,
       hookEvent: parsedInput?.hook_event_name ?? null,
-      durationMs
+      conversationId,
+      generationId,
+      durationMs,
+      applied,
+      totalMs,
+      reason
     })
     return
   }

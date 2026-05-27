@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { loadAgentEndpoint, postHookToAgent } from './agent-client.js'
+import { loadAgentEndpoint, postHookToAgent, postTurnThoughtToAgent } from './agent-client.js'
 
 describe('postHookToAgent', () => {
   it('endpoint 为 null 时返回 unconfigured,不发请求', async () => {
@@ -98,6 +98,86 @@ describe('postHookToAgent', () => {
     if (result.kind === 'http-error') {
       expect(result.message).toBe('boom')
     }
+  })
+})
+
+describe('postTurnThoughtToAgent 解析 200 响应体(区分 applied / no_pending_turn)', () => {
+  const endpoint = { baseUrl: 'http://127.0.0.1:17350', token: 'tok' }
+
+  function okEnvelope(data: unknown): Response {
+    return new Response(JSON.stringify({ code: 'OK', message: '', data }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    })
+  }
+
+  it('applied=true 时透传 totalMs', async () => {
+    const fakeFetch = (async () =>
+      okEnvelope({ ok: true, applied: true, totalMs: 4200 })) as unknown as typeof fetch
+    const result = await postTurnThoughtToAgent(
+      { conversationId: 'c1', generationId: 'g1', durationMs: 1200 },
+      endpoint,
+      fakeFetch
+    )
+    expect(result).toEqual({ kind: 'ok', applied: true, totalMs: 4200, reason: undefined })
+  })
+
+  it('applied=false + no_pending_turn 时透传 reason(竞态丢弃信号)', async () => {
+    const fakeFetch = (async () =>
+      okEnvelope({
+        ok: true,
+        applied: false,
+        reason: 'no_pending_turn'
+      })) as unknown as typeof fetch
+    const result = await postTurnThoughtToAgent(
+      { conversationId: 'c1', generationId: 'g1', durationMs: 1200 },
+      endpoint,
+      fakeFetch
+    )
+    expect(result).toEqual({
+      kind: 'ok',
+      applied: false,
+      totalMs: undefined,
+      reason: 'no_pending_turn'
+    })
+  })
+
+  it('endpoint 为 null → unconfigured,不发请求', async () => {
+    const fakeFetch = (() => {
+      throw new Error('should not be called')
+    }) as unknown as typeof fetch
+    const result = await postTurnThoughtToAgent(
+      { conversationId: 'c1', generationId: 'g1', durationMs: 1 },
+      null,
+      fakeFetch
+    )
+    expect(result).toEqual({ kind: 'unconfigured' })
+  })
+
+  it('非 200 → http-error 携带状态码', async () => {
+    const fakeFetch = (async () => new Response('boom', { status: 500 })) as unknown as typeof fetch
+    const result = await postTurnThoughtToAgent(
+      { conversationId: 'c1', generationId: 'g1', durationMs: 1 },
+      endpoint,
+      fakeFetch
+    )
+    expect(result.kind).toBe('http-error')
+    if (result.kind === 'http-error') expect(result.status).toBe(500)
+  })
+
+  it('200 但非 OK envelope → http-error', async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ code: 'ERROR', message: 'bad envelope', data: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })) as unknown as typeof fetch
+    const result = await postTurnThoughtToAgent(
+      { conversationId: 'c1', generationId: 'g1', durationMs: 1 },
+      endpoint,
+      fakeFetch
+    )
+    expect(result.kind).toBe('http-error')
+    if (result.kind === 'http-error') expect(result.message).toContain('bad envelope')
   })
 })
 

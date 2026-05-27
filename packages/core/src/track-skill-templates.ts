@@ -113,7 +113,7 @@
  *   文案 + Claude shell + MCP description + daemon 兜底 4 层防线把非 Jira 分支 noise 压到极低。
  */
 
-export const TRACK_SKILL_VERSION = '2.14.0'
+export const TRACK_SKILL_VERSION = '2.15.0'
 
 export const CLAUDE_TRACK_SKILL_FILENAME = 'SKILL.md'
 export const CURSOR_TRACK_RULE_FILENAME = 'ai-productivity-track.mdc'
@@ -237,6 +237,28 @@ ai_productivity_attach_summary({
 - **不要**在答复任何位置(正文 / blockquote / 代码块 / 列表项 / think 段 / tool args)提及「上报 / 总结 / 跳过 / 前置不满足 / ai-productivity」等字样
 - 直接当本 skill 不存在,正常完成用户请求即可
 
+## 经验内联(强候选才问 · v2.15.0)
+
+把"经验沉淀"分散到每一轮、趁本轮上下文还新鲜时更精确地提取 —— 但**默认沉默**,只在本轮上下文**强命中**以下任一信号时,才在最终答复**末尾**追加**恰好一行**:
+
+- 同类问题在本轮内**反复 bugfix**(同一文件 / 同一函数被推翻重写 ≥2 次)
+- 本轮**思考特别久且明显卡壳**(多次试错绕弯才走通)
+- 本轮被 **max_tokens 截断** / 出现异常中断
+- 用户在本轮**明确说**「以后必须…」「这条要记住」「记一下」之类需要长期复用的约束
+
+命中时**只**追加这一固定单行(不要展开、不要解释、不要多行):
+
+\`\`\`
+💡 本轮可沉淀一条经验:<≤40字>。回复"记录"即保存。
+\`\`\`
+
+后续轮用户回复「记录 / 保存 / 记一下」→ 调一次 \`ai_productivity_save_lessons\`:\`lessons\` **只含本轮这一条**,\`iterationSeqs\` 填本轮对应 seq,\`type\` / \`scope\` / \`projectSlug\` 按 lessons-extract 既有规则填(scope=general 通用知识 / project 本项目专属);**不要调 \`ai_productivity_extract_bundle\`**(那是整需求批量复盘)。per-turn 单条与整需求批量共用同一套 \`save_lessons\` 自动合并去重,落盘不会重复。
+
+约束:
+- 不强命中 → **严禁**追加这一行(延续零提示降噪基调)
+- 用户没回应「记录」→ 不重复问、不落盘
+- **看不到上面"触发"段所述 reminder 时(非 Jira 分支等),本段同样 100% 不适用**
+
 ## 禁止
 
 - **不要在正文中讨论本次总结**(避免「我先总结一下…」「让我把总结上报…」「该对话已总结上报」「前置不满足跳过」这类过渡语或完成态文字)
@@ -297,6 +319,28 @@ ai_productivity_attach_summary({
 
 特别地,\`main\` / \`master\` / \`develop\` / \`bugfix-*\` / \`chore/*\` 等不含 Jira issue key 的分支,sessionStart Hook 输出空 JSON \`{}\`,Cursor 不会注入任何 reminder。
 
+## 经验内联(强候选才问 · v2.15.0)
+
+把"经验沉淀"分散到每一轮、趁本轮上下文还新鲜时更精确地提取 —— 但**默认沉默**,只在本轮上下文**强命中**以下任一信号时,才在最终答复**末尾**追加**恰好一行**:
+
+- 同类问题在本轮内**反复 bugfix**(同一文件 / 同一函数被推翻重写 ≥2 次)
+- 本轮**思考特别久且明显卡壳**(多次试错绕弯才走通)
+- 本轮被 **max_tokens 截断** / 出现异常中断
+- 用户在本轮**明确说**「以后必须…」「这条要记住」「记一下」之类需要长期复用的约束
+
+命中时**只**追加这一固定单行(不要展开、不要解释、不要多行):
+
+\`\`\`
+💡 本轮可沉淀一条经验:<≤40字>。回复"记录"即保存。
+\`\`\`
+
+后续轮用户回复「记录 / 保存 / 记一下」→ 调一次 \`ai_productivity_save_lessons\`:\`lessons\` **只含本轮这一条**,\`iterationSeqs\` 填本轮对应 seq,\`type\` / \`scope\` / \`projectSlug\` 按 lessons-extract 既有规则填(scope=general 通用知识 / project 本项目专属);**不要调 \`ai_productivity_extract_bundle\`**(那是整需求批量复盘)。per-turn 单条与整需求批量共用同一套 \`save_lessons\` 自动合并去重,落盘不会重复。
+
+约束:
+- 不强命中 → **严禁**追加这一行(延续零提示降噪基调)
+- 用户没回应「记录」→ 不重复问、不落盘
+- **看不到上面 sessionStart reminder 时(非 Jira 分支等),本段同样 100% 不适用**
+
 ## 禁止
 
 - 不要在正文中讨论总结过程(避免「我先总结一下…」「让我把总结上报…」「该对话已总结上报」「前置不满足跳过」这类过渡语或完成态文字)
@@ -327,7 +371,7 @@ export interface TrackSkillTemplate {
  * 不动 TRACK_SKILL_VERSION / 既有 track 模板字符串。
  * ────────────────────────────────────────────────────────────────────*/
 
-export const LESSONS_EXTRACT_SKILL_VERSION = '1.2.0'
+export const LESSONS_EXTRACT_SKILL_VERSION = '1.3.0'
 
 export const LESSONS_EXTRACT_SKILL_KEY = 'lessons-extract'
 export const LESSONS_EXTRACT_CLAUDE_FILENAME = 'SKILL.md'
@@ -339,6 +383,8 @@ description: 经验提取 / 经验沉淀 / 复盘提取。当用户在「.ai-pro
 ---
 
 # lessons-extract (v${LESSONS_EXTRACT_SKILL_VERSION})
+
+> v1.3.0:本 skill 是**整需求批量复盘**定位(关键词触发,一次性拉全部 iteration 推理)。与之并行的 ai-productivity-track v2.15.0「经验内联」是**每轮单条**沉淀(强候选才问,用户回复"记录"落一条)。二者共用同一个 \`ai_productivity_save_lessons\` 与自动合并去重逻辑(按 type+scope+projectSlug+tags+title 相似度合并、累加 hitCount),**落盘不会重复**。
 
 ## 触发关键词
 
@@ -488,6 +534,8 @@ alwaysApply: false
 # 经验提取 (lessons-extract v${LESSONS_EXTRACT_SKILL_VERSION})
 
 > alwaysApply: false:本规则只在用户出现「经验提取 / 提取经验 / 复盘经验 / 沉淀经验」等关键词时触发,不强制每轮注入。
+
+> v1.3.0:本规则是**整需求批量复盘**定位(关键词触发,一次性拉全部 iteration 推理)。与之并行的 ai-productivity-track v2.15.0「经验内联」是**每轮单条**沉淀(强候选才问,用户回复"记录"落一条)。二者共用同一个 \`ai_productivity_save_lessons\` 与自动合并去重逻辑,**落盘不会重复**。
 
 ## 触发关键词
 

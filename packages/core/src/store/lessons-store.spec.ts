@@ -8,12 +8,14 @@ import {
   computeSignals,
   findMergeCandidate,
   generateLessonId,
+  isStrongCandidateIteration,
   listLessons,
   loadLesson,
   mergeSignals,
   readLessonsIndex,
   recomputeTrustReasons,
   removeLesson,
+  STRONG_THINK_SECONDS,
   tagsJaccard,
   titleSimilarity,
   writeLessons,
@@ -513,6 +515,133 @@ describe('lessons-store', () => {
       appendIteration('BUG-2', { kind: 'init', branch: 'f/BUG-2' }, root)
       const signals = computeSignals('BUG-2', undefined, root)
       expect(signals.sourceLinkedBugCount).toBe(2)
+    })
+  })
+
+  describe('v2.15.0 isStrongCandidateIteration(per-turn 强候选判定)', () => {
+    it('STRONG_THINK_SECONDS 锁定为 180(防误改)', () => {
+      expect(STRONG_THINK_SECONDS).toBe(180)
+    })
+
+    it('本轮思考时长 ≥ 180s → hit,reasons 含思考时长', () => {
+      saveRequirement({ jiraKey: 'STRONG-1', title: 's', manualEstimateMinutes: 60 }, { root })
+      appendIteration('STRONG-1', { kind: 'init', branch: 'f/STRONG-1' }, root)
+      appendIteration(
+        'STRONG-1',
+        { kind: 'coding', branch: 'f/STRONG-1', thinkSeconds: 200, cumulativeToken: 1000 },
+        root
+      )
+      const res = isStrongCandidateIteration('STRONG-1', 2, root)
+      expect(res.hit).toBe(true)
+      expect(res.reasons.some((r) => r.includes('思考时长'))).toBe(true)
+    })
+
+    it('本轮被异常 stopReason(max_tokens)打断 → hit,reasons 含异常中断', () => {
+      saveRequirement({ jiraKey: 'STRONG-2', title: 's', manualEstimateMinutes: 60 }, { root })
+      appendIteration('STRONG-2', { kind: 'init', branch: 'f/STRONG-2' }, root)
+      appendIteration(
+        'STRONG-2',
+        {
+          kind: 'coding',
+          branch: 'f/STRONG-2',
+          thinkSeconds: 10,
+          cumulativeToken: 1000,
+          rawPayload: { triggerStopReason: 'max_tokens' }
+        },
+        root
+      )
+      const res = isStrongCandidateIteration('STRONG-2', 2, root)
+      expect(res.hit).toBe(true)
+      expect(res.reasons.some((r) => r.includes('异常中断'))).toBe(true)
+      expect(res.reasons.some((r) => r.includes('max_tokens'))).toBe(true)
+    })
+
+    it('思考短 + 正常 stopReason(end_turn) → 不 hit', () => {
+      saveRequirement({ jiraKey: 'STRONG-3', title: 's', manualEstimateMinutes: 60 }, { root })
+      appendIteration('STRONG-3', { kind: 'init', branch: 'f/STRONG-3' }, root)
+      appendIteration(
+        'STRONG-3',
+        {
+          kind: 'coding',
+          branch: 'f/STRONG-3',
+          thinkSeconds: 30,
+          cumulativeToken: 1000,
+          rawPayload: { triggerStopReason: 'end_turn' }
+        },
+        root
+      )
+      const res = isStrongCandidateIteration('STRONG-3', 2, root)
+      expect(res.hit).toBe(false)
+      expect(res.reasons).toEqual([])
+    })
+
+    it('阈值边界:正好 180s → hit;179s → 不 hit', () => {
+      saveRequirement({ jiraKey: 'STRONG-4', title: 's', manualEstimateMinutes: 60 }, { root })
+      appendIteration('STRONG-4', { kind: 'init', branch: 'f/STRONG-4' }, root)
+      appendIteration(
+        'STRONG-4',
+        { kind: 'coding', branch: 'f/STRONG-4', thinkSeconds: 180, cumulativeToken: 1 },
+        root
+      )
+      appendIteration(
+        'STRONG-4',
+        { kind: 'coding', branch: 'f/STRONG-4', thinkSeconds: 179, cumulativeToken: 1 },
+        root
+      )
+      expect(isStrongCandidateIteration('STRONG-4', 2, root).hit).toBe(true)
+      expect(isStrongCandidateIteration('STRONG-4', 3, root).hit).toBe(false)
+    })
+
+    it('非法 seq(0 / 负 / 非整数) → 不 hit,不抛', () => {
+      expect(isStrongCandidateIteration('STRONG-1', 0, root)).toEqual({ hit: false, reasons: [] })
+      expect(isStrongCandidateIteration('STRONG-1', -1, root)).toEqual({ hit: false, reasons: [] })
+      expect(isStrongCandidateIteration('STRONG-1', 1.5, root)).toEqual({ hit: false, reasons: [] })
+    })
+
+    it('per-turn 单条落盘后再批量 extract 同款 → 自动合并(replaced 命中,hitCount 不虚增)', () => {
+      saveRequirement(
+        { jiraKey: 'MERGE-PT', title: 's', projectSlug: 'pt-app', manualEstimateMinutes: 60 },
+        { root }
+      )
+      // per-turn 单条沉淀(seq 5)
+      const first = writeLessons(
+        [
+          {
+            jiraKey: 'MERGE-PT',
+            type: 'pitfall',
+            title: '同款踩坑:异步写时序不可控',
+            content: 'fire-and-forget 跨进程时序不可控,应改同步写',
+            scope: 'project',
+            projectSlug: 'pt-app',
+            tags: ['sentinel', 'async'],
+            iterationSeqs: [5]
+          }
+        ],
+        { extractedBy: 'cursor' },
+        root
+      )
+      expect(first.saved.length).toBe(1)
+      const firstId = first.saved[0].id
+      // 整需求批量 extract 又推出同款(title/tags 高度相似)→ 应合并到同一条
+      const second = writeLessons(
+        [
+          {
+            jiraKey: 'MERGE-PT',
+            type: 'pitfall',
+            title: '同款踩坑:异步写时序不可控',
+            content: 'fire-and-forget 跨进程时序不可控,应改同步写(批量复盘补充)',
+            scope: 'project',
+            projectSlug: 'pt-app',
+            tags: ['sentinel', 'async'],
+            iterationSeqs: [5]
+          }
+        ],
+        { extractedBy: 'manual' },
+        root
+      )
+      expect(second.replaced).toContain(firstId)
+      // 合并后经验库仍只有一条
+      expect(listLessons({ jiraKey: 'MERGE-PT' }, root).length).toBe(1)
     })
   })
 

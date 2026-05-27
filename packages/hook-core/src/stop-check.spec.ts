@@ -4,17 +4,44 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { FOLLOWUP_REASON, runStopCheck } from './stop-check.js'
+import { FOLLOWUP_REASON, LESSON_HINT_REASON, runStopCheck } from './stop-check.js'
 import {
   RECENT_ATTACH_WINDOW_MS,
   recentAttachSentinelPath,
-  writeRecentAttachSentinel
+  writeRecentAttachSentinel,
+  readLessonHandledSentinel,
+  writeLessonHandledSentinel
 } from './lib/sentinel.js'
 
 interface Env {
   workspace: string
   agentRoot: string
 }
+
+interface CandidateShape {
+  seq: number | null
+  strongCandidate: boolean
+  reasons?: string[]
+}
+
+/**
+ * 构造一个按 URL 路由的 fetch:
+ *   - `/latest-candidate` → 返回注入的候选(默认无候选)
+ *   - 其余(`/status` ping)→ 200
+ * 让 recent-attach 命中后的 per-turn 兜底路径在测试里完全可控,不触真实 daemon。
+ */
+function makeFetch(candidate?: CandidateShape): typeof fetch {
+  return (async (url: unknown) => {
+    const u = String(url)
+    if (u.includes('/latest-candidate')) {
+      const data: CandidateShape = candidate ?? { seq: null, strongCandidate: false, reasons: [] }
+      return new Response(JSON.stringify({ code: 'OK', message: 'ok', data }), { status: 200 })
+    }
+    return new Response('{"ok":true}', { status: 200 })
+  }) as unknown as typeof fetch
+}
+
+const STUB_ENDPOINT = { baseUrl: 'http://x', token: 't' }
 
 function setupGitRepo(branchName: string): Env {
   const workspace = mkdtempSync(join(tmpdir(), 'aip-stop-ws-'))
@@ -82,16 +109,18 @@ describe('runStopCheck — Cursor 方言(v2.13.0 jiraKey-recent-attach, 90s 窗)
     expect(parsed.followup_message).toBe(FOLLOWUP_REASON)
   })
 
-  it('sentinel 存在且在 90s 窗内 → 放行(allowed_recent_attach)', async () => {
+  it('sentinel 存在且在 90s 窗内 + 无强候选 → 放行(allowed_no_candidate)', async () => {
     const at = new Date('2026-05-21T03:00:00.000Z')
     writeRecentAttachSentinel('INSTANT-200', at, env.agentRoot)
     const outcome = await runStopCheck({
       stdin: cursorPayload(env),
       agentRootOverride: env.agentRoot,
       skipAgentReachability: true,
+      agentEndpoint: STUB_ENDPOINT,
+      fetchImpl: makeFetch(),
       now: () => at.getTime() + 5_000
     })
-    expect(outcome.kind).toBe('allowed_recent_attach')
+    expect(outcome.kind).toBe('allowed_no_candidate')
     expect(outcome.output).toBeNull()
   })
 
@@ -104,9 +133,12 @@ describe('runStopCheck — Cursor 方言(v2.13.0 jiraKey-recent-attach, 90s 窗)
       stdin: cursorPayload(env),
       agentRootOverride: env.agentRoot,
       skipAgentReachability: true,
+      agentEndpoint: STUB_ENDPOINT,
+      fetchImpl: makeFetch(),
       now: () => at.getTime() + 21_410
     })
-    expect(outcome.kind).toBe('allowed_recent_attach')
+    // attach 正常(不再 inject_followup);无强候选 → allowed_no_candidate
+    expect(outcome.kind).toBe('allowed_no_candidate')
   })
 
   it('sentinel 存在但已超 90s 窗 → 注入 followup', async () => {
@@ -276,16 +308,136 @@ describe('runStopCheck — Claude Code 方言(v2.13.0 jiraKey-recent-attach, 90s
     expect(outcome.kind).toBe('skipped_loop_guard')
   })
 
-  it('对应 jiraKey sentinel 存在 → 放行(跨方言共用 jiraKey 维度)', async () => {
+  it('对应 jiraKey sentinel 存在 + 无强候选 → 放行(跨方言共用 jiraKey 维度)', async () => {
     const at = new Date('2026-05-21T04:00:00.000Z')
     writeRecentAttachSentinel('INSTANT-201', at, env.agentRoot)
     const outcome = await runStopCheck({
       stdin: claudePayload(env),
       agentRootOverride: env.agentRoot,
       skipAgentReachability: true,
+      agentEndpoint: STUB_ENDPOINT,
+      fetchImpl: makeFetch(),
       now: () => at.getTime() + 1_000
     })
-    expect(outcome.kind).toBe('allowed_recent_attach')
+    expect(outcome.kind).toBe('allowed_no_candidate')
+  })
+})
+
+describe('runStopCheck — per-turn 经验沉淀兜底(v2.15.0 inject_lesson_hint)', () => {
+  let env: Env
+  beforeEach(() => {
+    env = setupGitRepo('feature/INSTANT-300-lesson')
+    seedRequirement(env.agentRoot, 'INSTANT-300')
+  })
+  afterEach(() => {
+    rmSync(env.workspace, { recursive: true, force: true })
+    rmSync(env.agentRoot, { recursive: true, force: true })
+  })
+
+  function recentAttach(at = new Date('2026-05-21T03:00:00.000Z')) {
+    writeRecentAttachSentinel('INSTANT-300', at, env.agentRoot)
+    return at
+  }
+
+  it('attach 正常 + 上一轮强候选 + 未 handled → inject_lesson_hint(Cursor)', async () => {
+    const at = recentAttach()
+    const outcome = await runStopCheck({
+      stdin: cursorPayload(env),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true,
+      agentEndpoint: STUB_ENDPOINT,
+      fetchImpl: makeFetch({
+        seq: 7,
+        strongCandidate: true,
+        reasons: ['本轮异常中断: max_tokens']
+      }),
+      now: () => at.getTime() + 5_000
+    })
+    expect(outcome.kind).toBe('inject_lesson_hint')
+    expect(outcome.dialect).toBe('cursor')
+    const parsed = JSON.parse(outcome.output!) as { followup_message: string }
+    expect(parsed.followup_message).toContain(LESSON_HINT_REASON)
+    expect(parsed.followup_message).toContain('max_tokens')
+    // 命中后写下 handled sentinel,保证同一 seq 只打扰一次
+    expect(readLessonHandledSentinel('INSTANT-300', 7, env.agentRoot)).not.toBeNull()
+  })
+
+  it('attach 正常 + 强候选 + 未 handled → inject_lesson_hint(Claude decision:block)', async () => {
+    const at = recentAttach()
+    const outcome = await runStopCheck({
+      stdin: claudePayload(env),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true,
+      agentEndpoint: STUB_ENDPOINT,
+      fetchImpl: makeFetch({ seq: 7, strongCandidate: true, reasons: [] }),
+      now: () => at.getTime() + 5_000
+    })
+    expect(outcome.dialect).toBe('claude-code')
+    expect(outcome.kind).toBe('inject_lesson_hint')
+    const parsed = JSON.parse(outcome.output!) as { decision: string; reason: string }
+    expect(parsed.decision).toBe('block')
+    expect(parsed.reason).toContain(LESSON_HINT_REASON)
+  })
+
+  it('同候选已 handled → allowed_no_candidate(只打扰一次)', async () => {
+    const at = recentAttach()
+    writeLessonHandledSentinel('INSTANT-300', 7, new Date(), env.agentRoot)
+    const outcome = await runStopCheck({
+      stdin: cursorPayload(env),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true,
+      agentEndpoint: STUB_ENDPOINT,
+      fetchImpl: makeFetch({ seq: 7, strongCandidate: true, reasons: ['x'] }),
+      now: () => at.getTime() + 5_000
+    })
+    expect(outcome.kind).toBe('allowed_no_candidate')
+    expect(outcome.output).toBeNull()
+  })
+
+  it('attach 漏调时优先 inject_followup,绝不叠加 lesson hint', async () => {
+    // 不写 recent-attach sentinel → attach 漏调;即便 latest-candidate 是强候选也只走 followup
+    const outcome = await runStopCheck({
+      stdin: cursorPayload(env),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true,
+      agentEndpoint: STUB_ENDPOINT,
+      fetchImpl: makeFetch({ seq: 7, strongCandidate: true, reasons: ['x'] })
+    })
+    expect(outcome.kind).toBe('inject_followup')
+    const parsed = JSON.parse(outcome.output!) as { followup_message: string }
+    expect(parsed.followup_message).toBe(FOLLOWUP_REASON)
+    // 漏调路径不应写 lesson-handled sentinel
+    expect(readLessonHandledSentinel('INSTANT-300', 7, env.agentRoot)).toBeNull()
+  })
+
+  it('非强候选 → allowed_no_candidate', async () => {
+    const at = recentAttach()
+    const outcome = await runStopCheck({
+      stdin: cursorPayload(env),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true,
+      agentEndpoint: STUB_ENDPOINT,
+      fetchImpl: makeFetch({ seq: 7, strongCandidate: false, reasons: [] }),
+      now: () => at.getTime() + 5_000
+    })
+    expect(outcome.kind).toBe('allowed_no_candidate')
+  })
+
+  it('latest-candidate 查询失败(网络错误)→ fail-open allowed_no_candidate', async () => {
+    const at = recentAttach()
+    const failFetch = (async (url: unknown) => {
+      if (String(url).includes('/latest-candidate')) throw new Error('boom')
+      return new Response('{"ok":true}', { status: 200 })
+    }) as unknown as typeof fetch
+    const outcome = await runStopCheck({
+      stdin: cursorPayload(env),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true,
+      agentEndpoint: STUB_ENDPOINT,
+      fetchImpl: failFetch,
+      now: () => at.getTime() + 5_000
+    })
+    expect(outcome.kind).toBe('allowed_no_candidate')
   })
 })
 

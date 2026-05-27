@@ -129,6 +129,28 @@ export type AgentSimpleResult =
   | { kind: 'network-error'; message: string }
   | { kind: 'unconfigured' }
 
+/** daemon turn-thought 端点 envelope.data 形状(与 server TurnThoughtResponse 对齐) */
+export interface AgentTurnThoughtResponse {
+  ok: true
+  applied: boolean
+  totalMs?: number
+  reason?: string
+}
+
+/**
+ * turn-thought 专属结果:在 200 happy path 上额外携带 `applied`/`totalMs`/`reason`。
+ *
+ * 背景:通用 `postJsonToAgent` 对任意 200 都只返 `{kind:'ok'}`,丢掉了 body 里的
+ * `applied=false / reason='no_pending_turn'`(afterAgentResponse 抢先 consume 删 entry 导致
+ * thinking 累加丢失的关键信号)。turn-thought 单独解析 body,让 hook-debug.log 能区分
+ * 「真累加成功」与「命中 no_pending_turn 被丢」,用于坐实跨进程竞态。
+ */
+export type AgentTurnThoughtResult =
+  | { kind: 'ok'; applied: boolean; totalMs?: number; reason?: string }
+  | { kind: 'http-error'; status: number; message: string }
+  | { kind: 'network-error'; message: string }
+  | { kind: 'unconfigured' }
+
 /** 调 agent /ai-productivity/hook;失败有完整可观测的 result.kind,调用方据此降级 */
 export async function postHookToAgent(
   payload: AgentHookPayload,
@@ -208,6 +230,72 @@ async function postJsonToAgent(
   }
 }
 
+/**
+ * v2.15.0 per-turn 经验沉淀兜底:stop-check 查"最新一条已 flush 非 init iteration 是否强候选"。
+ *
+ * daemon 端算信号(GET /ai-productivity/requirements/:jiraKey/latest-candidate),
+ * 避免 hook 单文件直接 import core store。fail-open:任何失败都让调用方当作「无候选」。
+ */
+export interface LatestCandidateResponse {
+  /** 最新一条非 init iteration 的 seq;无任何非 init iteration 时为 null */
+  seq: number | null
+  strongCandidate: boolean
+  reasons: string[]
+}
+
+export type LatestCandidateResult =
+  | { kind: 'ok'; data: LatestCandidateResponse }
+  | { kind: 'http-error'; status: number; message: string }
+  | { kind: 'network-error'; message: string }
+  | { kind: 'unconfigured' }
+
+export async function fetchLatestCandidate(
+  jiraKey: string,
+  endpoint: { baseUrl: string; token: string } | null = loadAgentEndpoint(),
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 3000
+): Promise<LatestCandidateResult> {
+  if (!endpoint) return { kind: 'unconfigured' }
+  const safe = encodeURIComponent(String(jiraKey || '').trim())
+  if (!safe) return { kind: 'http-error', status: 400, message: 'empty jiraKey' }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetchImpl(
+      `${endpoint.baseUrl}/ai-productivity/requirements/${safe}/latest-candidate`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${endpoint.token}`,
+          Accept: 'application/json'
+        },
+        signal: controller.signal
+      }
+    )
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      return { kind: 'http-error', status: res.status, message: text.slice(0, 500) }
+    }
+    const json = (await res.json()) as {
+      code?: string
+      data?: LatestCandidateResponse
+      message?: string
+    }
+    if (json.code === 'OK' && json.data) {
+      return { kind: 'ok', data: json.data }
+    }
+    return {
+      kind: 'http-error',
+      status: res.status,
+      message: json.message ?? 'agent 返回非 OK envelope'
+    }
+  } catch (err) {
+    return { kind: 'network-error', message: (err as Error).message ?? String(err) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export async function postTurnStartToAgent(
   payload: AgentTurnStartPayload,
   endpoint: { baseUrl: string; token: string } | null = loadAgentEndpoint(),
@@ -217,11 +305,58 @@ export async function postTurnStartToAgent(
   return postJsonToAgent('/ai-productivity/turn-start', payload, endpoint, fetchImpl, timeoutMs)
 }
 
+/**
+ * turn-thought 不复用 `postJsonToAgent`(它对任意 200 都只返 `{kind:'ok'}`,丢掉 body),
+ * 而是自己解析 200 响应体,把 `applied`/`totalMs`/`reason` 透出来。
+ *
+ * 目的:让 hook-debug.log 能区分「真累加成功(applied=true)」与「命中 no_pending_turn 被丢
+ * (applied=false)」,从而坐实 afterAgentResponse 抢先 consume 删 entry 导致 thinking 丢失的跨进程竞态。
+ */
 export async function postTurnThoughtToAgent(
   payload: AgentTurnThoughtPayload,
   endpoint: { baseUrl: string; token: string } | null = loadAgentEndpoint(),
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 3000
-): Promise<AgentSimpleResult> {
-  return postJsonToAgent('/ai-productivity/turn-thought', payload, endpoint, fetchImpl, timeoutMs)
+): Promise<AgentTurnThoughtResult> {
+  if (!endpoint) return { kind: 'unconfigured' }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetchImpl(`${endpoint.baseUrl}/ai-productivity/turn-thought`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${endpoint.token}`,
+        Accept: 'application/json'
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      return { kind: 'http-error', status: res.status, message: text.slice(0, 500) }
+    }
+    const json = (await res.json()) as {
+      code?: string
+      data?: AgentTurnThoughtResponse
+      message?: string
+    }
+    if (json.code === 'OK' && json.data) {
+      return {
+        kind: 'ok',
+        applied: json.data.applied === true,
+        totalMs: json.data.totalMs,
+        reason: json.data.reason
+      }
+    }
+    return {
+      kind: 'http-error',
+      status: res.status,
+      message: json.message ?? 'agent 返回非 OK envelope'
+    }
+  } catch (err) {
+    return { kind: 'network-error', message: (err as Error).message ?? String(err) }
+  } finally {
+    clearTimeout(timer)
+  }
 }

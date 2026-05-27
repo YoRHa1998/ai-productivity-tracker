@@ -7,12 +7,15 @@ import {
   CURSOR_SESSION_REMINDER_COMMAND,
   CURSOR_SESSION_REMINDER_MARKER,
   CURSOR_TRACK_RULE_CONTENT,
+  LESSONS_EXTRACT_CLAUDE_CONTENT,
+  LESSONS_EXTRACT_CURSOR_CONTENT,
+  LESSONS_EXTRACT_SKILL_VERSION,
   TRACK_SKILL_VERSION
 } from './track-skill-templates.js'
 
-describe('v2.14.0 文案 invariant — Cursor / Claude 双方言对称', () => {
-  it('TRACK_SKILL_VERSION 应该为 2.14.0', () => {
-    expect(TRACK_SKILL_VERSION).toBe('2.14.0')
+describe('v2.15.0 文案 invariant — Cursor / Claude 双方言对称', () => {
+  it('TRACK_SKILL_VERSION 应该为 2.15.0', () => {
+    expect(TRACK_SKILL_VERSION).toBe('2.15.0')
   })
 
   describe('CURSOR_TRACK_RULE_CONTENT', () => {
@@ -86,6 +89,55 @@ describe('v2.14.0 文案 invariant — Cursor / Claude 双方言对称', () => {
     it('source 字段值为 claude-code', () => {
       expect(CLAUDE_TRACK_SKILL_CONTENT).toContain('"claude-code"')
     })
+  })
+
+  describe('v2.15.0 经验内联段(强候选才问 · 双方言对称)', () => {
+    for (const [name, content] of [
+      ['Cursor', CURSOR_TRACK_RULE_CONTENT],
+      ['Claude', CLAUDE_TRACK_SKILL_CONTENT]
+    ] as const) {
+      describe(name, () => {
+        it('含「## 经验内联(强候选才问 · v2.15.0)」段', () => {
+          expect(content).toContain('## 经验内联(强候选才问 · v2.15.0)')
+        })
+
+        it('含固定单行格式「💡 本轮可沉淀一条经验」(便于兜底文案对齐)', () => {
+          expect(content).toContain('💡 本轮可沉淀一条经验:<≤40字>。回复"记录"即保存。')
+        })
+
+        it('指示用户回复「记录」后调 save_lessons 单条 + iterationSeqs,且不调 extract_bundle', () => {
+          expect(content).toContain('ai_productivity_save_lessons')
+          expect(content).toContain('iterationSeqs')
+          expect(content).toContain('不要调')
+          expect(content).toContain('ai_productivity_extract_bundle')
+        })
+
+        it('保留「非 Jira 分支同样不适用」降噪边界', () => {
+          expect(content).toContain('本段同样 100% 不适用')
+        })
+
+        it('默认沉默基调:强调不强命中严禁追加', () => {
+          expect(content).toMatch(/默认沉默|严禁\*\*追加/)
+        })
+      })
+    }
+  })
+
+  describe('v1.3.0 lessons-extract 与内联协同说明', () => {
+    it('LESSONS_EXTRACT_SKILL_VERSION 应为 1.3.0', () => {
+      expect(LESSONS_EXTRACT_SKILL_VERSION).toBe('1.3.0')
+    })
+
+    for (const [name, content] of [
+      ['Claude', LESSONS_EXTRACT_CLAUDE_CONTENT],
+      ['Cursor', LESSONS_EXTRACT_CURSOR_CONTENT]
+    ] as const) {
+      it(`${name} 顶部声明与 v2.15.0 经验内联共用 save_lessons 且落盘不会重复`, () => {
+        expect(content).toContain('v2.15.0')
+        expect(content).toContain('ai_productivity_save_lessons')
+        expect(content).toContain('落盘不会重复')
+      })
+    }
   })
 
   describe('CURSOR_SESSION_REMINDER_COMMAND', () => {

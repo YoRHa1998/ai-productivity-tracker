@@ -450,7 +450,7 @@ export function registerAiProductivityTools(server: McpServer, client: AgentClie
     'ai_productivity_save_lessons',
     {
       description:
-        '【经验提取】skill 专用:把 LLM 推理出的多维度经验批量落盘到本机 ~/.ai-productivity-tracker/data/lessons/。看板「复盘经验」Tab 直接消费同一份数据。每条 lesson 必填 type / title / content + 建议带 scope/projectSlug(通用 vs 项目专属),其余字段按维度补全。v2.17.0:**本轮如确实没有可复用经验,直接传 lessons:[],禁止凑数沉淀冗余条目**。',
+        '【经验提取】skill 专用:把 LLM 推理出的多维度经验批量落盘到本机 ~/.ai-productivity-tracker/data/lessons/。看板「复盘经验」Tab 直接消费同一份数据。每条 lesson 必填 type / title / content + 建议带 scope/projectSlug(通用 vs 项目专属),其余字段按维度补全。v2.17.0:**本轮如确实没有可复用经验,直接传 lessons:[],禁止凑数沉淀冗余条目**。v2.15.0 起同样支持 per-turn 单条沉淀:ai-productivity-track「经验内联」场景下,用户回复"记录"后只传本轮单条 lesson(填 iterationSeqs+scope),与整需求批量提取共用自动合并去重,落盘不会重复。',
       inputSchema: saveLessonsInputShape
     },
     async (args: z.infer<z.ZodObject<typeof saveLessonsInputShape>>): Promise<ToolResult> => {

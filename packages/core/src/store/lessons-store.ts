@@ -761,6 +761,57 @@ export function computeSignals(
 }
 
 /**
+ * v2.15.0 per-turn 经验沉淀:单轮"强候选"思考时长阈值(秒)。
+ *
+ * 单轮 thinkSeconds ≥ 此值视为"AI 在这一轮想得特别久 / 卡壳",大概率是难点或决策点,
+ * 配合 abnormalStopReasons 一起作为 stop hook 兜底是否提示"本轮可能有可沉淀经验"的客观依据。
+ * 导出常量便于测试断言与未来调参。
+ */
+export const STRONG_THINK_SECONDS = 180
+
+export interface StrongCandidateResult {
+  hit: boolean
+  /** 命中原因(人类可读,供 daemon 端点 / 兜底文案引用),未命中为空数组 */
+  reasons: string[]
+}
+
+/**
+ * v2.15.0 判定**单个 iteration**是否为"强候选经验轮"。
+ *
+ * 复用 computeSignals(jiraKey, [seq]) 的 per-iteration 信号,只看两个**单轮可判**的客观信号:
+ *   - sourceAbnormalStopReasons 非空(本轮被 max_tokens / pause_turn / tool_use / stale_timeout 打断)
+ *   - sourceThinkSeconds ≥ STRONG_THINK_SECONDS(本轮思考特别久)
+ *
+ * 刻意**不**看 churn:churn 是跨轮信号(同文件被反复改),在单轮 seq 上意义弱,
+ * churn / 反复 bugfix 类候选完全交给 skill 内联主路径由 LLM 从实时上下文自评(详见实现计划风险 3)。
+ *
+ * 任何读取异常一律视为未命中(daemon 端调用方 fail-open,不阻塞主流程)。
+ */
+export function isStrongCandidateIteration(
+  jiraKey: string,
+  seq: number,
+  root?: string,
+  deps: ComputeSignalsDeps = {}
+): StrongCandidateResult {
+  if (!Number.isInteger(seq) || seq <= 0) return { hit: false, reasons: [] }
+  try {
+    const signals = computeSignals(jiraKey, [seq], root, deps)
+    const reasons: string[] = []
+    if (signals.sourceAbnormalStopReasons.length > 0) {
+      reasons.push(`本轮异常中断: ${signals.sourceAbnormalStopReasons.join(',')}`)
+    }
+    if ((signals.sourceThinkSeconds ?? 0) >= STRONG_THINK_SECONDS) {
+      reasons.push(
+        `本轮思考时长 ${Math.round(signals.sourceThinkSeconds ?? 0)}s ≥ ${STRONG_THINK_SECONDS}s`
+      )
+    }
+    return { hit: reasons.length > 0, reasons }
+  } catch {
+    return { hit: false, reasons: [] }
+  }
+}
+
+/**
  * 合并新老 signals:同款经验跨需求再出现时,各信号单调演进。
  *
  * - boost 取较高(更高效的复用证据更值钱)

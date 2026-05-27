@@ -33,6 +33,14 @@ import { join } from 'node:path'
 
 const SENTINEL_DIR_NAME = 'hook-state'
 const RECENT_ATTACH_SUFFIX = '.recent-attach.json'
+/**
+ * v2.15.0 per-turn 经验沉淀:lesson-handled sentinel 后缀(jiraKey + seq 维度).
+ *
+ * 文件名形如 `<JIRA-KEY>.<seq>.lesson-handled.json`,标记"某需求某轮的经验候选已被处理过"
+ * (用户已通过 save_lessons 落盘,或 stop hook 已就该候选注入过一次提示).
+ * stop hook 兜底据此保证对同一 (jiraKey, seq) 候选最多打扰一次.
+ */
+const LESSON_HANDLED_SUFFIX = '.lesson-handled.json'
 /** 兼容老链路落下来的 conv-gen 维度文件,GC 时一并清掉(防止 hook-state/ 目录残留垃圾) */
 const LEGACY_SENTINEL_SUFFIX = '.attach-called.json'
 const GC_MAX_AGE_MS = 7 * 24 * 3600 * 1000
@@ -162,6 +170,100 @@ export function readRecentAttachSentinel(
 }
 
 /**
+ * v2.15.0 lesson-handled sentinel payload(jiraKey + seq 维度).
+ *
+ * 标记"该需求该轮的经验候选已处理",不带时间窗判定(只看存在与否).
+ */
+export interface LessonHandledPayload {
+  jiraKey: string
+  seq: number
+  /** ISO8601;仅用于排障 / GC,不参与是否放行的判定 */
+  handledAt: string
+}
+
+function isValidSeq(seq: number): boolean {
+  return Number.isInteger(seq) && seq > 0
+}
+
+/**
+ * 计算 `<jiraKey>.<seq>.lesson-handled.json` 的绝对路径.
+ *
+ * save_lessons handler(经用户确认落盘)与 stop-check 兜底共享同一份路径定位,避免目录漂移.
+ */
+export function lessonHandledSentinelPath(
+  jiraKey: string,
+  seq: number,
+  rootOverride?: string
+): string {
+  const safe = sanitizeJiraKeyForFilename(jiraKey) || '_invalid'
+  const safeSeq = isValidSeq(seq) ? seq : 0
+  return join(sentinelDir(rootOverride), `${safe}.${safeSeq}${LESSON_HANDLED_SUFFIX}`)
+}
+
+/**
+ * 原子写入 lesson-handled sentinel(同 (jiraKey, seq) 覆盖式;tmp + rename).
+ * 失败返回 null,不抛(调用方 fail-open,不阻塞主流程).
+ */
+export function writeLessonHandledSentinel(
+  jiraKey: string,
+  seq: number,
+  now: Date = new Date(),
+  rootOverride?: string
+): string | null {
+  const safe = sanitizeJiraKeyForFilename(jiraKey)
+  if (!safe || !isValidSeq(seq)) return null
+  try {
+    const dir = sentinelDir(rootOverride)
+    mkdirSync(dir, { recursive: true })
+    const finalPath = lessonHandledSentinelPath(safe, seq, rootOverride)
+    const tmpPath = `${finalPath}.tmp`
+    const payload: LessonHandledPayload = { jiraKey: safe, seq, handledAt: now.toISOString() }
+    const body = JSON.stringify(payload, null, 2) + '\n'
+    writeFileSync(tmpPath, body, 'utf-8')
+    try {
+      renameSync(tmpPath, finalPath)
+    } catch {
+      writeFileSync(finalPath, body, 'utf-8')
+      try {
+        unlinkSync(tmpPath)
+      } catch {
+        /* ignore */
+      }
+    }
+    return finalPath
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 读 lesson-handled sentinel(不删 / 无时间窗).文件存在且 JSON 合法 → payload;否则 null.
+ * stop-check 据此判断该 (jiraKey, seq) 候选是否已处理过.
+ */
+export function readLessonHandledSentinel(
+  jiraKey: string,
+  seq: number,
+  rootOverride?: string
+): LessonHandledPayload | null {
+  const safe = sanitizeJiraKeyForFilename(jiraKey)
+  if (!safe || !isValidSeq(seq)) return null
+  const file = lessonHandledSentinelPath(safe, seq, rootOverride)
+  if (!existsSync(file)) return null
+  try {
+    const raw = readFileSync(file, 'utf-8')
+    const parsed = JSON.parse(raw) as Partial<LessonHandledPayload>
+    if (!parsed || typeof parsed.handledAt !== 'string') return null
+    return {
+      jiraKey: typeof parsed.jiraKey === 'string' ? parsed.jiraKey : safe,
+      seq: typeof parsed.seq === 'number' ? parsed.seq : seq,
+      handledAt: parsed.handledAt
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
  * 清理孤儿 sentinel(>maxAgeMs).在每次 stop-check 启动时调用一次,避免目录无限增长.
  * 任何 I/O 错误一律吞掉,不影响主流程.
  *
@@ -180,7 +282,12 @@ export function gcSentinels(
   let removed = 0
   try {
     for (const name of readdirSync(dir)) {
-      if (!name.endsWith(RECENT_ATTACH_SUFFIX) && !name.endsWith(LEGACY_SENTINEL_SUFFIX)) continue
+      if (
+        !name.endsWith(RECENT_ATTACH_SUFFIX) &&
+        !name.endsWith(LESSON_HANDLED_SUFFIX) &&
+        !name.endsWith(LEGACY_SENTINEL_SUFFIX)
+      )
+        continue
       const full = join(dir, name)
       try {
         const stat = statSync(full)

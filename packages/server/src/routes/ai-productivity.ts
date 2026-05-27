@@ -73,6 +73,8 @@ import {
   readJiraConfig,
   writeJiraConfig,
   buildLessonsBundle,
+  isStrongCandidateIteration,
+  writeLessonHandledSentinel,
   LESSON_TYPES,
   listLessons,
   loadLesson,
@@ -349,6 +351,24 @@ const CURSOR_TURN_STARTS_TTL_MS = 30 * 60_000
 
 const cursorTurnStarts = new Map<string, CursorTurnStartEntry>()
 
+/**
+ * A2 观测:turn-start / turn-thought / consume 三个事件的到达时序 + thoughtDurationMs 状态。
+ *
+ * 由 `AI_PRODUCTIVITY_DEBUG_HOOK=1` 控制(与 hook 端同款开关,用户排查时一并设到 daemon 环境)。
+ * 输出写 daemon stdout(被 daemon-out.log 收集),用于量化 afterAgentResponse(consume) 与尾随
+ * afterAgentThought(accumulate) 的到达先后,坐实跨进程竞态导致 thinking 被丢弃。
+ */
+function turnDebugLog(event: string, fields: Record<string, unknown>): void {
+  if (process.env.AI_PRODUCTIVITY_DEBUG_HOOK !== '1') return
+  try {
+    console.info(
+      `[turn-debug] ${event} ${JSON.stringify({ at: new Date().toISOString(), ...fields })}`
+    )
+  } catch {
+    /* 观测失败不影响主流程 */
+  }
+}
+
 function buildTurnKey(conversationId: string, generationId: string): string {
   return `${conversationId}|${generationId}`
 }
@@ -441,6 +461,7 @@ export function handleAiProductivityTurnStart(
     expireAt: now + CURSOR_TURN_STARTS_TTL_MS
   })
   evictOldestIfFull()
+  turnDebugLog('turn-start', { key })
 
   ok(res, { ok: true, recorded: true } satisfies TurnStartResponse)
 }
@@ -475,6 +496,7 @@ export function handleAiProductivityTurnThought(
   const key = buildTurnKey(conversationId, generationId)
   const entry = cursorTurnStarts.get(key)
   if (!entry) {
+    turnDebugLog('thought-dropped', { key, rawDuration, reason: 'no_pending_turn' })
     ok(res, {
       ok: true,
       applied: false,
@@ -483,6 +505,7 @@ export function handleAiProductivityTurnThought(
     return
   }
   entry.thoughtDurationMs += rawDuration
+  turnDebugLog('thought-applied', { key, rawDuration, totalMs: entry.thoughtDurationMs })
   ok(res, {
     ok: true,
     applied: true,
@@ -510,8 +533,12 @@ function consumeCursorTurnStart(
   evictExpiredTurnStarts(now)
   const key = buildTurnKey(conversationId, generationId)
   const entry = cursorTurnStarts.get(key)
-  if (!entry) return null
+  if (!entry) {
+    turnDebugLog('consume-miss', { key })
+    return null
+  }
   cursorTurnStarts.delete(key)
+  turnDebugLog('consume', { key, thoughtDurationMs: entry.thoughtDurationMs })
   return {
     startedAt: entry.startedAt,
     pureThinkSeconds: Math.round(entry.thoughtDurationMs / 1000)
@@ -1899,6 +1926,39 @@ export function handleAiProductivityLessonsBundle(res: ServerResponse, jiraKey: 
   ok(res, bundle)
 }
 
+/**
+ * v2.15.0 per-turn 经验沉淀兜底: GET /ai-productivity/requirements/:jiraKey/latest-candidate
+ *
+ * stop-check hook 进程不直接依赖 core store(避免 hook 单文件打包膨胀),信号在 daemon 端算:
+ *   - listIterations 取最新一条「非 init」iteration
+ *   - 对其 seq 跑 isStrongCandidateIteration(复用 computeSignals 的 abnormal-stop + thinkSeconds)
+ *   - 返回 { seq, strongCandidate, reasons }
+ *
+ * 无任何非 init iteration(只有 init 或空)→ { seq: null, strongCandidate: false, reasons: [] }(200),
+ * 需求不存在 → 404。hook 端 fail-open:拿不到 / 报错都视为「无候选」,绝不阻塞 stop。
+ */
+export function handleAiProductivityLatestCandidate(res: ServerResponse, jiraKey: string): void {
+  if (!loadRequirement(jiraKey)) {
+    fail(res, 404, `需求 ${jiraKey} 未找到`)
+    return
+  }
+  const iterations = listIterations(jiraKey)
+  // 倒序找最新一条非 init(stop hook 触发时当前轮尚未 flush,这里拿到的天然是「上一轮已 flush」的 iteration)
+  let latest: { seq: number } | undefined
+  for (let i = iterations.length - 1; i >= 0; i -= 1) {
+    if (iterations[i].kind !== 'init') {
+      latest = { seq: iterations[i].seq }
+      break
+    }
+  }
+  if (!latest) {
+    ok(res, { seq: null, strongCandidate: false, reasons: [] })
+    return
+  }
+  const candidate = isStrongCandidateIteration(jiraKey, latest.seq)
+  ok(res, { seq: latest.seq, strongCandidate: candidate.hit, reasons: candidate.reasons })
+}
+
 export interface SaveLessonsRequestBody {
   jiraKey: string
   lessons: WriteLessonInput[]
@@ -1963,6 +2023,16 @@ export function handleAiProductivitySaveLessons(
   const source: LessonExtractedBy =
     body.source === 'cursor' || body.source === 'claude-code' ? body.source : 'manual'
   const result = writeLessons(inputs, { extractedBy: source })
+  // v2.15.0 per-turn:落盘成功后,对每条 lesson 的 iterationSeqs 写 lesson-handled sentinel,
+  // 让 stop-check 兜底不再就同一 (jiraKey, seq) 候选重复打扰(用户已主动「记录」过)。
+  // fail-open:任何写 sentinel 失败都不影响落盘主结果。
+  for (const lesson of result.saved) {
+    const lessonJiraKey = lesson.jiraKey || fallbackJiraKey
+    if (!lessonJiraKey || !Array.isArray(lesson.iterationSeqs)) continue
+    for (const seq of lesson.iterationSeqs) {
+      if (Number.isInteger(seq) && seq > 0) writeLessonHandledSentinel(lessonJiraKey, seq)
+    }
+  }
   ok(res, {
     saved: result.saved,
     savedCount: result.saved.length,

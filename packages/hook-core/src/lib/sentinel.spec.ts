@@ -9,7 +9,10 @@ import {
   readRecentAttachSentinel,
   recentAttachSentinelPath,
   sentinelDir,
-  writeRecentAttachSentinel
+  writeRecentAttachSentinel,
+  lessonHandledSentinelPath,
+  readLessonHandledSentinel,
+  writeLessonHandledSentinel
 } from './sentinel.js'
 
 describe('sentinelDir', () => {
@@ -90,6 +93,64 @@ describe('recentAttachSentinel(v2.10.0 jiraKey 维度)', () => {
     const blocked = join(tmpRoot, 'hook-state')
     writeFileSync(blocked, 'placeholder', 'utf-8')
     expect(writeRecentAttachSentinel('INSTANT-700', new Date(), tmpRoot)).toBeNull()
+  })
+})
+
+describe('lessonHandledSentinel(v2.15.0 jiraKey + seq 维度)', () => {
+  let tmpRoot: string
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'aip-lesson-handled-'))
+  })
+  afterEach(() => rmSync(tmpRoot, { recursive: true, force: true }))
+
+  it('path 大写 jiraKey + seq,拼到 hook-state/<KEY>.<seq>.lesson-handled.json', () => {
+    expect(lessonHandledSentinelPath('instant-1234', 5, tmpRoot)).toBe(
+      join(tmpRoot, 'hook-state', 'INSTANT-1234.5.lesson-handled.json')
+    )
+  })
+
+  it('write 落盘 + read 能读出 jiraKey/seq/handledAt', () => {
+    const at = new Date('2026-05-21T03:00:00.000Z')
+    const file = writeLessonHandledSentinel('INSTANT-200', 7, at, tmpRoot)
+    expect(file).toBe(join(tmpRoot, 'hook-state', 'INSTANT-200.7.lesson-handled.json'))
+    expect(readLessonHandledSentinel('INSTANT-200', 7, tmpRoot)).toEqual({
+      jiraKey: 'INSTANT-200',
+      seq: 7,
+      handledAt: '2026-05-21T03:00:00.000Z'
+    })
+  })
+
+  it('不同 seq 互不影响(同 jiraKey 多轮独立打扰一次)', () => {
+    writeLessonHandledSentinel('INSTANT-200', 3, new Date(), tmpRoot)
+    expect(readLessonHandledSentinel('INSTANT-200', 3, tmpRoot)).not.toBeNull()
+    expect(readLessonHandledSentinel('INSTANT-200', 4, tmpRoot)).toBeNull()
+  })
+
+  it('非法 seq(0 / 负 / 非整数) → write 返回 null,read 返回 null', () => {
+    expect(writeLessonHandledSentinel('INSTANT-200', 0, new Date(), tmpRoot)).toBeNull()
+    expect(writeLessonHandledSentinel('INSTANT-200', -1, new Date(), tmpRoot)).toBeNull()
+    expect(writeLessonHandledSentinel('INSTANT-200', 1.5, new Date(), tmpRoot)).toBeNull()
+    expect(readLessonHandledSentinel('INSTANT-200', 0, tmpRoot)).toBeNull()
+  })
+
+  it('文件不存在 → read 返回 null', () => {
+    expect(readLessonHandledSentinel('NOPE-1', 1, tmpRoot)).toBeNull()
+  })
+
+  it('JSON 损坏 → read 返回 null,不抛', () => {
+    writeLessonHandledSentinel('INSTANT-500', 2, new Date(), tmpRoot)
+    writeFileSync(lessonHandledSentinelPath('INSTANT-500', 2, tmpRoot), '{not json', 'utf-8')
+    expect(readLessonHandledSentinel('INSTANT-500', 2, tmpRoot)).toBeNull()
+  })
+
+  it('超过 maxAgeMs 的 .lesson-handled.json 也被 gcSentinels 清理', async () => {
+    writeLessonHandledSentinel('INSTANT-800', 9, new Date(), tmpRoot)
+    const filePath = lessonHandledSentinelPath('INSTANT-800', 9, tmpRoot)
+    const past = Date.now() - 100 * 24 * 3600 * 1000
+    const { utimesSync } = await import('node:fs')
+    utimesSync(filePath, new Date(past), new Date(past))
+    expect(gcSentinels(tmpRoot)).toBe(1)
+    expect(existsSync(filePath)).toBe(false)
   })
 })
 

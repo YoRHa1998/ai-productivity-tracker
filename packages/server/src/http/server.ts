@@ -39,6 +39,7 @@ import {
   handleAiProductivityGetLesson,
   handleAiProductivityDeleteLesson,
   handleAiProductivityLessonsBundle,
+  handleAiProductivityLatestCandidate,
   handleAiProductivitySaveLessons,
   type InitRequestBody,
   type HookRequestBody,
@@ -381,6 +382,12 @@ async function routeAiProductivity(
   params = matchRoute(pathname, '/ai-productivity/requirements/:jiraKey/lessons-bundle')
   if (params && method === 'GET') {
     handleAiProductivityLessonsBundle(res, params.jiraKey!)
+    return true
+  }
+
+  params = matchRoute(pathname, '/ai-productivity/requirements/:jiraKey/latest-candidate')
+  if (params && method === 'GET') {
+    handleAiProductivityLatestCandidate(res, params.jiraKey!)
     return true
   }
 
