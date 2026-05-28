@@ -26,19 +26,23 @@ interface SpawnedDaemon {
   port: number
   token: string
   home: string
+  /** 返回截至当前累计的 stdout 文本(给断言"daemon 打印了某条日志"用) */
+  getStdout: () => string
 }
 
 async function spawnDaemon(
   home: string,
   port: number,
-  extraArgs: string[] = []
+  extraArgs: string[] = [],
+  extraEnv: Record<string, string> = {}
 ): Promise<SpawnedDaemon> {
   const env = {
     ...process.env,
     HOME: home,
     AIPT_DATA_ROOT: join(home, 'data'),
     AIPT_TOKEN: 't'.repeat(64),
-    NODE_OPTIONS: ''
+    NODE_OPTIONS: '',
+    ...extraEnv
   }
   // detached:true 让 spawn 出来的进程自己当进程组 leader,后续可以
   // process.kill(-pid, SIG) 杀整组(避免 tsx 双进程导致 SIGKILL 只杀 wrapper)
@@ -60,6 +64,7 @@ async function spawnDaemon(
   proc.stderr?.on('data', (d: Buffer) => {
     stderrBuf += d.toString()
   })
+  const getStdout = (): string => stdoutBuf
 
   // 等待 daemon 监听
   const deadline = Date.now() + 8000
@@ -67,7 +72,7 @@ async function spawnDaemon(
     try {
       const r = await fetch(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(500) })
       if (r.ok) {
-        return { proc, port, token: 't'.repeat(64), home }
+        return { proc, port, token: 't'.repeat(64), home, getStdout }
       }
     } catch {
       /* not ready */
@@ -254,6 +259,35 @@ describe.sequential('daemon e2e', () => {
     const probe = await fetch(`http://127.0.0.1:${newLock.port}/status`)
     expect(probe.ok).toBe(true)
   }, 20000)
+
+  it('默认启动 transcript-watcher (start() 被调用,看到 [transcript-watcher] 前缀日志)', async () => {
+    const port = pickPort()
+    daemon = await spawnDaemon(tmpHome, port)
+    // watcher.start() 同步调,/status 返回时一定打印过日志:
+    //   - HOME 内 ~/.claude/projects 存在 → "TranscriptWatcher started"
+    //   - 不存在(e2e 用 tmpHome 即此分支) → "Claude projects 目录不存在,跳过 watcher"
+    // 两条都带 [transcript-watcher] 前缀,证明 start() 被调用
+    expect(daemon.getStdout()).toMatch(/\[transcript-watcher\]/)
+    expect(daemon.getStdout()).not.toMatch(/disabled via AIPT_DISABLE_TRANSCRIPT_WATCHER/)
+  })
+
+  it('AIPT_DISABLE_TRANSCRIPT_WATCHER=1 时 daemon 跳过 watcher.start (dev daemon 共存场景)', async () => {
+    const port = pickPort()
+    daemon = await spawnDaemon(tmpHome, port, [], {
+      AIPT_DISABLE_TRANSCRIPT_WATCHER: '1'
+    })
+    // 多等 200ms 给 watcher 日志一个出现的窗口,如果 start() 真被调用一定能看到
+    await new Promise((r) => setTimeout(r, 200))
+    const out = daemon.getStdout()
+    expect(out).toMatch(/disabled via AIPT_DISABLE_TRANSCRIPT_WATCHER=1/)
+    // start() 一旦被调用必出现某条 [transcript-watcher] 日志(start 内任一分支都带前缀)
+    expect(out).not.toMatch(/\[transcript-watcher\] TranscriptWatcher started/)
+    expect(out).not.toMatch(/\[transcript-watcher\] Claude projects 目录不存在/)
+
+    // /status 仍然正常响应,证明只是 watcher 被关,handler 链路不受影响
+    const res = await fetch(`http://127.0.0.1:${port}/status`)
+    expect(res.ok).toBe(true)
+  })
 
   it('端口冲突 → daemon 自动选下一个空端口', async () => {
     const port = pickPort()

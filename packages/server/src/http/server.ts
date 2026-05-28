@@ -94,6 +94,11 @@ function isAiProductivityPanelPath(pathname: string): boolean {
  * - 默认放行 loopback origin,IDE/Hook 主链路要求 Bearer token
  * - transcript-watcher 在 daemon 进程内常驻;daemon 退出时一并停
  * - config.webRoot 给定时,挂载看板 SPA 静态服务
+ *
+ * `AIPT_DISABLE_TRANSCRIPT_WATCHER=1` 时跳过 watcher.start()(仍构造实例,handler 链路不变):
+ * 主要给「dev daemon 与 prod daemon 同时跑」的本地开发场景 — 两个 daemon 同时监听
+ * `~/.claude/projects/*.jsonl` 会产生重复 iteration + transcript-state.json 竞争。
+ * 关闭后 dev daemon 退化为「纯读 + Web 看板 + API」模式,真实采集仍交给 prod daemon。
  */
 export async function startDaemon(config: ServerConfig): Promise<DaemonHandle> {
   const currentConfig = config
@@ -113,7 +118,14 @@ export async function startDaemon(config: ServerConfig): Promise<DaemonHandle> {
     }
   })
 
-  transcriptWatcher.start()
+  const watcherDisabled = process.env.AIPT_DISABLE_TRANSCRIPT_WATCHER === '1'
+  if (watcherDisabled) {
+    console.log(
+      '[transcript-watcher] disabled via AIPT_DISABLE_TRANSCRIPT_WATCHER=1 (read-only daemon)'
+    )
+  } else {
+    transcriptWatcher.start()
+  }
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
