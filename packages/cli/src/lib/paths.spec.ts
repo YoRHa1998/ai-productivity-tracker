@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  HOME_DIR_ENV,
   HOME_DIR_NAME,
   LEGACY_HOME_DIR_NAME,
   aiptHome,
@@ -16,14 +17,17 @@ describe('paths', () => {
   let origHome: string | undefined
   let origData: string | undefined
   let origLegacy: string | undefined
+  let origHomeDir: string | undefined
 
   beforeEach(() => {
     origHome = process.env.HOME
     origData = process.env.AIPT_DATA_ROOT
     origLegacy = process.env.TRUESIGHT_AIP_ROOT
+    origHomeDir = process.env[HOME_DIR_ENV]
     process.env.HOME = '/tmp/fake-home'
     delete process.env.AIPT_DATA_ROOT
     delete process.env.TRUESIGHT_AIP_ROOT
+    delete process.env[HOME_DIR_ENV]
   })
 
   afterEach(() => {
@@ -33,6 +37,8 @@ describe('paths', () => {
     else process.env.AIPT_DATA_ROOT = origData
     if (origLegacy === undefined) delete process.env.TRUESIGHT_AIP_ROOT
     else process.env.TRUESIGHT_AIP_ROOT = origLegacy
+    if (origHomeDir === undefined) delete process.env[HOME_DIR_ENV]
+    else process.env[HOME_DIR_ENV] = origHomeDir
   })
 
   it('aiptHome 与 legacyAiptHome 命名固定且与 dir name 常量一致', () => {
@@ -80,5 +86,24 @@ describe('paths', () => {
 
   it('legacyDataRoot 固定 = legacyAiptHome + ai-productivity', () => {
     expect(legacyDataRoot()).toBe('/tmp/fake-home/.truesight-local-agent/ai-productivity')
+  })
+
+  it('aiptHome 优先使用 AIPT_HOME_DIR env(开发态 sandbox 隔离 runtime.json/logs/hook-state)', () => {
+    process.env[HOME_DIR_ENV] = '/tmp/aipt-dev-home'
+    expect(aiptHome()).toBe('/tmp/aipt-dev-home')
+    expect(runtimeJsonPath()).toBe('/tmp/aipt-dev-home/runtime.json')
+    expect(logsDir()).toBe('/tmp/aipt-dev-home/logs')
+  })
+
+  it('aiptHome 空白 AIPT_HOME_DIR 被忽略,fallback 到默认 ~/.ai-productivity-tracker', () => {
+    process.env[HOME_DIR_ENV] = '   '
+    expect(aiptHome()).toBe(`/tmp/fake-home/${HOME_DIR_NAME}`)
+  })
+
+  it('AIPT_HOME_DIR 与 AIPT_DATA_ROOT 互不干扰(分别覆盖 home / data)', () => {
+    process.env[HOME_DIR_ENV] = '/tmp/aipt-dev-home'
+    process.env.AIPT_DATA_ROOT = '/real/data'
+    expect(aiptHome()).toBe('/tmp/aipt-dev-home')
+    expect(dataRoot()).toBe('/real/data')
   })
 })

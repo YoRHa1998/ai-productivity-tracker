@@ -55,3 +55,6 @@ Thumbs.db
 
 # Local runtime data (won't appear in repo anyway, but defensive)
 .ai-productivity-tracker/
+
+# `pnpm dev` 隔离的 home 目录(runtime.json / logs / hook-state)
+.dev-home/
