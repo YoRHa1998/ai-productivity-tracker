@@ -189,7 +189,14 @@
   color: var(--aipt-text-strong) !important;
 }
 
-.el-button--primary {
+/*
+ * 颜色 type 仅作用于「实心 / plain」按钮(非 link / 非 text)。
+ * 历史 bug:`<ElButton type="danger" link>` 因这里选择器未排除 .is-link / .is-text,
+ * 被强制叠加 danger 实心背景 + 描边,看起来像个红色 chip,跟玻璃极光风格格格不入。
+ * 用 `:not(.is-link):not(.is-text)` 限定后,link / text 按钮保持透明背景,
+ * 只继承下面的「文字色」覆盖。
+ */
+.el-button--primary:not(.is-link):not(.is-text) {
   background: var(--aipt-gradient-aurora) !important;
   border: none !important;
   color: var(--aipt-text-on-accent) !important;
@@ -197,37 +204,75 @@
   box-shadow: var(--aipt-shadow-glow) !important;
 }
 
-.el-button--primary:hover {
+.el-button--primary:not(.is-link):not(.is-text):hover {
   box-shadow: var(--aipt-shadow-glow-strong) !important;
 }
 
-.el-button--success {
+.el-button--success:not(.is-link):not(.is-text) {
   background: var(--aipt-state-success-soft) !important;
   border-color: rgba(126, 221, 197, 0.4) !important;
   color: var(--aipt-state-success) !important;
 }
 
-.el-button--warning {
+.el-button--warning:not(.is-link):not(.is-text) {
   background: var(--aipt-state-warning-soft) !important;
   border-color: rgba(245, 196, 137, 0.4) !important;
   color: var(--aipt-state-warning) !important;
 }
 
-.el-button--danger {
+.el-button--danger:not(.is-link):not(.is-text) {
   background: var(--aipt-state-danger-soft) !important;
   border-color: rgba(240, 133, 151, 0.4) !important;
   color: var(--aipt-state-danger) !important;
 }
 
+/* 文字 / 链接按钮:默认蓝色,带 type 时换成对应状态色 */
 .el-button.is-text,
 .el-button.is-link {
   color: var(--aipt-aurora-1) !important;
+  background: transparent !important;
+  border-color: transparent !important;
 }
 
 .el-button.is-text:hover,
 .el-button.is-link:hover {
   color: #4a86d5 !important;
   background: var(--aipt-surface) !important;
+  border-color: transparent !important;
+}
+
+.el-button.is-link.el-button--danger,
+.el-button.is-text.el-button--danger {
+  color: var(--aipt-state-danger) !important;
+}
+
+.el-button.is-link.el-button--danger:hover,
+.el-button.is-text.el-button--danger:hover {
+  /* 浅红色 soft 背景 hover,跟整体玻璃 chip 风格一致 */
+  color: var(--aipt-state-danger) !important;
+  background: var(--aipt-state-danger-soft) !important;
+}
+
+.el-button.is-link.el-button--success,
+.el-button.is-text.el-button--success {
+  color: var(--aipt-state-success) !important;
+}
+
+.el-button.is-link.el-button--success:hover,
+.el-button.is-text.el-button--success:hover {
+  color: var(--aipt-state-success) !important;
+  background: var(--aipt-state-success-soft) !important;
+}
+
+.el-button.is-link.el-button--warning,
+.el-button.is-text.el-button--warning {
+  color: var(--aipt-state-warning) !important;
+}
+
+.el-button.is-link.el-button--warning:hover,
+.el-button.is-text.el-button--warning:hover {
+  color: var(--aipt-state-warning) !important;
+  background: var(--aipt-state-warning-soft) !important;
 }
 
 /* ===== Table:玻璃化 + 高亮行 ===== */
