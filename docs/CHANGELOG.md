@@ -10,6 +10,58 @@
 
 ## [Unreleased]
 
+### Added
+
+**v1.0.0-rc.23 单需求复盘报告(retrospective)**
+
+把前期已采集的 iterations / boost / churn / 关联 lessons / 异常 stop 等数据,在「需求结束时」集中产出一份结构化复盘叙事 + 多维图表,让搜集到的硬数据真正发挥价值。
+
+**架构(零云端,沿用 lessons-extract 双 MCP tool 模式)**:LLM 推理 100% 在 IDE 内 agent(Cursor / Claude Code)进行,daemon 不调任何外部 LLM API。
+
+```
+用户在 IDE「需求复盘 当前需求 INSTANT-XXXX」
+   ↓
+LLM 命中 retrospective-report skill
+   ↓ ai_productivity_extract_retro_bundle  → GET /requirements/:jiraKey/retrospective-bundle
+   ↓ daemon 复用 buildLessonsBundle + 加 relatedLessons + existingRetrospective
+LLM 推理 → narrative(overview / phases / highlights / issues / improvements / pitfalls / nextSteps / splitSuggestions)
+   ↓ ai_productivity_save_retrospective  → POST /requirements/:jiraKey/retrospective
+   ↓ snapshot / generatedAt / generatedAtIterationSeq 由 daemon 自动注入,LLM 即便传也会被忽略
+看板「需求详情 → 复盘报告」tab 同源直读
+```
+
+**改动清单**:
+
+- **core**:`packages/core/src/store/retrospective-store.ts`(load / write / remove / buildBundle + computeRetrospectiveSnapshot)+ `paths.ts` 新增 `retrospectivePath` helper
+- **server**:`packages/server/src/routes/ai-productivity.ts` 新增 4 个 handler(GET / POST / DELETE retrospective + GET retrospective-bundle),`server.ts` 注册路由(panel-origin 放行 = 看板免 token,Bearer token 鉴权也兼容,与 lessons 同款语义)
+- **mcp**:`packages/mcp/src/tools.ts` 新增 2 个 tool(`ai_productivity_extract_retro_bundle` / `ai_productivity_save_retrospective`),配套 `agent-client.ts` 通道方法 + zod 入参校验。从「5 个 tool」升到「7 个 tool」
+- **skill 模板**:`packages/core/src/track-skill-templates.ts` 新增 `RETROSPECTIVE_CLAUDE_CONTENT` / `RETROSPECTIVE_CURSOR_CONTENT` 双方言模板 + `RETROSPECTIVE_SKILL_VERSION = '1.0.0'`,`packages/server/src/skill-sync.ts` 扩展 `inspectAiTrackSkillBundle` / `installAiTrackSkillBundle` 一并装入 `~/.claude/skills/retrospective-report/` + `~/.cursor/rules/retrospective-report.mdc`,`aipt install` 命令日志同步追加
+- **ui**:
+  - `packages/ui/src/api.ts` 新增 `getRetrospective` / `deleteRetrospective` + 类型 `StoredRetrospective` / `RetrospectiveNarrative` / `RetrospectiveSnapshot` / `RetrospectivePhase`
+  - 新增依赖 `markdown-it@^14.2.0`(~40KB,`html: false` + 禁 image + linkify + 强制 a 加 target=\_blank,等价 sanitize),`packages/ui/src/lib/markdown.ts` 封装 `renderMarkdown` / `renderMarkdownInline`
+  - 新增组件 `packages/ui/src/charts/RadarMetric.vue`(5 维雷达)+ `packages/ui/src/charts/IterationPhaseTimeline.vue`(阶段时间线条形图);`charts/echarts.ts` 同步注册 `RadarChart` / `BarChart` / `RadarComponent`
+  - 新增 `packages/ui/src/tabs/RetrospectiveReportPanel.vue`:空态(复制触发口令)+ 有报告态(hero / 4 图表 / markdown 叙事 collapsible / 引用 lessons 卡片 / 锚点 iterations)
+  - `packages/ui/src/tabs/AiProductivityTrackerWorkspaceTab.vue` 抽屉重构为 `<ElTabs>`,2 个 ElTabPane(「需求概览」+「复盘报告」),抽屉宽度 780→880;原 4 段卡片(boost hero / 指标 / 关联 Bug / iteration 时间线)原样搬入「需求概览」tab,业务 0 改动
+  - `packages/ui/src/tabs/AiProductivityTrackerLessonsTab.vue` 接受 `?focus=<lessonId>` query 参数预选,让复盘 panel 引用经验跳转后自动打开对应 detail drawer
+- **数据模型**:`docs/DATA-MODEL.md` 新增 §7.5 `data/<JIRA-KEY>/retrospective.json` schema(`schemaVersion=1`,单文件覆盖,带 `generatedAtIterationSeq` 快照锚点)
+- **PRD**:§12 路线图拆分,新增 §12.1 单需求复盘报告 实施段 + V15-V20 验收用例
+
+**与 lessons 的协同(职责单一)**:
+
+- 复盘报告 = 看板叙事产物(per-feature,单文件覆盖)
+- lessons-extract = 跨需求知识条目沉淀(平铺,跨需求自动合并去重)
+- LLM 在复盘 narrative 中通过 `referencedLessonIds` 弱引用本需求已沉淀的 lesson;**严禁在复盘里直接落新 lesson**(用户想沉淀经验仍走 lessons-extract skill)
+
+**测试覆盖**:
+
+- core: `retrospective-store.spec.ts` 17 例(读写 / 覆盖 / 缺字段兜底 / schemaVersion 升级保护 / 字段长度静默截断 / 悬挂 lesson id / 越界 anchorSeq 过滤 / `buildRetrospectiveBundle` 三种场景)
+- server: `ai-productivity.spec.ts` 新增 13 例 retrospective handler(panel-origin / token 鉴权,200 / 400 / 404 路径,覆盖式更新,空 narrative 拒收)
+- mcp: `tools.spec.ts` 新增 4 例 + `agent-client.spec.ts` 新增 2 例(extract_retro_bundle / save_retrospective 透传 + 错误 isError + RETRO_BUNDLE_JSON 文本化)
+- skill-sync: `skill-sync.spec.ts` 新增 2 例(install 写文件 + inspect 状态报告)
+- ui: `lib/markdown.spec.ts` 11 例 sanitize / linkify / breaks 单测
+
+**不做的事**(留给 v1.x):跨需求全局复盘报告 / 报告导出 MD/HTML / 多版本历史快照 / status=finished 自动触发。
+
 ### Changed (Breaking)
 
 **v1.0.0-rc.22 提效公式精简 + 并行多任务场景修正**

@@ -35,6 +35,10 @@ import {
   handleAiProductivityMergeSplitIterations,
   handleAiProductivityTurnStart,
   handleAiProductivityTurnThought,
+  handleAiProductivityRetrospectiveBundle,
+  handleAiProductivityGetRetrospective,
+  handleAiProductivitySaveRetrospective,
+  handleAiProductivityDeleteRetrospective,
   __resetCursorTurnStartsForTest,
   __snapshotCursorTurnStarts
 } from './ai-productivity.js'
@@ -46,6 +50,9 @@ import {
   listIterations,
   appendIteration,
   peekPendingSummary,
+  loadRetrospective,
+  retrospectivePath,
+  writeRetrospective,
   PENDING_SUMMARY_FILE,
   NUMSTAT_SNAPSHOT_FILE,
   LOCAL_AGENT_ROOT_ENV,
@@ -2848,9 +2855,221 @@ describe('handleAiProductivityHook + cursorTurnStarts 联动 (v1.0.0-rc.18)', ()
       },
       { nowFn: () => t1 }
     )
+    // 应当 cap 到 60s,避免 200s 异常思考时长污染 metrics
     const iterations = listIterations(jiraKey)
     expect(iterations.length).toBe(2)
     expect(iterations[1].thinkSeconds).toBe(60)
     expect(iterations[1].pureThinkSeconds).toBeUndefined()
+  })
+})
+
+// v1.0.0-rc.23 单需求复盘报告
+describe('retrospective handlers (v1.0.0-rc.23)', () => {
+  let aipRootCtx: ReturnType<typeof setupAipRoot>
+
+  beforeEach(() => {
+    aipRootCtx = setupAipRoot()
+  })
+
+  afterEach(() => {
+    aipRootCtx.restore()
+  })
+
+  function makeNarrativeBody(
+    overrides: Partial<{
+      overview: string
+      highlights: string[]
+    }> = {}
+  ) {
+    return {
+      narrative: {
+        overview:
+          overrides.overview ??
+          '需求 X 由设计 → 实现 → 修复完成,整体 boost 偏低,反复 bugfix 占比大。',
+        phases: [
+          {
+            title: '设计',
+            iterationSeqRange: [1, 1] as [number, number],
+            summary: '梳理 baseUrl 兼容路径'
+          }
+        ],
+        highlights: overrides.highlights ?? ['boost 显著'],
+        issues: ['watcher 漏抓'],
+        improvements: ['加 sentinel'],
+        pitfallsObserved: ['baseUrl 缺协议'],
+        nextSteps: ['统一 normalize']
+      },
+      source: 'cursor' as const
+    }
+  }
+
+  it('handleAiProductivityRetrospectiveBundle 返回 requirement / iterations / computedSignals', () => {
+    saveRequirement({ jiraKey: 'RTRO-1', title: '复盘 demo', manualEstimateMinutes: 120 }, {})
+    appendIteration('RTRO-1', { kind: 'init' })
+    appendIteration('RTRO-1', { kind: 'coding', cumulativeToken: 5000, thinkSeconds: 30 })
+    const mock = makeMockRes()
+    handleAiProductivityRetrospectiveBundle(mock.res, 'RTRO-1')
+    expect(mock.statusCode).toBe(200)
+    const data = JSON.parse(mock.body).data
+    expect(data.jiraKey).toBe('RTRO-1')
+    expect(data.requirement?.title).toBe('复盘 demo')
+    expect(data.iterations).toHaveLength(2)
+    expect(data.computedSignals).toBeDefined()
+    expect(data.relatedLessons).toEqual([])
+    expect(data.existingRetrospective).toBeNull()
+  })
+
+  it('handleAiProductivityRetrospectiveBundle 需求未 init → 404', () => {
+    const mock = makeMockRes()
+    handleAiProductivityRetrospectiveBundle(mock.res, 'NONE-1')
+    expect(mock.statusCode).toBe(404)
+  })
+
+  it('handleAiProductivitySaveRetrospective 写入并返回 snapshot 自动注入的字段', () => {
+    saveRequirement({ jiraKey: 'RTRO-2', title: 'X', manualEstimateMinutes: 240 }, {})
+    appendIteration('RTRO-2', { kind: 'init' })
+    appendIteration('RTRO-2', {
+      kind: 'coding',
+      cumulativeToken: 10000,
+      thinkSeconds: 60,
+      elapsedMinutes: 30
+    })
+
+    const mock = makeMockRes()
+    handleAiProductivitySaveRetrospective(mock.res, 'RTRO-2', makeNarrativeBody())
+    expect(mock.statusCode).toBe(200)
+    const data = JSON.parse(mock.body).data
+    expect(data.schemaVersion).toBe(1)
+    expect(data.generatedAtIterationSeq).toBe(2)
+    expect(data.snapshot.cumulativeToken).toBe(10000)
+    expect(data.snapshot.totalThinkSeconds).toBe(60)
+    expect(data.source).toBe('cursor')
+
+    const back = loadRetrospective('RTRO-2')
+    expect(back).not.toBeNull()
+    expect(back!.narrative.overview).toContain('需求 X')
+  })
+
+  it('handleAiProductivitySaveRetrospective 覆盖式更新:第二次落盘替换老内容', () => {
+    saveRequirement({ jiraKey: 'RTRO-3', title: 'X' }, {})
+    appendIteration('RTRO-3', { kind: 'init' })
+    handleAiProductivitySaveRetrospective(
+      makeMockRes().res,
+      'RTRO-3',
+      makeNarrativeBody({ overview: '版本 1' })
+    )
+    appendIteration('RTRO-3', { kind: 'coding' })
+    const mock = makeMockRes()
+    handleAiProductivitySaveRetrospective(
+      mock.res,
+      'RTRO-3',
+      makeNarrativeBody({ overview: '版本 2' })
+    )
+    expect(mock.statusCode).toBe(200)
+    const data = JSON.parse(mock.body).data
+    expect(data.narrative.overview).toBe('版本 2')
+    expect(data.generatedAtIterationSeq).toBe(2)
+  })
+
+  it('handleAiProductivitySaveRetrospective 无 narrative → 400', () => {
+    saveRequirement({ jiraKey: 'RTRO-4', title: 'X' }, {})
+    const mock = makeMockRes()
+    handleAiProductivitySaveRetrospective(mock.res, 'RTRO-4', null)
+    expect(mock.statusCode).toBe(400)
+  })
+
+  it('handleAiProductivitySaveRetrospective overview 空 → 400', () => {
+    saveRequirement({ jiraKey: 'RTRO-5', title: 'X' }, {})
+    const mock = makeMockRes()
+    handleAiProductivitySaveRetrospective(mock.res, 'RTRO-5', {
+      narrative: {
+        overview: '   ',
+        phases: [],
+        highlights: [],
+        issues: [],
+        improvements: [],
+        pitfallsObserved: [],
+        nextSteps: []
+      }
+    })
+    expect(mock.statusCode).toBe(400)
+    expect(JSON.parse(mock.body).message).toMatch(/overview/)
+  })
+
+  it('handleAiProductivitySaveRetrospective 需求不存在 → 404', () => {
+    const mock = makeMockRes()
+    handleAiProductivitySaveRetrospective(mock.res, 'GHOST-1', makeNarrativeBody())
+    expect(mock.statusCode).toBe(404)
+  })
+
+  it('handleAiProductivityGetRetrospective 文件不存在 → 200 + null', () => {
+    saveRequirement({ jiraKey: 'RTRO-6', title: 'X' }, {})
+    const mock = makeMockRes()
+    handleAiProductivityGetRetrospective(mock.res, 'RTRO-6')
+    expect(mock.statusCode).toBe(200)
+    expect(JSON.parse(mock.body).data).toBeNull()
+  })
+
+  it('handleAiProductivityGetRetrospective 已落盘 → 返回完整对象', () => {
+    saveRequirement({ jiraKey: 'RTRO-7', title: 'X' }, {})
+    appendIteration('RTRO-7', { kind: 'init' })
+    writeRetrospective('RTRO-7', {
+      narrative: {
+        overview: 'pre-existing',
+        phases: [],
+        highlights: [],
+        issues: [],
+        improvements: [],
+        pitfallsObserved: [],
+        nextSteps: []
+      },
+      source: 'manual'
+    })
+    const mock = makeMockRes()
+    handleAiProductivityGetRetrospective(mock.res, 'RTRO-7')
+    expect(mock.statusCode).toBe(200)
+    expect(JSON.parse(mock.body).data.narrative.overview).toBe('pre-existing')
+  })
+
+  it('handleAiProductivityGetRetrospective 需求不存在 → 404', () => {
+    const mock = makeMockRes()
+    handleAiProductivityGetRetrospective(mock.res, 'GHOST-1')
+    expect(mock.statusCode).toBe(404)
+  })
+
+  it('handleAiProductivityDeleteRetrospective 删除已存在文件 → deleted=true', () => {
+    saveRequirement({ jiraKey: 'RTRO-8', title: 'X' }, {})
+    appendIteration('RTRO-8', { kind: 'init' })
+    writeRetrospective('RTRO-8', {
+      narrative: {
+        overview: 'x',
+        phases: [],
+        highlights: [],
+        issues: [],
+        improvements: [],
+        pitfallsObserved: [],
+        nextSteps: []
+      }
+    })
+    expect(existsSync(retrospectivePath('RTRO-8'))).toBe(true)
+    const mock = makeMockRes()
+    handleAiProductivityDeleteRetrospective(mock.res, 'RTRO-8')
+    expect(mock.statusCode).toBe(200)
+    expect(JSON.parse(mock.body).data.deleted).toBe(true)
+    expect(existsSync(retrospectivePath('RTRO-8'))).toBe(false)
+  })
+
+  it('handleAiProductivityDeleteRetrospective 文件不存在 → deleted=false', () => {
+    saveRequirement({ jiraKey: 'RTRO-9', title: 'X' }, {})
+    const mock = makeMockRes()
+    handleAiProductivityDeleteRetrospective(mock.res, 'RTRO-9')
+    expect(mock.statusCode).toBe(200)
+    expect(JSON.parse(mock.body).data.deleted).toBe(false)
+  })
+
+  it('handleAiProductivityDeleteRetrospective 需求不存在 → 404', () => {
+    const mock = makeMockRes()
+    handleAiProductivityDeleteRetrospective(mock.res, 'GHOST-1')
+    expect(mock.statusCode).toBe(404)
   })
 })

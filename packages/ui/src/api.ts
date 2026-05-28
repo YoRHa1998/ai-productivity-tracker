@@ -715,3 +715,82 @@ export function deleteLesson(id: string) {
     { method: 'DELETE' }
   )
 }
+
+// ===== v1.0.0-rc.23 单需求复盘报告(retrospective) 看板 API =====
+
+export type RetrospectiveSource = 'cursor' | 'claude-code' | 'manual'
+
+export type RetrospectivePhase = {
+  /** 阶段标题(≤80 字),例如「设计与拆分」「调试与修复」 */
+  title: string
+  /** 该阶段覆盖的 iteration seq 闭区间 [from, to] */
+  iterationSeqRange: [number, number]
+  /** 阶段叙事(≤400 字,markdown / plain text) */
+  summary: string
+}
+
+export type RetrospectiveNarrative = {
+  overview: string
+  phases: RetrospectivePhase[]
+  highlights: string[]
+  issues: string[]
+  improvements: string[]
+  pitfallsObserved: string[]
+  nextSteps: string[]
+  splitSuggestions?: string[]
+}
+
+export type RetrospectiveSnapshot = {
+  title: string
+  status: 'in_progress' | 'finished' | 'abandoned'
+  boost: number | null
+  cumulativeToken: number
+  totalThinkSeconds: number
+  elapsedMinutes: number
+  cumulativeDiffFiles: number
+  cumulativeDiffInsertions: number
+  cumulativeDiffDeletions: number
+  linkedBugCount: number
+  lessonsCount: number
+  abnormalStopReasonsCount: number
+}
+
+export type StoredRetrospective = {
+  schemaVersion: number
+  jiraKey: string
+  generatedAt: string
+  /** 基于哪一轮 iteration 生成(末轮 seq) */
+  generatedAtIterationSeq: number
+  /** 生成时 iterations 总数,展示「基于第 N 轮 / 共 N 轮」 */
+  generatedAtIterationCount: number
+  source: RetrospectiveSource
+  snapshot: RetrospectiveSnapshot
+  narrative: RetrospectiveNarrative
+  /** 引用的 lesson id 列表(只引用本 jiraKey 已沉淀的经验) */
+  referencedLessonIds: string[]
+  /** 报告锚点 iteration seq(高 think / 高 churn / 异常 stop) */
+  anchorIterationSeqs: number[]
+}
+
+/**
+ * v1.0.0-rc.23 看板读复盘报告。
+ *
+ * - 文件不存在时返回 null(200),用于 UI 空态判断
+ * - 需求不存在(从未 init)→ HTTP 404 → AgentRequestError
+ */
+export function getRetrospective(jiraKey: string) {
+  return agentRequest<StoredRetrospective | null>(
+    `/ai-productivity/requirements/${encodeURIComponent(jiraKey)}/retrospective`
+  )
+}
+
+/**
+ * v1.0.0-rc.23 看板手动删除复盘报告(用户重新生成或想清空时用)。
+ * LLM 通过 MCP 落盘走另一条路径(看板不直接调 POST)。
+ */
+export function deleteRetrospective(jiraKey: string) {
+  return agentRequest<{ deleted: boolean; jiraKey: string }>(
+    `/ai-productivity/requirements/${encodeURIComponent(jiraKey)}/retrospective`,
+    { method: 'DELETE' }
+  )
+}

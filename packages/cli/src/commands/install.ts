@@ -90,13 +90,13 @@ export async function runInstall(args: InstallArgs = {}): Promise<number> {
   }
 
   // Step 3: Skill / Rule 注入(Claude SKILL.md + Cursor rule .mdc)
-  console.log('Step 3/3: 注入对话总结 + 经验提取 skill...')
+  console.log('Step 3/3: 注入对话总结 + 经验提取 + 需求复盘 skill...')
   const skillOk = await callDaemon(endpoint, 'POST', '/ai-productivity/install-track-skill', {})
   if (!skillOk) {
     console.warn('  skill 注入失败,请到看板 → MCP 配置 Tab 点击「一键注入 Skill」按钮重试')
   } else {
     console.log(
-      '  ✓ ai-productivity-track + lessons-extract skill 已注入到 ~/.claude/skills 与 ~/.cursor/rules'
+      '  ✓ ai-productivity-track + lessons-extract + retrospective-report skill 已注入到 ~/.claude/skills 与 ~/.cursor/rules'
     )
   }
 

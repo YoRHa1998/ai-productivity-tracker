@@ -647,3 +647,268 @@ agent 返回「本轮未沉淀新经验」,原样转述给用户。
 - 不要写成 git commit message
 - **不要凑数**:无价值时直接 \`lessons:[]\`,比硬抽更值钱
 `
+
+/* ─────────────────────────────────────────────────────────────────────
+ * v1.0.0-rc.23 单需求复盘报告(retrospective-report)skill 模板
+ *
+ * 触发频率:每个需求结束时手动一次(关键词触发,不强制每轮),
+ * 与 lessons-extract 同 P0 触发模型(关键词列表不同),通过「一键注入 Skill」
+ * 一并装到用户机器:
+ *   - Claude:  ~/.claude/skills/retrospective-report/SKILL.md
+ *   - Cursor:  ~/.cursor/rules/retrospective-report.mdc
+ *
+ * 与 lessons-extract 的协同关系:
+ *   - 复盘报告引用本需求已沉淀的 lesson id(referencedLessonIds),不直接落新 lesson
+ *   - 用户想沉淀经验仍走 lessons-extract,二者职责单一:
+ *     - retrospective = 整需求叙事 + 多维图表(看板专属可视化)
+ *     - lessons-extract = 跨需求复用的知识条目(自动合并去重)
+ * ────────────────────────────────────────────────────────────────────*/
+
+export const RETROSPECTIVE_SKILL_VERSION = '1.0.0'
+
+export const RETROSPECTIVE_SKILL_KEY = 'retrospective-report'
+export const RETROSPECTIVE_CLAUDE_FILENAME = 'SKILL.md'
+export const RETROSPECTIVE_CURSOR_FILENAME = 'retrospective-report.mdc'
+
+export const RETROSPECTIVE_CLAUDE_CONTENT = `---
+name: retrospective-report
+description: 需求复盘 / 生成复盘报告 / 复盘当前需求 / retrospective。当用户在「.ai-productivity-tracker/data」对应需求目录下或在含 Jira issue key 分支(正则 [A-Z][A-Z0-9]+-\\d+)的 git 仓库中,明确说出关键词「需求复盘」「复盘当前需求」「生成复盘报告」「retrospective」时,**必须**触发本 skill。skill 会拉取该需求的全部历史对话、iteration 数据、关联经验和客观信号,推理出结构化叙事(总览 / 阶段拆分 / 亮点 / 问题 / 改进 / 坑 / 下一步建议 / 拆分建议),按 schemaVersion=1 落盘到本机 \`<jiraKey>/retrospective.json\`(单文件覆盖)。看板「需求详情 → 复盘报告」Tab 自动可见。
+---
+
+# retrospective-report (v${RETROSPECTIVE_SKILL_VERSION})
+
+> v1.0.0:**整需求复盘报告**定位 —— 用户在需求结束(或阶段性里程碑)时主动触发,LLM 一次性消化全部 iterations + 客观信号 + 关联经验,生成多维度结构化复盘叙事。与 \`lessons-extract\`(跨需求知识条目沉淀)职责互补:本 skill 负责"看板可视化"叙事产物,lessons-extract 负责"知识库沉淀"。**复盘 narrative 仅引用已沉淀的 lesson id,严禁在复盘里直接落新 lesson**(用户想沉淀经验请单独走 lessons-extract)。
+
+## 触发关键词
+
+用户在对话中出现以下关键词之一时,主动触发本 skill:
+
+- \`需求复盘\`
+- \`复盘当前需求\`
+- \`生成复盘报告\`
+- \`复盘报告\`
+- \`retrospective\`
+
+## 前置(任一不满足 → 询问用户后停止,不静默吞)
+
+1. 本地 daemon \`http://127.0.0.1:17350\` 可达
+2. 能解析出当前需求 jiraKey,按以下优先级:
+   - 当前 git 分支名匹配 \`[A-Z][A-Z0-9]+-\\d+\`
+   - 当前 cwd 在 \`~/.ai-productivity-tracker/data/<JIRA-KEY>/\` 下,目录名命中正则
+   - 用户在指令中显式指定(如「复盘当前需求 INSTANT-5321」)
+   以上都失败 → 提示用户在分支 / 目录下重试,或显式指定 jiraKey
+3. 该 jiraKey 已通过 \`ai_productivity_init\` 创建过需求,且至少有 1 条非 init iteration
+
+## 执行流程
+
+### Step 1:拉取复盘数据包
+
+\`\`\`
+ai_productivity_extract_retro_bundle({ jiraKey: "<解析出的 jiraKey>" })
+\`\`\`
+
+工具返回值在 \`RETRO_BUNDLE_JSON_BEGIN\` 之前有一段「**=== 客观信号 ===**」可读摘要,后面跟 JSON 数据包。解析 JSON 后包含:
+
+- \`requirement\`:需求元数据(title / status / projectSlug / manualEstimateMinutes / linkedBugCount 等)
+- \`currentProjectSlug\`:本需求的项目标识(=package.json name)
+- \`iterations[]\`:全部对话轮次(含 \`conversationSummary\` / \`thinkSeconds\` / \`pureThinkSeconds\` / \`changedFiles\` / \`cumulativeDiff*\` 等)
+- \`computedSignals\`:整需求维度的客观信号摘要 \`boost / linkedBugCount / cumulativeEffectiveTokens / cumulativeThinkSeconds / fileChurnMap / abnormalStopReasons / topThinkSeqs\`
+- \`relatedLessons[]\`:本需求已沉淀的经验摘要(\`id / type / title / scope / projectSlug / hitCount\`),用于 narrative 末尾引用关联
+- \`existingRetrospective\`:已存在的报告(让你知道上次怎么写的;如果叙事和上次几乎一样、且 \`generatedAtIterationSeq\` 接近,可考虑不必覆盖)
+
+### Step 2:LLM 推理结构化叙事
+
+#### 2.1 价值判定 checklist(先做这步)
+
+完整扫一遍 bundle 后,**先**回答以下 3 个问题。**全部为否 → 直接告诉用户「本需求 iteration 数过少,暂不生成复盘」,不调用 save_retrospective**:
+
+1. iterations 中除 init 外是否至少 ≥3 条?(单轮需求基本无内容可复盘)
+2. 至少能识别出 2 个开发阶段(设计 / 实现 / 调试 / 验收等)?
+3. computedSignals 中至少有 1 个非平凡信号(boost 已计算 / 有 abnormalStopReasons / topThinkSeqs / fileChurnMap 非空)?
+
+#### 2.2 按结构化字段推理(narrative 字段)
+
+| 字段 | 内容指引 |
+|---|---|
+| \`overview\`(必填,≤600 字) | 一段话总览本需求的开发节奏:整体 boost 表现 / 主要亮点 / 主要难点 / 是否如期完成 |
+| \`phases[]\`(最多 8 段) | 把 iterations 按主题分段(如「设计与拆分 #1-#2」「实现 #3-#5」「调试与修复 #6-#7」),每段 \`iterationSeqRange\` 必须落在实际 seq 范围内,\`summary\` 描述该阶段做了什么 / 卡在哪里 |
+| \`highlights[]\`(最多 8 条) | 亮点。例:某轮一气呵成完成复杂改动(对应 topThinkSeqs)、changeScope 干净不漂移、boost 显著高于同类需求 |
+| \`issues[]\`(最多 8 条) | 暴露的问题。例:同款 bug 反复出现(对应 fileChurnMap top 1)、被 max_tokens 截断(对应 abnormalStopReasons)、分支耗时偏长 |
+| \`improvements[]\`(最多 8 条) | 改进建议。指向**具体可落地动作**:换模型 / 加 sentinel / 拆分对话 / 抽公共函数 等,不写空洞口号 |
+| \`pitfallsObserved[]\` | 观察到的坑(可与 lessons pitfall 类型联动,但**禁止重复**已存在的 lesson;直接 \`referencedLessonIds\` 引用即可) |
+| \`nextSteps[]\` | 下次类似需求的预热建议 |
+| \`splitSuggestions[]\`(可选) | 对话拆分 / 合并建议(单轮跨多模块 → 拆;相邻轮 changeScope 高度相似 → 合) |
+
+#### 2.3 客观信号锚定(必做)
+
+- \`topThinkSeqs\`(top 3 思考时长轮次):AI 在这几轮"想得最久",大概率是难点 / 决策点。**对应 phases.summary 应明确描述卡点**,并把 seq 加入 \`anchorIterationSeqs\`
+- \`fileChurnMap\`(被触碰 ≥2 轮的文件 top 5):反映"反复改了什么"。如果某文件 ≥3 轮,在 \`issues\` 里点名,并把对应 seq 加入 \`anchorIterationSeqs\`
+- \`abnormalStopReasons\`:出现 \`max_tokens\` / \`pause_turn\` 等异常结束的轮次,在 \`issues\` 中体现,涉及 seq 加入 \`anchorIterationSeqs\`
+- \`boost\` / \`linkedBugCount\`:**不要写进 narrative 任何字段**(那是看板硬数据,会自动渲染);叙事只在涉及"提效是否达标"时口径化引用("本需求提效高于/低于预期"等)
+
+**硬约束**:narrative 任何字段都不能出现 \`"boost=8.2x"\` / \`"消耗 234k token"\` / \`"思考 7 分钟"\` 之类临时性数值。这些是看板硬数据通道的职责。
+
+#### 2.4 关联经验引用(referencedLessonIds)
+
+从 \`relatedLessons[]\` 中精选**最相关**的 lesson id 填入 \`referencedLessonIds\`(≤32 条):
+
+- 优先引用 \`pitfall\` / \`tooling\` 类型(本需求踩坑后落的)
+- 引用语义上与 \`pitfallsObserved\` / \`improvements\` 直接相关的条目
+- **不属于本 jiraKey 的 lesson id 会被 agent 静默过滤**,不必担心传错;但**不要传不存在的 id**(那是浪费上下文)
+
+#### 2.5 锚点 iteration(anchorIterationSeqs)
+
+把 narrative 引用到的关键 iteration seq 列出(≤16 个),便于看板上点击跳转回对应轮次:
+
+- 对应 phases.iterationSeqRange 的边界 seq
+- topThinkSeqs / fileChurnMap.touchedSeqs / abnormalStopReasons.seqs 中关键的几个
+- 超出实际 iteration 范围的 seq 会被 agent 静默过滤
+
+### Step 3:落盘复盘报告
+
+\`\`\`
+ai_productivity_save_retrospective({
+  jiraKey: "<解析出的 jiraKey>",
+  source: "claude-code",
+  narrative: {
+    overview: "...",
+    phases: [{ title: "设计与拆分", iterationSeqRange: [1, 2], summary: "..." }, ...],
+    highlights: [...],
+    issues: [...],
+    improvements: [...],
+    pitfallsObserved: [...],
+    nextSteps: [...],
+    splitSuggestions: [...] // 可选
+  },
+  referencedLessonIds: ["lsn-INSTANT-5321-abc", ...],
+  anchorIterationSeqs: [3, 5, 7]
+})
+\`\`\`
+
+返回 \`{ schemaVersion, jiraKey, generatedAtIterationSeq, generatedAtIterationCount, snapshot, ... }\`,其中 \`snapshot\`(\`boost / cumulativeToken / linkedBugCount / lessonsCount\` 等)由 agent 自动注入,**LLM 即便传相关字段也会被忽略**。
+
+### Step 4:回报结果
+
+简要告诉用户:
+
+- 已生成复盘报告,基于第 N 轮 / 共 N 轮 iteration
+- 看板入口:\`http://127.0.0.1:17350/\`(打开需求详情 → 切换「复盘报告」tab)
+- 重新生成:再次输入「需求复盘 当前需求 <jiraKey>」即可覆盖
+
+## 设计原则
+
+- **价值优先**:iteration 数过少时直接告知用户暂不生成,**禁止凑数**
+- **结构化优于流水账**:严格按 narrative 8 个字段产出,不要写成博客式长文
+- **客观信号锚定**:phases / issues / highlights 必须能在 computedSignals 中找到对应证据
+- **职责单一**:复盘报告 = 看板叙事产物;经验沉淀走 lessons-extract,不在复盘里落新 lesson
+- **零云端 LLM**:本 skill 完全靠 IDE 内 LLM 推理,agent 不调任何外部 API
+- **可重复生成**:用户可多次触发,单文件覆盖式更新
+
+## 禁止
+
+- 不要把 \`boost\` / \`linkedBugCount\` / \`cumulativeToken\` / \`thinkSeconds\` / \`diff\` 数值直接写进 narrative 任何字段(看板硬数据通道会自动渲染)
+- 不要在 narrative 里直接落新 lesson(那是 lessons-extract 的职责;复盘只引用已存在的 lesson id)
+- 不要伪造从未在 bundle 中出现过的事实(尤其是 phases.iterationSeqRange / anchorIterationSeqs / referencedLessonIds)
+- 不要复述完整 diff
+- 不要写成"项目周报"或"OKR 总结"风格(目标用户是开发者,不是项目经理)
+- 不要在 narrative 任何字段输出 emoji
+- iteration 数过少 / 价值判定不通过时,**不要调用 save_retrospective**(直接告诉用户暂不生成)
+`
+
+export const RETROSPECTIVE_CURSOR_CONTENT = `---
+description: AI 提效面板 - 单需求复盘报告 (retrospective-report v${RETROSPECTIVE_SKILL_VERSION})
+globs:
+  - "**/*"
+alwaysApply: false
+---
+
+# 需求复盘报告 (retrospective-report v${RETROSPECTIVE_SKILL_VERSION})
+
+> alwaysApply: false:本规则只在用户出现「需求复盘 / 复盘当前需求 / 生成复盘报告 / retrospective」等关键词时触发,不强制每轮注入。
+
+> v1.0.0:**整需求复盘**定位(关键词触发,一次性消化全部 iterations + 客观信号 + 关联经验)。与 \`lessons-extract\`(跨需求知识条目沉淀)互为补集:复盘报告 = 看板叙事产物;经验沉淀走独立 skill。**复盘里只引用已沉淀的 lesson id,严禁直接落新 lesson**。
+
+## 触发关键词
+
+- \`需求复盘\`
+- \`复盘当前需求\`
+- \`生成复盘报告\`
+- \`复盘报告\`
+- \`retrospective\`
+
+## 前置
+
+1. 本地 daemon \`http://127.0.0.1:17350\` 可达
+2. 解析当前需求 jiraKey,顺序:
+   - 当前 git 分支名匹配 \`[A-Z][A-Z0-9]+-\\d+\`
+   - 当前 cwd 在 \`~/.ai-productivity-tracker/data/<JIRA-KEY>/\` 下
+   - 用户显式给出
+3. 该 jiraKey 已通过 \`ai_productivity_init\` 创建过需求,且至少有 1 条非 init iteration
+
+## Step 1:拉取数据包
+
+\`\`\`
+ai_productivity_extract_retro_bundle({ jiraKey: "<解析出的 jiraKey>" })
+\`\`\`
+
+返回 \`RETRO_BUNDLE_JSON_BEGIN\` 之前有「**=== 客观信号 ===**」摘要,后面跟 JSON,字段:
+- \`requirement\` / \`currentProjectSlug\` / \`iterations[]\`
+- \`computedSignals\`:\`boost / linkedBugCount / cumulativeEffectiveTokens / cumulativeThinkSeconds / fileChurnMap / abnormalStopReasons / topThinkSeqs\`
+- \`relatedLessons[]\`:本需求已沉淀的经验摘要(用于 referencedLessonIds 关联)
+- \`existingRetrospective\`:历史报告(避免无变化重复落盘)
+
+## Step 2:价值判定 + 结构化推理
+
+### 2.1 价值判定(3 个问题全为否 → 不生成复盘,直接告知用户)
+
+1. 非 init iterations ≥ 3 条?
+2. 至少识别出 2 个开发阶段?
+3. computedSignals 至少有 1 个非平凡信号?
+
+### 2.2 按字段推理 narrative(每个字段都有上限)
+
+\`overview\`(≤600 字) / \`phases\`(最多 8 段,iterationSeqRange 必须在实际范围) / \`highlights\` / \`issues\` / \`improvements\` / \`pitfallsObserved\` / \`nextSteps\`(各最多 8 条,每条 ≤300 字) / \`splitSuggestions\`(可选)。
+
+### 2.3 客观信号锚定
+
+- \`topThinkSeqs\` → phases.summary 描述卡点 + anchorIterationSeqs
+- \`fileChurnMap\` ≥2 轮 → issues 点名 + anchorIterationSeqs
+- \`abnormalStopReasons\` → issues 体现 + anchorIterationSeqs
+- \`boost\` / \`linkedBugCount\`:**禁止写进 narrative 任何字段**(看板硬数据通道自动渲染)
+
+### 2.4 关联经验
+
+从 \`relatedLessons\` 精选填 \`referencedLessonIds\`(≤32 条),不属于本 jiraKey 的 id 会被 agent 静默过滤。
+
+### 2.5 锚点 iteration
+
+\`anchorIterationSeqs\` ≤16 个,超出范围的 seq 会被静默过滤。
+
+## Step 3:落盘
+
+\`\`\`
+ai_productivity_save_retrospective({
+  jiraKey: "<解析出的 jiraKey>",
+  source: "cursor",
+  narrative: { overview, phases, highlights, issues, improvements, pitfallsObserved, nextSteps, splitSuggestions? },
+  referencedLessonIds: [...],
+  anchorIterationSeqs: [...]
+})
+\`\`\`
+
+返回 \`schemaVersion / generatedAtIterationSeq / snapshot\`,其中 \`snapshot\`(boost / 各种数值)由 agent 端自动注入,**LLM 即便传也会被忽略**。
+
+## Step 4:回报
+
+简要告诉用户:已生成复盘报告(基于第 N 轮 / 共 N 轮);看板入口 \`http://127.0.0.1:17350/\`,打开需求详情 → 切换「复盘报告」tab 浏览。
+
+## 禁止
+
+- 不要把 \`boost\` / \`linkedBugCount\` / \`cumulativeToken\` / \`thinkSeconds\` / \`diff\` 数值写进 narrative
+- 不要在 narrative 里落新 lesson(走 lessons-extract,本 skill 只引用已存在的 lesson id)
+- 不要伪造未在 bundle 中出现的事实
+- 不要复述完整 diff
+- 不要写成"项目周报"或"OKR 总结"风格
+- 不要使用 emoji
+- iteration 数过少 / 价值判定不通过时,**不要调用 save_retrospective**(直接告诉用户暂不生成)
+`

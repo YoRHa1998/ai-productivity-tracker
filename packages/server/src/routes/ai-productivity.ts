@@ -80,6 +80,10 @@ import {
   loadLesson,
   removeLesson,
   writeLessons,
+  buildRetrospectiveBundle,
+  loadRetrospective,
+  removeRetrospective,
+  writeRetrospective,
   type StoredRequirement,
   type StoredSubtask,
   type UpdateRequirementPatch,
@@ -88,7 +92,10 @@ import {
   type JiraStoredConfig,
   type LessonExtractedBy,
   type LessonType,
-  type WriteLessonInput
+  type WriteLessonInput,
+  type WriteRetrospectiveInput,
+  type RetrospectiveSource,
+  type RetrospectiveNarrative
 } from '@ai-productivity-tracker/core/store'
 
 // ────────────────────────────────────────────────────────────────────
@@ -2039,6 +2046,130 @@ export function handleAiProductivitySaveLessons(
     replaced: result.replaced,
     rejected: result.rejected
   })
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 单需求复盘报告 (retrospective) v1.0.0-rc.23
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * retrospective-report skill 拉取数据包: GET /ai-productivity/requirements/:jiraKey/retrospective-bundle
+ *
+ * **panel-origin 放行**(便于看板「重新生成」按钮直接消费;skill 通过 MCP 走 token 鉴权也可)。
+ *
+ * 返回结构:`buildRetrospectiveBundle()` —— 含 requirement / iterations /
+ * computedSignals / relatedLessons / existingRetrospective / currentProjectSlug。
+ *
+ * 需求不存在(从未 init)→ 404。
+ */
+export function handleAiProductivityRetrospectiveBundle(
+  res: ServerResponse,
+  jiraKey: string
+): void {
+  const bundle = buildRetrospectiveBundle(jiraKey)
+  if (!bundle.requirement) {
+    fail(res, 404, `需求 ${jiraKey} 未找到,请先 ai_productivity_init`)
+    return
+  }
+  ok(res, bundle)
+}
+
+/**
+ * 看板侧 GET /ai-productivity/requirements/:jiraKey/retrospective (panel-origin 放行)
+ *
+ * 返回 `StoredRetrospective | null`。文件不存在时返回 null(200),用于 UI 空态判断;
+ * 需求不存在(从未 init)→ 404。
+ */
+export function handleAiProductivityGetRetrospective(res: ServerResponse, jiraKey: string): void {
+  if (!loadRequirement(jiraKey)) {
+    fail(res, 404, `需求 ${jiraKey} 未找到`)
+    return
+  }
+  const report = loadRetrospective(jiraKey)
+  ok(res, report)
+}
+
+export interface SaveRetrospectiveRequestBody {
+  /** LLM 推理产物的叙事字段(必填,overview 非空) */
+  narrative: RetrospectiveNarrative
+  /** 'cursor' / 'claude-code' / 'manual',缺省 'manual' */
+  source?: RetrospectiveSource
+  /** 引用的 lesson id 列表;不属于本 jiraKey 的 id 会被静默过滤 */
+  referencedLessonIds?: string[]
+  /** 报告锚点 iteration seq;超出范围的 seq 会被静默过滤 */
+  anchorIterationSeqs?: number[]
+}
+
+/**
+ * retrospective-report skill 落盘 LLM 推理出的复盘: POST /ai-productivity/requirements/:jiraKey/retrospective
+ *
+ * **MCP 主链路(Bearer token 鉴权)**。看板侧不直接调用,看板生成入口走"复制触发口令"模式。
+ *
+ * 单文件覆盖:同 jiraKey 重复落盘视为更新;snapshot / generatedAt /
+ * generatedAtIterationSeq 由 store 端自动注入。
+ *
+ * 校验:
+ * - 需求必须存在
+ * - narrative.overview 必须非空(空叙事请走 DELETE 而非 POST)
+ *
+ * 返回:落盘后的完整 StoredRetrospective(含 store 自动注入的字段)。
+ */
+export function handleAiProductivitySaveRetrospective(
+  res: ServerResponse,
+  jiraKey: string,
+  body: SaveRetrospectiveRequestBody | null
+): void {
+  if (!body || typeof body !== 'object') {
+    fail(res, 400, 'Invalid JSON body')
+    return
+  }
+  if (!loadRequirement(jiraKey)) {
+    fail(res, 404, `需求 ${jiraKey} 未找到,请先 ai_productivity_init`)
+    return
+  }
+  if (!body.narrative || typeof body.narrative !== 'object') {
+    fail(res, 400, 'narrative 必填')
+    return
+  }
+  const overview = typeof body.narrative.overview === 'string' ? body.narrative.overview.trim() : ''
+  if (!overview) {
+    fail(res, 400, 'narrative.overview 不能为空')
+    return
+  }
+
+  try {
+    const written = writeRetrospective(
+      jiraKey,
+      {
+        narrative: body.narrative,
+        source: body.source,
+        referencedLessonIds: body.referencedLessonIds,
+        anchorIterationSeqs: body.anchorIterationSeqs
+      } satisfies WriteRetrospectiveInput,
+      undefined
+    )
+    ok(res, written)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '落盘失败'
+    fail(res, 400, message)
+  }
+}
+
+/**
+ * 看板侧 DELETE /ai-productivity/requirements/:jiraKey/retrospective (panel-origin 放行)
+ *
+ * 文件不存在视为成功(返回 { deleted: false });需求不存在 → 404。
+ */
+export function handleAiProductivityDeleteRetrospective(
+  res: ServerResponse,
+  jiraKey: string
+): void {
+  if (!loadRequirement(jiraKey)) {
+    fail(res, 404, `需求 ${jiraKey} 未找到`)
+    return
+  }
+  const deleted = removeRetrospective(jiraKey)
+  ok(res, { deleted, jiraKey })
 }
 
 // 缺省导出,提供给 server.ts 注册

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   ElButton,
   ElDrawer,
@@ -13,6 +13,7 @@ import {
   ElTableColumn,
   ElTooltip
 } from 'element-plus'
+import { useRoute, useRouter } from 'vue-router'
 
 import {
   AgentRequestError,
@@ -253,9 +254,44 @@ function formatDate(value: string): string {
   }
 }
 
+/**
+ * v1.0.0-rc.23 复盘报告联动:
+ * 复盘 panel 里点击引用经验卡片会 push `/lessons?focus=<lessonId>`,
+ * 这里在 mount + route 变更时探一次 query.focus,自动打开对应详情抽屉。
+ * 打开后立即清除 query 参数,避免用户手动关闭抽屉后又被同一个 focus 重复打开。
+ */
+const router = useRouter()
+const route = useRoute()
+async function consumeFocusQuery(): Promise<void> {
+  const focusId = typeof route.query.focus === 'string' ? route.query.focus.trim() : ''
+  if (!focusId) return
+  // 等列表加载完再打开,确保 currentDetail 渲染时 lessons 索引已有该项
+  if (loading.value || lessons.value.length === 0) {
+    try {
+      await refresh()
+    } catch {
+      // refresh 失败时也尝试拉详情(直接走 getLessonDetail,容忍列表为空)
+    }
+  }
+  const target = lessons.value.find((l) => l.id === focusId) ?? ({ id: focusId } as LessonSummary)
+  await openDetail(target)
+  // 清除 query.focus 让用户后续手动关抽屉后不会被同一参数重复打开
+  void router.replace({ path: route.path, query: { ...route.query, focus: undefined } })
+}
+
 onMounted(() => {
-  void refresh()
+  void (async () => {
+    await refresh()
+    await consumeFocusQuery()
+  })()
 })
+
+watch(
+  () => route.query.focus,
+  () => {
+    void consumeFocusQuery()
+  }
+)
 </script>
 
 <template>

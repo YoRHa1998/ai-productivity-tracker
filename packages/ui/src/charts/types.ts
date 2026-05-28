@@ -4,21 +4,30 @@
  * 配置都是手写 JSON,用宽松 Record 类型 + 局部断言即可。
  */
 import type { ComposeOption } from 'echarts/core'
-import type { LineSeriesOption, PieSeriesOption } from 'echarts/charts'
+import type {
+  BarSeriesOption,
+  LineSeriesOption,
+  PieSeriesOption,
+  RadarSeriesOption
+} from 'echarts/charts'
 import type {
   GridComponentOption,
   TooltipComponentOption,
   LegendComponentOption,
   TitleComponentOption,
-  DatasetComponentOption
+  DatasetComponentOption,
+  RadarComponentOption
 } from 'echarts/components'
 
 export type ECOption = ComposeOption<
   | LineSeriesOption
   | PieSeriesOption
+  | RadarSeriesOption
+  | BarSeriesOption
   | GridComponentOption
   | TooltipComponentOption
   | LegendComponentOption
   | TitleComponentOption
   | DatasetComponentOption
+  | RadarComponentOption
 >

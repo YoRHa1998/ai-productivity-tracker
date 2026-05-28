@@ -19,7 +19,13 @@ import {
   LESSONS_EXTRACT_CURSOR_CONTENT,
   LESSONS_EXTRACT_CURSOR_FILENAME,
   LESSONS_EXTRACT_SKILL_KEY,
-  LESSONS_EXTRACT_SKILL_VERSION
+  LESSONS_EXTRACT_SKILL_VERSION,
+  RETROSPECTIVE_CLAUDE_CONTENT,
+  RETROSPECTIVE_CLAUDE_FILENAME,
+  RETROSPECTIVE_CURSOR_CONTENT,
+  RETROSPECTIVE_CURSOR_FILENAME,
+  RETROSPECTIVE_SKILL_KEY,
+  RETROSPECTIVE_SKILL_VERSION
 } from '@ai-productivity-tracker/core'
 
 export type SkillTool = 'cursor' | 'claude'
@@ -419,6 +425,19 @@ function defaultLessonsExtractCursorFile(): string {
   return path.join(defaultCursorTrackRuleDir(), LESSONS_EXTRACT_CURSOR_FILENAME)
 }
 
+// v1.0.0-rc.23 retrospective-report skill 默认落盘路径(复用同款目录约定)
+function defaultRetrospectiveClaudeFile(): string {
+  return path.join(
+    defaultClaudeTrackSkillRoot(),
+    RETROSPECTIVE_SKILL_KEY,
+    RETROSPECTIVE_CLAUDE_FILENAME
+  )
+}
+
+function defaultRetrospectiveCursorFile(): string {
+  return path.join(defaultCursorTrackRuleDir(), RETROSPECTIVE_CURSOR_FILENAME)
+}
+
 async function readFileSafe(absPath: string): Promise<string | null> {
   try {
     return await fs.readFile(absPath, 'utf-8')
@@ -473,6 +492,15 @@ export interface TrackSkillBundleStatus {
    * 看板 UI 不强制展示,主要供 install 时回报「附带装了哪些」。
    */
   lessonsExtract: {
+    version: string
+    claude: TrackSkillTargetStatus
+    cursor: TrackSkillTargetStatus
+  }
+  /**
+   * v1.0.0-rc.23 retrospective-report skill 同步状态(复用「一键注入 Skill」一并装入)。
+   * 与 lessonsExtract 同构,无 Hook,只是文件覆盖。
+   */
+  retrospective: {
     version: string
     claude: TrackSkillTargetStatus
     cursor: TrackSkillTargetStatus
@@ -541,6 +569,14 @@ export interface TrackSkillBundleInstallResult {
     claude: { path: string; written: boolean; replaced: boolean }
     cursor: { path: string; written: boolean; replaced: boolean }
   }
+  /**
+   * v1.0.0-rc.23 retrospective-report skill 一并写入的结果(无 Hook,只是文件覆盖)。
+   */
+  retrospective: {
+    version: string
+    claude: { path: string; written: boolean; replaced: boolean }
+    cursor: { path: string; written: boolean; replaced: boolean }
+  }
 }
 
 export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatus> {
@@ -548,6 +584,8 @@ export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatu
   const cursorPath = defaultCursorTrackRuleFile()
   const lessonsClaudePath = defaultLessonsExtractClaudeFile()
   const lessonsCursorPath = defaultLessonsExtractCursorFile()
+  const retroClaudePath = defaultRetrospectiveClaudeFile()
+  const retroCursorPath = defaultRetrospectiveCursorFile()
 
   const [
     claudeContent,
@@ -558,7 +596,9 @@ export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatu
     claudeLegacyLocalBinHook,
     cursorHookStatus,
     lessonsClaudeContent,
-    lessonsCursorContent
+    lessonsCursorContent,
+    retroClaudeContent,
+    retroCursorContent
   ] = await Promise.all([
     readFileSafe(claudePath),
     readFileSafe(cursorPath),
@@ -568,13 +608,17 @@ export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatu
     detectLegacyClaudeStopHookEntry(),
     inspectAiTrackCursorHook(),
     readFileSafe(lessonsClaudePath),
-    readFileSafe(lessonsCursorPath)
+    readFileSafe(lessonsCursorPath),
+    readFileSafe(retroClaudePath),
+    readFileSafe(retroCursorPath)
   ])
 
   const claudeInstalled = claudeContent !== null
   const cursorInstalled = cursorContent !== null
   const lessonsClaudeInstalled = lessonsClaudeContent !== null
   const lessonsCursorInstalled = lessonsCursorContent !== null
+  const retroClaudeInstalled = retroClaudeContent !== null
+  const retroCursorInstalled = retroCursorContent !== null
 
   return {
     version: TRACK_SKILL_VERSION,
@@ -608,6 +652,21 @@ export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatu
         installed: lessonsCursorInstalled,
         upToDate: lessonsCursorContent === LESSONS_EXTRACT_CURSOR_CONTENT,
         outdated: lessonsCursorInstalled && lessonsCursorContent !== LESSONS_EXTRACT_CURSOR_CONTENT
+      }
+    },
+    retrospective: {
+      version: RETROSPECTIVE_SKILL_VERSION,
+      claude: {
+        defaultPath: retroClaudePath,
+        installed: retroClaudeInstalled,
+        upToDate: retroClaudeContent === RETROSPECTIVE_CLAUDE_CONTENT,
+        outdated: retroClaudeInstalled && retroClaudeContent !== RETROSPECTIVE_CLAUDE_CONTENT
+      },
+      cursor: {
+        defaultPath: retroCursorPath,
+        installed: retroCursorInstalled,
+        upToDate: retroCursorContent === RETROSPECTIVE_CURSOR_CONTENT,
+        outdated: retroCursorInstalled && retroCursorContent !== RETROSPECTIVE_CURSOR_CONTENT
       }
     }
   }
@@ -657,6 +716,12 @@ export async function installAiTrackSkillBundle(): Promise<TrackSkillBundleInsta
   const lessonsClaudeRes = await writeFileAtomic(lessonsClaudePath, LESSONS_EXTRACT_CLAUDE_CONTENT)
   const lessonsCursorRes = await writeFileAtomic(lessonsCursorPath, LESSONS_EXTRACT_CURSOR_CONTENT)
 
+  // v1.0.0-rc.23:retrospective-report skill 同步装入(无 Hook,只是文件覆盖)
+  const retroClaudePath = defaultRetrospectiveClaudeFile()
+  const retroCursorPath = defaultRetrospectiveCursorFile()
+  const retroClaudeRes = await writeFileAtomic(retroClaudePath, RETROSPECTIVE_CLAUDE_CONTENT)
+  const retroCursorRes = await writeFileAtomic(retroCursorPath, RETROSPECTIVE_CURSOR_CONTENT)
+
   return {
     version: TRACK_SKILL_VERSION,
     claude: {
@@ -680,6 +745,11 @@ export async function installAiTrackSkillBundle(): Promise<TrackSkillBundleInsta
       version: LESSONS_EXTRACT_SKILL_VERSION,
       claude: { path: lessonsClaudePath, written: true, replaced: lessonsClaudeRes.replaced },
       cursor: { path: lessonsCursorPath, written: true, replaced: lessonsCursorRes.replaced }
+    },
+    retrospective: {
+      version: RETROSPECTIVE_SKILL_VERSION,
+      claude: { path: retroClaudePath, written: true, replaced: retroClaudeRes.replaced },
+      cursor: { path: retroCursorPath, written: true, replaced: retroCursorRes.replaced }
     }
   }
 }

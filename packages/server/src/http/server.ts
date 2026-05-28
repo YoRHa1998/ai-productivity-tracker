@@ -41,6 +41,10 @@ import {
   handleAiProductivityLessonsBundle,
   handleAiProductivityLatestCandidate,
   handleAiProductivitySaveLessons,
+  handleAiProductivityRetrospectiveBundle,
+  handleAiProductivityGetRetrospective,
+  handleAiProductivitySaveRetrospective,
+  handleAiProductivityDeleteRetrospective,
   type InitRequestBody,
   type HookRequestBody,
   type TurnStartRequestBody,
@@ -52,7 +56,8 @@ import {
   type RefreshBugsBody,
   type MergeSplitIterationsRequestBody,
   type AttachSummaryRequestBody,
-  type SaveLessonsRequestBody
+  type SaveLessonsRequestBody,
+  type SaveRetrospectiveRequestBody
 } from '../routes/ai-productivity.js'
 
 export interface DaemonHandle {
@@ -389,6 +394,30 @@ async function routeAiProductivity(
   if (params && method === 'GET') {
     handleAiProductivityLatestCandidate(res, params.jiraKey!)
     return true
+  }
+
+  // ── 单需求复盘报告 (retrospective) v1.0.0-rc.23 ─────────────────
+  params = matchRoute(pathname, '/ai-productivity/requirements/:jiraKey/retrospective-bundle')
+  if (params && method === 'GET') {
+    handleAiProductivityRetrospectiveBundle(res, params.jiraKey!)
+    return true
+  }
+
+  params = matchRoute(pathname, '/ai-productivity/requirements/:jiraKey/retrospective')
+  if (params) {
+    if (method === 'GET') {
+      handleAiProductivityGetRetrospective(res, params.jiraKey!)
+      return true
+    }
+    if (method === 'POST') {
+      const body = parseJson(await readBody(req)) as SaveRetrospectiveRequestBody | null
+      handleAiProductivitySaveRetrospective(res, params.jiraKey!, body)
+      return true
+    }
+    if (method === 'DELETE') {
+      handleAiProductivityDeleteRetrospective(res, params.jiraKey!)
+      return true
+    }
   }
 
   // ── lessons 端点(v2.16.0+ panel-origin 放行)──────────────────

@@ -42,7 +42,7 @@ function fakeClient(overrides: Partial<AgentClient> = {}): AgentClient {
 }
 
 describe('registerAiProductivityTools', () => {
-  it('注册 init / status / attach_summary / extract_bundle / save_lessons 共 5 个 tool', () => {
+  it('注册 init / status / attach_summary / extract_bundle / save_lessons / extract_retro_bundle / save_retrospective 共 7 个 tool', () => {
     const server = new FakeServer()
     registerAiProductivityTools(
       server as unknown as Parameters<typeof registerAiProductivityTools>[0],
@@ -52,8 +52,10 @@ describe('registerAiProductivityTools', () => {
     expect(names).toEqual([
       'ai_productivity_attach_summary',
       'ai_productivity_extract_bundle',
+      'ai_productivity_extract_retro_bundle',
       'ai_productivity_init',
       'ai_productivity_save_lessons',
+      'ai_productivity_save_retrospective',
       'ai_productivity_status'
     ])
   })
@@ -407,14 +409,9 @@ describe('registerAiProductivityTools', () => {
       server as unknown as Parameters<typeof registerAiProductivityTools>[0],
       fakeClient()
     )
-    const names = server.tools.map((t) => t.name).sort()
-    expect(names).toEqual([
-      'ai_productivity_attach_summary',
-      'ai_productivity_extract_bundle',
-      'ai_productivity_init',
-      'ai_productivity_save_lessons',
-      'ai_productivity_status'
-    ])
+    const names = server.tools.map((t) => t.name)
+    expect(names).toContain('ai_productivity_extract_bundle')
+    expect(names).toContain('ai_productivity_save_lessons')
   })
 
   it('ai_productivity_extract_bundle 调 client.extractBundle 并把 JSON 文本化', async () => {
@@ -724,5 +721,168 @@ describe('registerAiProductivityTools', () => {
         ]
       })
     )
+  })
+
+  // v1.0.0-rc.23 retrospective-report:extract_retro_bundle + save_retrospective
+
+  it('ai_productivity_extract_retro_bundle 调 client.extractRetrospectiveBundle 并文本化 RETRO_BUNDLE_JSON', async () => {
+    const bundleSpy = vi.fn().mockResolvedValue({
+      jiraKey: 'INSTANT-700',
+      currentProjectSlug: '@scope/proj',
+      requirement: { jiraKey: 'INSTANT-700', title: 'demo' },
+      iterations: [{ seq: 1 }, { seq: 2 }, { seq: 3 }],
+      computedSignals: {
+        boost: 6.2,
+        linkedBugCount: 1,
+        cumulativeEffectiveTokens: 50000,
+        cumulativeThinkSeconds: 600,
+        fileChurnMap: [],
+        abnormalStopReasons: [],
+        topThinkSeqs: [2, 3]
+      },
+      relatedLessons: [
+        {
+          id: 'lsn-INSTANT-700-abc',
+          jiraKey: 'INSTANT-700',
+          type: 'pitfall',
+          title: '坑',
+          scope: 'project',
+          projectSlug: '@scope/proj',
+          hitCount: 1
+        }
+      ],
+      existingRetrospective: null
+    })
+    const server = new FakeServer()
+    registerAiProductivityTools(
+      server as unknown as Parameters<typeof registerAiProductivityTools>[0],
+      fakeClient({ extractRetrospectiveBundle: bundleSpy } as Partial<AgentClient>)
+    )
+    const tool = server.tools.find((t) => t.name === 'ai_productivity_extract_retro_bundle')!
+    const result = await tool.handler({ jiraKey: 'INSTANT-700' })
+    expect(bundleSpy).toHaveBeenCalledWith({ jiraKey: 'INSTANT-700', cwd: undefined })
+    expect(result.isError).toBeUndefined()
+    expect(result.content[0].text).toContain('INSTANT-700')
+    expect(result.content[0].text).toContain('iterations: 3')
+    expect(result.content[0].text).toContain('relatedLessons: 1')
+    expect(result.content[0].text).toContain('RETRO_BUNDLE_JSON_BEGIN')
+    expect(result.content[0].text).toContain('RETRO_BUNDLE_JSON_END')
+    expect(result.content[0].text).toContain('=== 客观信号')
+  })
+
+  it('ai_productivity_extract_retro_bundle 已存在历史报告时附加提示', async () => {
+    const bundleSpy = vi.fn().mockResolvedValue({
+      jiraKey: 'INSTANT-701',
+      currentProjectSlug: 'p',
+      requirement: { jiraKey: 'INSTANT-701' },
+      iterations: [],
+      relatedLessons: [],
+      existingRetrospective: { generatedAt: '2026-01-01T00:00:00.000Z' }
+    })
+    const server = new FakeServer()
+    registerAiProductivityTools(
+      server as unknown as Parameters<typeof registerAiProductivityTools>[0],
+      fakeClient({ extractRetrospectiveBundle: bundleSpy } as Partial<AgentClient>)
+    )
+    const tool = server.tools.find((t) => t.name === 'ai_productivity_extract_retro_bundle')!
+    const result = await tool.handler({ jiraKey: 'INSTANT-701' })
+    expect(result.content[0].text).toContain('已存在历史复盘报告')
+  })
+
+  it('ai_productivity_save_retrospective 透传完整 narrative 并文本化结果', async () => {
+    const saveSpy = vi.fn().mockResolvedValue({
+      schemaVersion: 1,
+      jiraKey: 'INSTANT-800',
+      generatedAt: '2026-05-28T01:00:00.000Z',
+      generatedAtIterationSeq: 5,
+      generatedAtIterationCount: 5,
+      source: 'claude-code',
+      snapshot: {
+        title: 'demo',
+        status: 'finished',
+        boost: 6.5,
+        cumulativeToken: 30000,
+        totalThinkSeconds: 480,
+        elapsedMinutes: 100,
+        cumulativeDiffFiles: 12,
+        cumulativeDiffInsertions: 200,
+        cumulativeDiffDeletions: 50,
+        linkedBugCount: 1,
+        lessonsCount: 2,
+        abnormalStopReasonsCount: 0
+      },
+      narrative: {
+        overview: '总览',
+        phases: [{ title: '设计', iterationSeqRange: [1, 2], summary: 's' }],
+        highlights: ['亮点'],
+        issues: ['问题'],
+        improvements: ['改进'],
+        pitfallsObserved: ['坑'],
+        nextSteps: ['next']
+      },
+      referencedLessonIds: ['lsn-X-1'],
+      anchorIterationSeqs: [3, 5]
+    })
+    const server = new FakeServer()
+    registerAiProductivityTools(
+      server as unknown as Parameters<typeof registerAiProductivityTools>[0],
+      fakeClient({ saveRetrospective: saveSpy } as Partial<AgentClient>)
+    )
+    const tool = server.tools.find((t) => t.name === 'ai_productivity_save_retrospective')!
+    const result = await tool.handler({
+      jiraKey: 'INSTANT-800',
+      narrative: {
+        overview: '总览',
+        phases: [{ title: '设计', iterationSeqRange: [1, 2], summary: 's' }],
+        highlights: ['亮点'],
+        issues: ['问题'],
+        improvements: ['改进'],
+        pitfallsObserved: ['坑'],
+        nextSteps: ['next']
+      },
+      source: 'claude-code',
+      referencedLessonIds: ['lsn-X-1'],
+      anchorIterationSeqs: [3, 5]
+    })
+    expect(saveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jiraKey: 'INSTANT-800',
+        source: 'claude-code',
+        referencedLessonIds: ['lsn-X-1'],
+        anchorIterationSeqs: [3, 5],
+        narrative: expect.objectContaining({ overview: '总览' })
+      })
+    )
+    expect(result.isError).toBeUndefined()
+    expect(result.content[0].text).toContain('已落盘需求 INSTANT-800 的复盘报告')
+    expect(result.content[0].text).toContain('基于第 5 轮 / 共 5 轮')
+    expect(result.content[0].text).toContain('引用经验:1 条')
+    expect(result.content[0].text).toContain('锚点 iteration:2 个')
+  })
+
+  it('ai_productivity_save_retrospective agent 报错(narrative.overview 空)→ isError=true', async () => {
+    const saveSpy = vi
+      .fn()
+      .mockRejectedValue(new AgentClientError(400, 'narrative.overview 不能为空'))
+    const server = new FakeServer()
+    registerAiProductivityTools(
+      server as unknown as Parameters<typeof registerAiProductivityTools>[0],
+      fakeClient({ saveRetrospective: saveSpy } as Partial<AgentClient>)
+    )
+    const tool = server.tools.find((t) => t.name === 'ai_productivity_save_retrospective')!
+    const result = await tool.handler({
+      jiraKey: 'INSTANT-801',
+      narrative: {
+        overview: 'x',
+        phases: [],
+        highlights: [],
+        issues: [],
+        improvements: [],
+        pitfallsObserved: [],
+        nextSteps: []
+      }
+    })
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('overview')
   })
 })

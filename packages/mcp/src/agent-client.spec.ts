@@ -265,4 +265,117 @@ describe('AgentClient', () => {
       )
     })
   })
+
+  // v1.0.0-rc.23 retrospective-report
+  describe('extractRetrospectiveBundle / saveRetrospective', () => {
+    it('extractRetrospectiveBundle GET /ai-productivity/requirements/:jiraKey/retrospective-bundle', async () => {
+      ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            code: 'OK',
+            message: '',
+            data: {
+              jiraKey: 'INSTANT-700',
+              currentProjectSlug: 'demo',
+              requirement: { jiraKey: 'INSTANT-700' },
+              iterations: [],
+              computedSignals: {
+                boost: null,
+                linkedBugCount: null,
+                cumulativeEffectiveTokens: 0,
+                cumulativeThinkSeconds: 0,
+                fileChurnMap: [],
+                abnormalStopReasons: [],
+                topThinkSeqs: []
+              },
+              relatedLessons: [],
+              existingRetrospective: null
+            }
+          })
+      })
+      const c = new AgentClient({ baseUrl: 'http://127.0.0.1:17350', token: 't' })
+      const result = await c.extractRetrospectiveBundle({ jiraKey: 'INSTANT-700' })
+      const call = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+      expect(call[0]).toBe(
+        'http://127.0.0.1:17350/ai-productivity/requirements/INSTANT-700/retrospective-bundle'
+      )
+      expect((call[1] as RequestInit).method).toBe('GET')
+      expect((call[1] as RequestInit).headers).toMatchObject({ Authorization: 'Bearer t' })
+      expect(result.jiraKey).toBe('INSTANT-700')
+      expect(result.relatedLessons).toEqual([])
+    })
+
+    it('saveRetrospective POST 请求体含完整 narrative + 元数据', async () => {
+      ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            code: 'OK',
+            message: '',
+            data: {
+              schemaVersion: 1,
+              jiraKey: 'INSTANT-700',
+              generatedAt: '2026-05-28T01:00:00.000Z',
+              generatedAtIterationSeq: 5,
+              generatedAtIterationCount: 5,
+              source: 'cursor',
+              snapshot: {
+                title: 'demo',
+                status: 'finished',
+                boost: null,
+                cumulativeToken: 0,
+                totalThinkSeconds: 0,
+                elapsedMinutes: 0,
+                cumulativeDiffFiles: 0,
+                cumulativeDiffInsertions: 0,
+                cumulativeDiffDeletions: 0,
+                linkedBugCount: 0,
+                lessonsCount: 0,
+                abnormalStopReasonsCount: 0
+              },
+              narrative: {
+                overview: 'ov',
+                phases: [],
+                highlights: [],
+                issues: [],
+                improvements: [],
+                pitfallsObserved: [],
+                nextSteps: []
+              },
+              referencedLessonIds: [],
+              anchorIterationSeqs: []
+            }
+          })
+      })
+      const c = new AgentClient({ baseUrl: 'http://127.0.0.1:17350', token: 't' })
+      await c.saveRetrospective({
+        jiraKey: 'INSTANT-700',
+        narrative: {
+          overview: 'ov',
+          phases: [],
+          highlights: [],
+          issues: [],
+          improvements: [],
+          pitfallsObserved: [],
+          nextSteps: []
+        },
+        source: 'cursor',
+        referencedLessonIds: ['lsn-X-1'],
+        anchorIterationSeqs: [2]
+      })
+      const call = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+      expect(call[0]).toBe(
+        'http://127.0.0.1:17350/ai-productivity/requirements/INSTANT-700/retrospective'
+      )
+      expect((call[1] as RequestInit).method).toBe('POST')
+      const body = JSON.parse((call[1] as RequestInit).body as string)
+      expect(body.narrative.overview).toBe('ov')
+      expect(body.source).toBe('cursor')
+      expect(body.referencedLessonIds).toEqual(['lsn-X-1'])
+      expect(body.anchorIterationSeqs).toEqual([2])
+    })
+  })
 })

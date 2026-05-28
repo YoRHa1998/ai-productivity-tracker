@@ -32,6 +32,7 @@
         ├── iterations.jsonl      # 每轮对话一条 iteration
         ├── subtask-events.jsonl  # 子任务勾选事件(v2.x 已下线,字段保留)
         ├── numstat-snapshot.json # 上一轮 numstat 快照(增量 diff 用)
+        ├── retrospective.json    # v1.0.0-rc.23 单需求复盘报告(单文件覆盖)
         └── raw/                  # 每轮原始 hook payload(审计)
             ├── 1.json
             ├── 2.json
@@ -266,6 +267,73 @@ interface LessonSignals {
   } | null
 }
 ```
+
+---
+
+## 7.5. `data/<JIRA-KEY>/retrospective.json`
+
+> v1.0.0-rc.23 引入。单需求复盘报告,**单文件覆盖式**:每个 jiraKey 至多保留一份最新报告,LLM 通过
+> retrospective-report skill + `ai_productivity_save_retrospective` MCP tool 重新触发会替换老内容。
+
+落盘路径 `data/<JIRA-KEY>/retrospective.json`,与 `requirement.json` / `iterations.jsonl` 同目录。
+
+```ts
+interface StoredRetrospective {
+  schemaVersion: 1
+  jiraKey: string
+  generatedAt: string // ISO8601
+  generatedAtIterationSeq: number // 基于哪一轮 iteration 生成(末轮 seq)
+  generatedAtIterationCount: number // 生成时 iterations 总数
+  source: 'cursor' | 'claude-code' | 'manual'
+
+  // 落盘时 daemon 端基于 RequirementMetrics + iterations 自动计算的硬数据快照
+  // (LLM 即便传相关字段也会被忽略;前端展示时优先用此处的数值,避免后续 iteration
+  // 增长后报告里的客观数据漂移)
+  snapshot: {
+    title: string
+    status: 'in_progress' | 'finished' | 'abandoned'
+    boost: number | null
+    cumulativeToken: number
+    totalThinkSeconds: number
+    elapsedMinutes: number
+    cumulativeDiffFiles: number
+    cumulativeDiffInsertions: number
+    cumulativeDiffDeletions: number
+    linkedBugCount: number
+    lessonsCount: number
+    abnormalStopReasonsCount: number
+  }
+
+  // LLM 推理产物的结构化叙事(每条字段都是 markdown / plain text)
+  narrative: {
+    overview: string // 总览 ≤600 字
+    phases: Array<{
+      title: string // ≤80 字
+      iterationSeqRange: [number, number] // 闭区间;超范围会被 store 静默过滤
+      summary: string // ≤400 字
+    }> // 最多 8 段
+    highlights: string[] // 亮点(每条 ≤300 字,最多 8 条)
+    issues: string[] // 暴露的问题
+    improvements: string[] // 改进建议
+    pitfallsObserved: string[] // 观察到的坑(可与 lessons.pitfall 联动)
+    nextSteps: string[] // 下次预热建议
+    splitSuggestions?: string[] // 对话拆分建议(可选)
+  }
+
+  // 复盘里引用的 lesson id 列表;不属于本 jiraKey 的 id 会被 store 静默过滤
+  // 通过 referencedLessonIds 实现「复盘 ⇄ lessons」弱引用,**不重复落盘** lesson 内容
+  referencedLessonIds: string[] // 最多 32 条
+
+  // 报告锚点 iteration(高 think / 高 churn / 异常 stop);超范围 seq 会被静默过滤
+  anchorIterationSeqs: number[] // 最多 16 个
+}
+```
+
+**与 lessons 的协同**:复盘报告负责「看板叙事产物」(per-feature),lessons 负责「跨需求知识条目沉淀」。
+LLM 在复盘 narrative 中通过 `referencedLessonIds` 关联本需求已沉淀的 lesson,**严禁在复盘里直接落新 lesson**(用户想沉淀经验仍走 lessons-extract skill)。
+
+**Schema 升级策略**:`loadRetrospective` 见到 `schemaVersion > 当前实现支持` 时返回 `null` + 不删盘
+(打 console.warn),保留用户数据让未来 v2 schema 升级。
 
 ---
 

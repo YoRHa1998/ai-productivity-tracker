@@ -1,6 +1,12 @@
 import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { AgentClient, AgentClientError, type LessonInputForSave } from './agent-client.js'
+import {
+  AgentClient,
+  AgentClientError,
+  type LessonInputForSave,
+  type RetrospectiveNarrativeInput,
+  type SaveRetrospectiveResult
+} from './agent-client.js'
 
 interface ToolResult {
   content: Array<{ type: 'text'; text: string }>
@@ -290,6 +296,139 @@ function formatExtractBundle(result: {
   return lines.join('\n')
 }
 
+// ─── v1.0.0-rc.23 retrospective-report skill: bundle / save ─────────────
+
+const extractRetroBundleInputShape = {
+  jiraKey: z
+    .string()
+    .min(1)
+    .describe(
+      '需求 Jira Key(如 ABC-1234)。skill 应优先从当前 git 分支正则解析后传入;agent 会用 jiraKey 拉 requirement.json + 全部 iterations + 关联 lessons + 已存在的复盘报告。'
+    ),
+  cwd: z
+    .string()
+    .optional()
+    .describe('当前工作目录,通常无需主动传(同 attach_summary 的 cwd 兜底逻辑)')
+}
+
+const retroPhaseSchema = z.object({
+  title: z.string().min(1).describe('阶段标题,目标 ≤80 字'),
+  iterationSeqRange: z
+    .tuple([z.number().int().positive(), z.number().int().positive()])
+    .describe('该阶段覆盖的 iteration seq 闭区间 [from, to];超出实际 iteration 范围会被静默过滤'),
+  summary: z.string().describe('阶段叙事(markdown / plain text),目标 ≤400 字')
+})
+
+const retroNarrativeSchema = z.object({
+  overview: z
+    .string()
+    .min(1)
+    .describe(
+      '一段话总览(目标 ≤600 字,超出会被静默截断)。事实陈述,概括本需求的开发节奏 / boost 表现 / 主要难点。**严禁为空**(空叙事请勿调用,直接告知用户「本需求 iteration 数过少,暂不生成复盘」)'
+    ),
+  phases: z
+    .array(retroPhaseSchema)
+    .max(8)
+    .describe(
+      '阶段拆分(最多 8 段)。把全部 iterations 按主题分段,例如「设计与拆分」「实现」「调试与修复」。每段 iterationSeqRange 必须落在实际 seq 范围内'
+    ),
+  highlights: z
+    .array(z.string())
+    .max(8)
+    .describe(
+      '亮点(最多 8 条,每条 ≤300 字)。例如「topThinkSeqs 对应轮次一气呵成」「changeScope 干净不漂移」'
+    ),
+  issues: z
+    .array(z.string())
+    .max(8)
+    .describe('暴露的问题(最多 8 条)。例如「watcher 漏抓导致一轮 conversationSummary null」'),
+  improvements: z
+    .array(z.string())
+    .max(8)
+    .describe('改进建议(最多 8 条)。指向具体可落地动作,不是空洞口号'),
+  pitfallsObserved: z
+    .array(z.string())
+    .max(8)
+    .describe('观察到的坑(最多 8 条)。可与 lessons pitfall 类型联动'),
+  nextSteps: z.array(z.string()).max(8).describe('下次类似需求的预热建议(最多 8 条)'),
+  splitSuggestions: z.array(z.string()).max(8).optional().describe('对话拆分建议(可选,最多 8 条)')
+})
+
+const saveRetrospectiveInputShape = {
+  jiraKey: z.string().min(1).describe('需求 Jira Key,与 extract_retro_bundle 入参一致'),
+  narrative: retroNarrativeSchema.describe('LLM 推理产物的结构化叙事'),
+  source: z
+    .enum(['cursor', 'claude-code'])
+    .optional()
+    .describe(
+      '调用方 AI 工具来源,由 SKILL/Rule 模板硬编码:CURSOR_RULE.md 传 cursor,SKILL.md 传 claude-code,缺省 manual'
+    ),
+  referencedLessonIds: z
+    .array(z.string())
+    .max(32)
+    .optional()
+    .describe(
+      '复盘里引用的 lesson id 列表,从 extract_retro_bundle 返回的 relatedLessons 中精选。**只引用本需求已沉淀的经验,跨需求 / 不存在的 id 会被静默过滤**'
+    ),
+  anchorIterationSeqs: z
+    .array(z.number().int().positive())
+    .max(16)
+    .optional()
+    .describe(
+      '报告引用的关键 iteration seq(高 think / 高 churn / 异常 stop 的轮次)。**超出实际 iteration 范围的 seq 会被静默过滤**'
+    )
+}
+
+interface FormatRetroRelatedLesson {
+  id: string
+  type: string
+  title: string
+  scope: string
+  projectSlug: string
+  hitCount: number
+}
+
+function formatRetroBundle(result: {
+  jiraKey: string
+  currentProjectSlug?: string
+  requirement: unknown
+  iterations: unknown[]
+  computedSignals?: FormatBundleComputedSignals
+  relatedLessons?: FormatRetroRelatedLesson[]
+  existingRetrospective?: unknown
+}): string {
+  const projectSlug = result.currentProjectSlug?.trim() || '(未识别)'
+  const lines = [
+    `已拉取 ${result.jiraKey} 复盘数据包,可直接基于以下信息生成结构化复盘报告。`,
+    '',
+    `currentProjectSlug: ${projectSlug}`,
+    `iterations: ${Array.isArray(result.iterations) ? result.iterations.length : 0} 条`,
+    `relatedLessons: ${Array.isArray(result.relatedLessons) ? result.relatedLessons.length : 0} 条(本需求已沉淀的经验,supplyreferencedLessonIds 时从这里挑)`,
+    result.existingRetrospective
+      ? '已存在历史复盘报告(避免无变化重复落盘,有显著新增 iteration 才覆盖)'
+      : '本需求尚未生成过复盘报告',
+    ''
+  ]
+  lines.push(...buildComputedSignalsBlock(result.computedSignals))
+  lines.push('RETRO_BUNDLE_JSON_BEGIN', JSON.stringify(result, null, 2), 'RETRO_BUNDLE_JSON_END')
+  return lines.join('\n')
+}
+
+function formatSaveRetrospective(result: SaveRetrospectiveResult): string {
+  const phaseCount = result.narrative.phases.length
+  const highlights = result.narrative.highlights.length
+  const issues = result.narrative.issues.length
+  const lines = [
+    `已落盘需求 ${result.jiraKey} 的复盘报告(基于第 ${result.generatedAtIterationSeq} 轮 / 共 ${result.generatedAtIterationCount} 轮 iteration)`,
+    `- 叙事:${phaseCount} 个阶段、${highlights} 条亮点、${issues} 条问题`,
+    `- 引用经验:${result.referencedLessonIds.length} 条`,
+    `- 锚点 iteration:${result.anchorIterationSeqs.length} 个`,
+    '',
+    '可在「AI 提效面板 → 需求详情 → 复盘报告」Tab 浏览。'
+  ]
+  return lines.join('\n')
+}
+
 function formatSaveLessons(result: {
   saved: Array<{ id: string; type: string; title: string }>
   savedCount: number
@@ -465,6 +604,63 @@ export function registerAiProductivityTools(server: McpServer, client: AgentClie
           projectSlug: args.projectSlug
         })
         return { content: [{ type: 'text', text: formatSaveLessons(result) }] }
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  // v1.0.0-rc.23 单需求复盘报告闭环:retrospective-report skill 配套两个工具
+
+  server.registerTool(
+    'ai_productivity_extract_retro_bundle',
+    {
+      description:
+        '【需求复盘】skill 专用:拉取指定需求的复盘报告生成数据包(requirement + 全部 iterations + computedSignals + relatedLessons + existingRetrospective)。返回 RETRO_BUNDLE_JSON_BEGIN/END 包裹的 JSON。LLM 解析后按结构化叙事维度推理(overview / phases / highlights / issues / improvements / pitfallsObserved / nextSteps / splitSuggestions),再调 ai_productivity_save_retrospective 落盘。**复盘报告与 lessons 是弱引用关系**,LLM 通过 referencedLessonIds 关联本需求已沉淀的经验,不在复盘里直接落新 lesson(用户想沉淀经验仍走 lessons-extract skill)。',
+      inputSchema: extractRetroBundleInputShape
+    },
+    async (
+      args: z.infer<z.ZodObject<typeof extractRetroBundleInputShape>>
+    ): Promise<ToolResult> => {
+      try {
+        const result = await client.extractRetrospectiveBundle({
+          jiraKey: args.jiraKey,
+          cwd: args.cwd
+        })
+        return { content: [{ type: 'text', text: formatRetroBundle(result) }] }
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'ai_productivity_save_retrospective',
+    {
+      description:
+        '【需求复盘】skill 专用:把 LLM 推理出的结构化复盘叙事落盘到本机 ~/.ai-productivity-tracker/data/<jiraKey>/retrospective.json。**单文件覆盖**:同 jiraKey 重复落盘视为更新,snapshot / generatedAt / generatedAtIterationSeq 由 agent 端基于当前 iterations + requirement 自动注入,LLM 即便传相关字段也会被忽略。referencedLessonIds 不属于本 jiraKey 的 id 会被静默过滤;anchorIterationSeqs 超出范围的 seq 会被静默过滤。narrative.overview 为空时 agent 端会拒收(返回错误)。',
+      inputSchema: saveRetrospectiveInputShape
+    },
+    async (args: z.infer<z.ZodObject<typeof saveRetrospectiveInputShape>>): Promise<ToolResult> => {
+      try {
+        const narrative: RetrospectiveNarrativeInput = {
+          overview: args.narrative.overview,
+          phases: args.narrative.phases ?? [],
+          highlights: args.narrative.highlights ?? [],
+          issues: args.narrative.issues ?? [],
+          improvements: args.narrative.improvements ?? [],
+          pitfallsObserved: args.narrative.pitfallsObserved ?? [],
+          nextSteps: args.narrative.nextSteps ?? [],
+          splitSuggestions: args.narrative.splitSuggestions
+        }
+        const result = await client.saveRetrospective({
+          jiraKey: args.jiraKey,
+          narrative,
+          source: args.source,
+          referencedLessonIds: args.referencedLessonIds,
+          anchorIterationSeqs: args.anchorIterationSeqs
+        })
+        return { content: [{ type: 'text', text: formatSaveRetrospective(result) }] }
       } catch (err) {
         return errorResult(err)
       }

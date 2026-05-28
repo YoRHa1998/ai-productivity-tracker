@@ -973,13 +973,69 @@ Examples:
 
 ## 12. 后续演进（v1.x 路线图占位）
 
-> 仅占位，本期不实施。
+> 已交付的功能段记在 §12.x；占位项记在 §12.99。
 
-- **P1**: Windows 完整支持（systemd-equivalent 守护脚本生成器）。
-- **P1**: 看板「全局复盘报告」一键导出 Markdown / HTML（roadmap.md §P1-3）。
-- **P2**: skill / rule 版本管理面板（diff、回滚、自定义 fork）。
-- **P2**: 多 dataRoot 切换（按"工作"/"个人"切档）。
-- **P3**: 团队同步：daemon 加可选 push 到 git 仓库的"经验云"。
+### 12.1 单需求复盘报告（v1.0.0-rc.23 已交付)
+
+让前期采集的 iterations / lessons / 客观信号在「需求结束时」集中发挥价值,产出一份结构化复盘叙事 + 多维图表,直观呈现一次需求的开发情况。
+
+**目标**:
+
+- 把 per-feature 维度收集的所有数据(iterations / boost / churn / 关联 lessons / 异常 stop)做一次系统性消化,生成 LLM 推理产物 + 看板可视化
+- 保持「零云端 LLM」原则:推理走 IDE 内 agent,daemon 不出网
+
+**架构(零云端,沿用 lessons-extract 双 MCP tool 模式)**:
+
+```
+用户在 IDE 输入「需求复盘 当前需求 INSTANT-XXXX」
+   ↓
+IDE LLM 命中 retrospective-report skill(关键词触发)
+   ↓
+LLM 调 ai_productivity_extract_retro_bundle({ jiraKey })
+   ↓ stdio MCP → AgentClient → GET /requirements/:jiraKey/retrospective-bundle
+   ↓ daemon 复用 buildLessonsBundle + 加 relatedLessons + existingRetrospective
+   ↓ MCP 返「客观信号摘要 + RETRO_BUNDLE_JSON_BEGIN/END JSON」给 LLM
+LLM 推理 → narrative(overview / phases / highlights / issues / improvements / pitfalls / nextSteps)
+   ↓
+LLM 调 ai_productivity_save_retrospective({ jiraKey, narrative, referencedLessonIds, anchorIterationSeqs })
+   ↓ POST /requirements/:jiraKey/retrospective → writeRetrospective() 落盘
+   ↓ snapshot / generatedAt / generatedAtIterationSeq 由 daemon 自动注入
+看板「需求详情 → 复盘报告」tab 同源 GET 直接展示
+```
+
+**实现位置**:
+
+- core: `packages/core/src/store/retrospective-store.ts`(load / write / remove / buildBundle)
+- server: `packages/server/src/routes/ai-productivity.ts`(GET / POST / DELETE retrospective + GET retrospective-bundle 共 4 个端点)
+- mcp: `packages/mcp/src/tools.ts`(`ai_productivity_extract_retro_bundle` / `ai_productivity_save_retrospective` 共 2 个新 tool)
+- skill 模板: `packages/core/src/track-skill-templates.ts`(`RETROSPECTIVE_CLAUDE_CONTENT` / `RETROSPECTIVE_CURSOR_CONTENT`,版本 `RETROSPECTIVE_SKILL_VERSION = '1.0.0'`)
+- ui: `packages/ui/src/tabs/RetrospectiveReportPanel.vue` + `charts/RadarMetric.vue` + `charts/IterationPhaseTimeline.vue` + `lib/markdown.ts`,WorkspaceTab 抽屉重构为 ElTabs(「需求概览」+「复盘报告」)
+
+**验收用例 V15-V20**:
+
+- **V15**:在已 init 的需求上调 `ai_productivity_extract_retro_bundle` 返回完整 bundle(含 requirement / iterations / computedSignals / relatedLessons / existingRetrospective 字段)
+- **V16**:调 `ai_productivity_save_retrospective` 落盘后,`GET /requirements/:jiraKey/retrospective` 立即可读;再次调用覆盖,`generatedAtIterationSeq` 推进
+- **V17**:看板需求抽屉 ElTabs 切换无 layout 跳动,「需求概览」tab 内原 4 段功能(状态切换 / 标题编辑 / 刷新 bug / 合并拆分 iteration)全部回归通过
+- **V18**:「复盘报告」tab 在无报告时显示空态 + 复制口令按钮,且复制后剪贴板内容形如 `需求复盘 当前需求 INSTANT-XXXX`
+- **V19**:「复盘报告」tab 在有报告时雷达图 / 阶段时间线 / 累积曲线 / markdown 文本(粗体 / 列表 / 引用)全部可见且无控制台报错
+- **V20**:skill 触发关键词 `需求复盘` 在 Cursor `~/.cursor/rules/retrospective-report.mdc` 与 Claude Code `~/.claude/skills/retrospective-report/SKILL.md` 双方言下都命中
+
+**与 lessons 的协同**:复盘 narrative 仅通过 `referencedLessonIds` 弱引用本需求已沉淀的 lesson;**严禁在复盘里直接落新 lesson**(用户想沉淀经验仍走 lessons-extract skill,职责单一)。
+
+**本期不做**(留给 v1.x):
+
+- 跨需求全局复盘报告(本期 per-feature)
+- 报告导出 Markdown / HTML 文件(本期看板内可视化为主)
+- 复盘报告多版本历史快照(本期单文件覆盖)
+- 基于 status=finished 自动触发(本期纯手动关键词触发)
+
+### 12.99 占位(本期不实施)
+
+- **P1**: Windows 完整支持(systemd-equivalent 守护脚本生成器)。
+- **P1**: 跨需求「全局复盘报告」一键导出 Markdown / HTML(在单需求复盘的基础上做汇总)。
+- **P2**: skill / rule 版本管理面板(diff、回滚、自定义 fork)。
+- **P2**: 多 dataRoot 切换(按"工作"/"个人"切档)。
+- **P3**: 团队同步:daemon 加可选 push 到 git 仓库的"经验云"。
 - **P3**: VS Code Extension 替代手动注入 mcp.json。
 
 ---

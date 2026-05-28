@@ -34,6 +34,7 @@ export const SUBTASK_EVENTS_FILE_NAME = 'subtask-events.jsonl'
 export const RAW_DIR_NAME = 'raw'
 export const LESSONS_DIR_NAME = 'lessons'
 export const LESSONS_INDEX_FILE_NAME = 'INDEX.json'
+export const RETROSPECTIVE_FILE_NAME = 'retrospective.json'
 
 export function aipRoot(root?: string): string {
   return root ? resolve(root) : resolveDefaultRoot()
@@ -91,6 +92,14 @@ export function subtaskEventsFilePath(jiraKey: string, root?: string): string {
 
 export function rawDirPath(jiraKey: string, root?: string): string {
   return join(requirementDir(jiraKey, root), RAW_DIR_NAME)
+}
+
+/**
+ * 单需求复盘报告(retrospective.json)文件路径。单文件覆盖式存储,
+ * 每个 jiraKey 至多保留一份「最新一次复盘」,详见 retrospective-store.ts。
+ */
+export function retrospectivePath(jiraKey: string, root?: string): string {
+  return join(requirementDir(jiraKey, root), RETROSPECTIVE_FILE_NAME)
 }
 
 export function ensureRawDir(jiraKey: string, root?: string): string {

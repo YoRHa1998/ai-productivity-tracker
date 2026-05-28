@@ -741,3 +741,46 @@ describe('lessons-extract skill 同步注入(v2.16.0)', () => {
     expect(refreshed.lessonsExtract.claude.outdated).toBe(false)
   })
 })
+
+// v1.0.0-rc.23 retrospective-report skill 同步注入
+describe('retrospective-report skill 同步注入(v1.0.0-rc.23)', () => {
+  it('install 时同步写入 retrospective-report 到 ~/.claude/skills 与 ~/.cursor/rules', async () => {
+    const res = await installAiTrackSkillBundle()
+
+    expect(res.retrospective.version).toBe('1.0.0')
+    expect(res.retrospective.claude.path).toBe(
+      path.join(tmpHome, '.claude', 'skills', 'retrospective-report', 'SKILL.md')
+    )
+    expect(res.retrospective.claude.written).toBe(true)
+    expect(res.retrospective.claude.replaced).toBe(false)
+    expect(res.retrospective.cursor.path).toBe(
+      path.join(tmpHome, '.cursor', 'rules', 'retrospective-report.mdc')
+    )
+    expect(res.retrospective.cursor.written).toBe(true)
+
+    const claudeContent = readFileSync(res.retrospective.claude.path, 'utf-8')
+    expect(claudeContent).toContain('retrospective-report')
+    expect(claudeContent).toContain('需求复盘')
+    expect(claudeContent).toContain('ai_productivity_extract_retro_bundle')
+    expect(claudeContent).toContain('ai_productivity_save_retrospective')
+
+    const cursorContent = readFileSync(res.retrospective.cursor.path, 'utf-8')
+    expect(cursorContent).toContain('alwaysApply: false')
+    expect(cursorContent).toContain('需求复盘')
+  })
+
+  it('inspect:bundle 状态包含 retrospective.{claude,cursor} 同步态', async () => {
+    const empty = await inspectAiTrackSkillBundle()
+    expect(empty.retrospective.version).toBe('1.0.0')
+    expect(empty.retrospective.claude.installed).toBe(false)
+    expect(empty.retrospective.cursor.installed).toBe(false)
+
+    await installAiTrackSkillBundle()
+    const synced = await inspectAiTrackSkillBundle()
+    expect(synced.retrospective.claude.installed).toBe(true)
+    expect(synced.retrospective.claude.upToDate).toBe(true)
+    expect(synced.retrospective.claude.outdated).toBe(false)
+    expect(synced.retrospective.cursor.installed).toBe(true)
+    expect(synced.retrospective.cursor.upToDate).toBe(true)
+  })
+})

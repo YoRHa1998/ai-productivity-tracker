@@ -11,6 +11,8 @@ import {
   ElSelect,
   ElTable,
   ElTableColumn,
+  ElTabPane,
+  ElTabs,
   ElTooltip
 } from 'element-plus'
 
@@ -31,6 +33,7 @@ import {
 import { fetchCurrentSession } from '../lib/session'
 import { useNumberFlow } from '../composables/useNumberFlow'
 import SparkLine from '../charts/SparkLine.vue'
+import RetrospectiveReportPanel from './RetrospectiveReportPanel.vue'
 import '../styles/aip-shared.css'
 
 const loading = ref(false)
@@ -42,6 +45,17 @@ const statusFilter = ref<'' | RequirementStatus>('')
 const drawerOpen = ref(false)
 const detailLoading = ref(false)
 const currentDetail = ref<RequirementDetail | null>(null)
+/**
+ * v1.0.0-rc.23 抽屉子 tab:
+ *   - overview = 既有 4 段卡片(boost hero / 指标 / 关联 Bug / iteration 时间线)
+ *   - retrospective = 单需求复盘报告 panel
+ *
+ * 抽屉每次重新打开都重置回 'overview',避免上次切到复盘后下次开抽屉直接闪复盘 tab。
+ */
+const drawerActiveTab = ref<'overview' | 'retrospective'>('overview')
+watch(drawerOpen, (open) => {
+  if (open) drawerActiveTab.value = 'overview'
+})
 const bugRefreshing = ref(false)
 const detailRefreshing = ref(false)
 const mergeSplitRunning = ref(false)
@@ -750,7 +764,7 @@ onMounted(() => {
     </div>
 
     <!-- 抽屉详情 -->
-    <ElDrawer v-model="drawerOpen" size="780" destroy-on-close>
+    <ElDrawer v-model="drawerOpen" size="880" destroy-on-close>
       <template #header>
         <div class="aip-drawer__header">
           <div class="aip-drawer__header-main">
@@ -903,367 +917,382 @@ onMounted(() => {
         <ElEmpty description="暂无数据" />
       </div>
       <div v-else class="aip-drawer__body">
-        <!-- Boost Hero -->
-        <div class="aip-drawer__boost">
-          <div class="aip-drawer__boost-side">
-            <span class="aip-drawer__boost-label">人工预估</span>
-            <div v-if="!estimateEditing" class="aip-drawer__boost-value-row">
-              <span class="aip-drawer__boost-value">{{
-                formatMinutes(currentDetail.manualEstimateMinutes)
-              }}</span>
-              <button
-                type="button"
-                class="aip-drawer__boost-edit-btn"
-                title="编辑人工预估时间"
-                @click="startEditEstimate"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                  <path
-                    d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </button>
-            </div>
-            <div v-else class="aip-drawer__boost-edit">
-              <ElInputNumber
-                v-model="estimateHoursDraft"
-                :min="0"
-                :step="0.5"
-                :precision="1"
-                size="small"
-                controls-position="right"
-                class="aip-drawer__boost-input"
-              />
-              <span class="aip-drawer__boost-unit">小时</span>
-              <button
-                type="button"
-                class="aip-drawer__boost-edit-btn aip-drawer__boost-edit-btn--primary"
-                :disabled="estimateSaving"
-                @click="handleSaveEstimate"
-              >
-                保存
-              </button>
-              <button
-                type="button"
-                class="aip-drawer__boost-edit-btn"
-                :disabled="estimateSaving"
-                @click="cancelEditEstimate"
-              >
-                取消
-              </button>
-            </div>
-          </div>
-          <div class="aip-drawer__boost-arrow">
-            <svg width="22" height="14" viewBox="0 0 22 14" fill="none">
-              <path
-                d="M1 7h20m0 0-5-5m5 5-5 5"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-          </div>
-          <div class="aip-drawer__boost-center">
-            <span class="aip-drawer__boost-main">{{
-              formatBoost(currentDetail.metrics.boost)
-            }}</span>
-            <span class="aip-drawer__boost-caption">提效倍数</span>
-          </div>
-          <div class="aip-drawer__boost-arrow">
-            <svg width="22" height="14" viewBox="0 0 22 14" fill="none">
-              <path
-                d="M1 7h20m0 0-5-5m5 5-5 5"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-          </div>
-          <div class="aip-drawer__boost-side">
-            <span class="aip-drawer__boost-label">墙钟耗时</span>
-            <span
-              class="aip-drawer__boost-value"
-              title="任务从开始到现在的墙钟耗时(含用户离开 / 阅读 / 并行其它任务的空闲);并行多任务时墙钟会膨胀,新公式通过权重削减它的影响"
-            >
-              {{ formatMinutes(currentDetail.metrics.latestElapsedMinutes) }}
-            </span>
-            <span class="aip-drawer__boost-subdivider" />
-            <span class="aip-drawer__boost-sublabel">AI 工作累计</span>
-            <span
-              class="aip-drawer__boost-subvalue"
-              title="各轮对话 thinkSeconds(用户提交 → AI 答完)的累加值,剔除空闲后 AI 实际参与的时长。在并行多任务场景下比墙钟更准。"
-            >
-              {{ formatThinkDuration(currentDetail.metrics.totalThinkSeconds) }}
-            </span>
-          </div>
-        </div>
-
-        <!-- 指标 -->
-        <article class="aip-card aip-card--flat">
-          <header class="aip-card__header">
-            <h3 class="aip-card__title">指标</h3>
-            <!-- <span class="aip-card__meta">复杂度：{{ currentDetail.complexity }}</span> -->
-          </header>
-          <div class="aip-drawer__metrics-grid">
-            <div class="aip-drawer__metric">
-              <span>对话次数</span>
-              <strong>{{ currentDetail.metrics.codingRuns }}</strong>
-            </div>
-            <div class="aip-drawer__metric">
-              <span>累计 Token</span>
-              <strong :title="formatTokenTitle(currentDetail.metrics.latestCumulativeToken)">
-                {{ formatTokenCount(currentDetail.metrics.latestCumulativeToken) }}
-              </strong>
-            </div>
-            <div class="aip-drawer__metric">
-              <span title="boost 公式分母 = 加权耗时 × tokenPenalty">加权耗时</span>
-              <strong :title="`= (1 − wThink) × 墙钟 + wThink × (AI 工作累计 / 60),单位:分钟`">
-                {{ formatMinutes(currentDetail.metrics.effectiveMinutes) }}
-              </strong>
-            </div>
-            <div class="aip-drawer__metric">
-              <span title="可选 token 软上限惩罚,默认关闭时恒为 ×1">Token 惩罚</span>
-              <strong>×{{ currentDetail.metrics.tokenPenalty }}</strong>
-            </div>
-            <div class="aip-drawer__metric aip-drawer__metric--full">
-              <span>状态</span>
-              <ElSelect
-                v-model="statusDraft"
-                size="small"
-                style="width: 140px"
-                @change="handleStatusChange"
-              >
-                <ElOption label="进行中" value="in_progress" />
-                <ElOption label="已完成" value="finished" />
-                <ElOption label="已放弃" value="abandoned" />
-              </ElSelect>
-            </div>
-          </div>
-        </article>
-
-        <!-- 关联 Bug -->
-        <article class="aip-card aip-card--flat">
-          <header class="aip-card__header">
-            <h3 class="aip-card__title">关联 Bug</h3>
-            <button
-              type="button"
-              class="aip-drawer__refresh-btn"
-              :disabled="bugRefreshing"
-              @click="handleRefreshBugs"
-            >
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                :class="{ 'aip-workspace__refresh-spin': bugRefreshing }"
-              >
-                <path
-                  d="M21 12a9 9 0 1 1-3.6-7.2"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                />
-                <path
-                  d="M21 4v5h-5"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-              {{ bugRefreshing ? '拉取中…' : '刷新' }}
-            </button>
-          </header>
-          <div class="aip-drawer__bug">
-            <div class="aip-drawer__bug-row">
-              <span>数量</span>
-              <strong>{{ currentDetail.linkedBugCount }}</strong>
-            </div>
-            <div class="aip-drawer__bug-row">
-              <span>JQL</span>
-              <code class="aip-inline-code">{{ currentDetail.linkedBugJql || '(未配置)' }}</code>
-            </div>
-            <div class="aip-drawer__bug-row">
-              <span>最近刷新</span>
-              <code class="aip-inline-code">{{ currentDetail.bugsRefreshedAt ?? '从未' }}</code>
-            </div>
-          </div>
-        </article>
-
-        <!-- Iteration 时间线 -->
-        <article class="aip-card aip-card--flat">
-          <header class="aip-card__header">
-            <h3 class="aip-card__title">Iteration 时间线</h3>
-            <div class="aip-drawer__timeline-header-actions">
-              <span class="aip-card__meta">共 {{ currentDetail.iterations.length }} 条</span>
-              <button
-                type="button"
-                class="aip-drawer__refresh-btn"
-                :disabled="mergeSplitRunning"
-                title="合并 Cursor stop-hook 兜底产生的拆分对话(前空 + 后满)"
-                @click="handleMergeSplitIterations"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                  <path
-                    d="M8 6v8a4 4 0 0 0 4 4h4M16 18l-3-3m3 3-3 3"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                  <path
-                    d="M16 6v8a4 4 0 0 1-4 4H8"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-                {{ mergeSplitRunning ? '整理中…' : '数据整理' }}
-              </button>
-            </div>
-          </header>
-          <ol v-if="currentDetail.iterations.length" class="aip-flow">
-            <li v-for="iter in currentDetail.iterations" :key="iter.seq" class="aip-flow-step">
-              <span class="aip-flow-dot" />
-              <div class="aip-flow-body">
-                <div class="aip-drawer__timeline-head">
-                  <span class="aip-chip" :class="iterationChipClass(iter.kind)"
-                    >#{{ iter.seq }} {{ iter.kind }}</span
-                  >
-                  <span
-                    v-if="iter.source && iter.source !== 'unknown'"
-                    class="aip-chip"
-                    :class="
-                      iter.source === 'cursor'
-                        ? 'aip-chip--source-cursor'
-                        : 'aip-chip--source-claude'
-                    "
-                    >{{ iter.source === 'cursor' ? 'Cursor' : 'Claude Code' }}</span
-                  >
-                  <span
-                    v-if="iter.modelName"
-                    class="aip-chip aip-chip--muted aip-drawer__timeline-model"
-                    >{{ iter.modelName }}</span
-                  >
-                  <span class="aip-drawer__timeline-time">{{
-                    new Date(iter.reportedAt).toLocaleString()
+        <ElTabs v-model="drawerActiveTab" class="aip-drawer__tabs">
+          <ElTabPane label="需求概览" name="overview">
+            <!-- Boost Hero -->
+            <div class="aip-drawer__boost">
+              <div class="aip-drawer__boost-side">
+                <span class="aip-drawer__boost-label">人工预估</span>
+                <div v-if="!estimateEditing" class="aip-drawer__boost-value-row">
+                  <span class="aip-drawer__boost-value">{{
+                    formatMinutes(currentDetail.manualEstimateMinutes)
                   }}</span>
+                  <button
+                    type="button"
+                    class="aip-drawer__boost-edit-btn"
+                    title="编辑人工预估时间"
+                    @click="startEditEstimate"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </button>
                 </div>
-                <div class="aip-drawer__timeline-body">
-                  <div>
-                    Token:
-                    <span
-                      class="aip-drawer__timeline-token-current"
-                      :title="`本轮: ${formatTokenTitle(iterationTokenDeltas.get(iter.seq) ?? 0)} / 累计: ${formatTokenTitle(iter.cumulativeToken)}`"
-                      >本轮 {{ formatTokenCount(iterationTokenDeltas.get(iter.seq) ?? 0) }}</span
-                    >
-                    <span class="aip-drawer__timeline-token-sep"> · 累计 </span>
-                    <span :title="formatTokenTitle(iter.cumulativeToken)">{{
-                      formatTokenCount(iter.cumulativeToken)
-                    }}</span>
-                    · 累计耗时: {{ formatMinutes(iter.elapsedMinutes) }} ·
-                    <span :title="buildThinkSecondsTooltip(iter)">
-                      本轮 AI 思考: {{ formatThinkSeconds(iter.thinkSeconds) }}
-                    </span>
-                  </div>
-                  <div
-                    v-if="iter.diffFiles || iter.changedFiles.length"
-                    class="aip-drawer__timeline-diff-row"
+                <div v-else class="aip-drawer__boost-edit">
+                  <ElInputNumber
+                    v-model="estimateHoursDraft"
+                    :min="0"
+                    :step="0.5"
+                    :precision="1"
+                    size="small"
+                    controls-position="right"
+                    class="aip-drawer__boost-input"
+                  />
+                  <span class="aip-drawer__boost-unit">小时</span>
+                  <button
+                    type="button"
+                    class="aip-drawer__boost-edit-btn aip-drawer__boost-edit-btn--primary"
+                    :disabled="estimateSaving"
+                    @click="handleSaveEstimate"
                   >
-                    <span
-                      class="aip-drawer__timeline-diff-label aip-drawer__timeline-diff-label--accent"
-                      >本轮变更</span
-                    >
-                    <span>
-                      {{ iter.diffFiles }} files +{{ iter.diffInsertions }} -{{
-                        iter.diffDeletions
-                      }}
-                    </span>
-                    <button
-                      v-if="iter.changedFiles.length"
-                      type="button"
-                      class="aip-drawer__linkbtn aip-drawer__timeline-files-btn"
-                      @click="toggleIterFiles(iter.seq)"
-                    >
-                      {{
-                        expandedIterFiles.has(iter.seq)
-                          ? '收起'
-                          : `展开 ${iter.changedFiles.length} 个改动文件`
-                      }}
-                    </button>
-                  </div>
-                  <div
-                    v-if="iter.changedFiles.length && expandedIterFiles.has(iter.seq)"
-                    class="aip-drawer__timeline-files"
+                    保存
+                  </button>
+                  <button
+                    type="button"
+                    class="aip-drawer__boost-edit-btn"
+                    :disabled="estimateSaving"
+                    @click="cancelEditEstimate"
                   >
-                    <span
-                      v-for="file in iter.changedFiles"
-                      :key="`iter-${file.path}`"
-                      class="aip-chip aip-chip--muted aip-drawer__timeline-file"
-                      :title="file.path"
-                      ><b>{{ file.status }}</b
-                      >{{ file.path }}</span
-                    >
-                  </div>
-                  <div v-if="iter.conversationSummary" class="aip-drawer__timeline-summary">
-                    <div class="aip-drawer__timeline-summary-header">
-                      <span class="aip-drawer__timeline-summary-label">AI 对话总结</span>
-                      <span
-                        class="aip-chip"
-                        :class="
-                          iter.conversationSummary.type === 'coding'
-                            ? 'aip-chip--primary'
-                            : 'aip-chip--muted'
-                        "
-                        >{{
-                          iter.conversationSummary.type === 'coding' ? '代码改动' : '沟通讨论'
-                        }}</span
-                      >
-                    </div>
-                    <div class="aip-drawer__timeline-summary-oneline">
-                      {{ iter.conversationSummary.oneLine }}
-                    </div>
-                    <div
-                      v-if="
-                        iter.conversationSummary.type === 'coding' &&
-                        iter.conversationSummary.changeScope
-                      "
-                      class="aip-drawer__timeline-summary-body"
-                    >
-                      <span class="aip-drawer__timeline-summary-subtitle">改动范围</span>
-                      <p>{{ iter.conversationSummary.changeScope }}</p>
-                    </div>
-                    <div
-                      v-else-if="
-                        iter.conversationSummary.type === 'communication' &&
-                        iter.conversationSummary.discussion
-                      "
-                      class="aip-drawer__timeline-summary-body"
-                    >
-                      <span class="aip-drawer__timeline-summary-subtitle">讨论内容</span>
-                      <p>{{ iter.conversationSummary.discussion }}</p>
-                    </div>
-                  </div>
-                  <div
-                    v-else-if="iter.kind !== 'init'"
-                    class="aip-drawer__timeline-summary aip-drawer__timeline-summary--empty"
-                  >
-                    本轮无 AI 对话总结
-                  </div>
+                    取消
+                  </button>
                 </div>
               </div>
-            </li>
-          </ol>
-          <p v-else class="aip-drawer__empty-hint">暂无上报</p>
-        </article>
+              <div class="aip-drawer__boost-arrow">
+                <svg width="22" height="14" viewBox="0 0 22 14" fill="none">
+                  <path
+                    d="M1 7h20m0 0-5-5m5 5-5 5"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </div>
+              <div class="aip-drawer__boost-center">
+                <span class="aip-drawer__boost-main">{{
+                  formatBoost(currentDetail.metrics.boost)
+                }}</span>
+                <span class="aip-drawer__boost-caption">提效倍数</span>
+              </div>
+              <div class="aip-drawer__boost-arrow">
+                <svg width="22" height="14" viewBox="0 0 22 14" fill="none">
+                  <path
+                    d="M1 7h20m0 0-5-5m5 5-5 5"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </div>
+              <div class="aip-drawer__boost-side">
+                <span class="aip-drawer__boost-label">墙钟耗时</span>
+                <span
+                  class="aip-drawer__boost-value"
+                  title="任务从开始到现在的墙钟耗时(含用户离开 / 阅读 / 并行其它任务的空闲);并行多任务时墙钟会膨胀,新公式通过权重削减它的影响"
+                >
+                  {{ formatMinutes(currentDetail.metrics.latestElapsedMinutes) }}
+                </span>
+                <span class="aip-drawer__boost-subdivider" />
+                <span class="aip-drawer__boost-sublabel">AI 工作累计</span>
+                <span
+                  class="aip-drawer__boost-subvalue"
+                  title="各轮对话 thinkSeconds(用户提交 → AI 答完)的累加值,剔除空闲后 AI 实际参与的时长。在并行多任务场景下比墙钟更准。"
+                >
+                  {{ formatThinkDuration(currentDetail.metrics.totalThinkSeconds) }}
+                </span>
+              </div>
+            </div>
+
+            <!-- 指标 -->
+            <article class="aip-card aip-card--flat">
+              <header class="aip-card__header">
+                <h3 class="aip-card__title">指标</h3>
+                <!-- <span class="aip-card__meta">复杂度：{{ currentDetail.complexity }}</span> -->
+              </header>
+              <div class="aip-drawer__metrics-grid">
+                <div class="aip-drawer__metric">
+                  <span>对话次数</span>
+                  <strong>{{ currentDetail.metrics.codingRuns }}</strong>
+                </div>
+                <div class="aip-drawer__metric">
+                  <span>累计 Token</span>
+                  <strong :title="formatTokenTitle(currentDetail.metrics.latestCumulativeToken)">
+                    {{ formatTokenCount(currentDetail.metrics.latestCumulativeToken) }}
+                  </strong>
+                </div>
+                <div class="aip-drawer__metric">
+                  <span title="boost 公式分母 = 加权耗时 × tokenPenalty">加权耗时</span>
+                  <strong :title="`= (1 − wThink) × 墙钟 + wThink × (AI 工作累计 / 60),单位:分钟`">
+                    {{ formatMinutes(currentDetail.metrics.effectiveMinutes) }}
+                  </strong>
+                </div>
+                <div class="aip-drawer__metric">
+                  <span title="可选 token 软上限惩罚,默认关闭时恒为 ×1">Token 惩罚</span>
+                  <strong>×{{ currentDetail.metrics.tokenPenalty }}</strong>
+                </div>
+                <div class="aip-drawer__metric aip-drawer__metric--full">
+                  <span>状态</span>
+                  <ElSelect
+                    v-model="statusDraft"
+                    size="small"
+                    style="width: 140px"
+                    @change="handleStatusChange"
+                  >
+                    <ElOption label="进行中" value="in_progress" />
+                    <ElOption label="已完成" value="finished" />
+                    <ElOption label="已放弃" value="abandoned" />
+                  </ElSelect>
+                </div>
+              </div>
+            </article>
+
+            <!-- 关联 Bug -->
+            <article class="aip-card aip-card--flat">
+              <header class="aip-card__header">
+                <h3 class="aip-card__title">关联 Bug</h3>
+                <button
+                  type="button"
+                  class="aip-drawer__refresh-btn"
+                  :disabled="bugRefreshing"
+                  @click="handleRefreshBugs"
+                >
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    :class="{ 'aip-workspace__refresh-spin': bugRefreshing }"
+                  >
+                    <path
+                      d="M21 12a9 9 0 1 1-3.6-7.2"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                    />
+                    <path
+                      d="M21 4v5h-5"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                  {{ bugRefreshing ? '拉取中…' : '刷新' }}
+                </button>
+              </header>
+              <div class="aip-drawer__bug">
+                <div class="aip-drawer__bug-row">
+                  <span>数量</span>
+                  <strong>{{ currentDetail.linkedBugCount }}</strong>
+                </div>
+                <div class="aip-drawer__bug-row">
+                  <span>JQL</span>
+                  <code class="aip-inline-code">{{
+                    currentDetail.linkedBugJql || '(未配置)'
+                  }}</code>
+                </div>
+                <div class="aip-drawer__bug-row">
+                  <span>最近刷新</span>
+                  <code class="aip-inline-code">{{ currentDetail.bugsRefreshedAt ?? '从未' }}</code>
+                </div>
+              </div>
+            </article>
+
+            <!-- Iteration 时间线 -->
+            <article class="aip-card aip-card--flat">
+              <header class="aip-card__header">
+                <h3 class="aip-card__title">Iteration 时间线</h3>
+                <div class="aip-drawer__timeline-header-actions">
+                  <span class="aip-card__meta">共 {{ currentDetail.iterations.length }} 条</span>
+                  <button
+                    type="button"
+                    class="aip-drawer__refresh-btn"
+                    :disabled="mergeSplitRunning"
+                    title="合并 Cursor stop-hook 兜底产生的拆分对话(前空 + 后满)"
+                    @click="handleMergeSplitIterations"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M8 6v8a4 4 0 0 0 4 4h4M16 18l-3-3m3 3-3 3"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                      <path
+                        d="M16 6v8a4 4 0 0 1-4 4H8"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                    {{ mergeSplitRunning ? '整理中…' : '数据整理' }}
+                  </button>
+                </div>
+              </header>
+              <ol v-if="currentDetail.iterations.length" class="aip-flow">
+                <li v-for="iter in currentDetail.iterations" :key="iter.seq" class="aip-flow-step">
+                  <span class="aip-flow-dot" />
+                  <div class="aip-flow-body">
+                    <div class="aip-drawer__timeline-head">
+                      <span class="aip-chip" :class="iterationChipClass(iter.kind)"
+                        >#{{ iter.seq }} {{ iter.kind }}</span
+                      >
+                      <span
+                        v-if="iter.source && iter.source !== 'unknown'"
+                        class="aip-chip"
+                        :class="
+                          iter.source === 'cursor'
+                            ? 'aip-chip--source-cursor'
+                            : 'aip-chip--source-claude'
+                        "
+                        >{{ iter.source === 'cursor' ? 'Cursor' : 'Claude Code' }}</span
+                      >
+                      <span
+                        v-if="iter.modelName"
+                        class="aip-chip aip-chip--muted aip-drawer__timeline-model"
+                        >{{ iter.modelName }}</span
+                      >
+                      <span class="aip-drawer__timeline-time">{{
+                        new Date(iter.reportedAt).toLocaleString()
+                      }}</span>
+                    </div>
+                    <div class="aip-drawer__timeline-body">
+                      <div>
+                        Token:
+                        <span
+                          class="aip-drawer__timeline-token-current"
+                          :title="`本轮: ${formatTokenTitle(iterationTokenDeltas.get(iter.seq) ?? 0)} / 累计: ${formatTokenTitle(iter.cumulativeToken)}`"
+                          >本轮
+                          {{ formatTokenCount(iterationTokenDeltas.get(iter.seq) ?? 0) }}</span
+                        >
+                        <span class="aip-drawer__timeline-token-sep"> · 累计 </span>
+                        <span :title="formatTokenTitle(iter.cumulativeToken)">{{
+                          formatTokenCount(iter.cumulativeToken)
+                        }}</span>
+                        · 累计耗时: {{ formatMinutes(iter.elapsedMinutes) }} ·
+                        <span :title="buildThinkSecondsTooltip(iter)">
+                          本轮 AI 思考: {{ formatThinkSeconds(iter.thinkSeconds) }}
+                        </span>
+                      </div>
+                      <div
+                        v-if="iter.diffFiles || iter.changedFiles.length"
+                        class="aip-drawer__timeline-diff-row"
+                      >
+                        <span
+                          class="aip-drawer__timeline-diff-label aip-drawer__timeline-diff-label--accent"
+                          >本轮变更</span
+                        >
+                        <span>
+                          {{ iter.diffFiles }} files +{{ iter.diffInsertions }} -{{
+                            iter.diffDeletions
+                          }}
+                        </span>
+                        <button
+                          v-if="iter.changedFiles.length"
+                          type="button"
+                          class="aip-drawer__linkbtn aip-drawer__timeline-files-btn"
+                          @click="toggleIterFiles(iter.seq)"
+                        >
+                          {{
+                            expandedIterFiles.has(iter.seq)
+                              ? '收起'
+                              : `展开 ${iter.changedFiles.length} 个改动文件`
+                          }}
+                        </button>
+                      </div>
+                      <div
+                        v-if="iter.changedFiles.length && expandedIterFiles.has(iter.seq)"
+                        class="aip-drawer__timeline-files"
+                      >
+                        <span
+                          v-for="file in iter.changedFiles"
+                          :key="`iter-${file.path}`"
+                          class="aip-chip aip-chip--muted aip-drawer__timeline-file"
+                          :title="file.path"
+                          ><b>{{ file.status }}</b
+                          >{{ file.path }}</span
+                        >
+                      </div>
+                      <div v-if="iter.conversationSummary" class="aip-drawer__timeline-summary">
+                        <div class="aip-drawer__timeline-summary-header">
+                          <span class="aip-drawer__timeline-summary-label">AI 对话总结</span>
+                          <span
+                            class="aip-chip"
+                            :class="
+                              iter.conversationSummary.type === 'coding'
+                                ? 'aip-chip--primary'
+                                : 'aip-chip--muted'
+                            "
+                            >{{
+                              iter.conversationSummary.type === 'coding' ? '代码改动' : '沟通讨论'
+                            }}</span
+                          >
+                        </div>
+                        <div class="aip-drawer__timeline-summary-oneline">
+                          {{ iter.conversationSummary.oneLine }}
+                        </div>
+                        <div
+                          v-if="
+                            iter.conversationSummary.type === 'coding' &&
+                            iter.conversationSummary.changeScope
+                          "
+                          class="aip-drawer__timeline-summary-body"
+                        >
+                          <span class="aip-drawer__timeline-summary-subtitle">改动范围</span>
+                          <p>{{ iter.conversationSummary.changeScope }}</p>
+                        </div>
+                        <div
+                          v-else-if="
+                            iter.conversationSummary.type === 'communication' &&
+                            iter.conversationSummary.discussion
+                          "
+                          class="aip-drawer__timeline-summary-body"
+                        >
+                          <span class="aip-drawer__timeline-summary-subtitle">讨论内容</span>
+                          <p>{{ iter.conversationSummary.discussion }}</p>
+                        </div>
+                      </div>
+                      <div
+                        v-else-if="iter.kind !== 'init'"
+                        class="aip-drawer__timeline-summary aip-drawer__timeline-summary--empty"
+                      >
+                        本轮无 AI 对话总结
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              </ol>
+              <p v-else class="aip-drawer__empty-hint">暂无上报</p>
+            </article>
+          </ElTabPane>
+          <ElTabPane label="复盘报告" name="retrospective" lazy>
+            <RetrospectiveReportPanel
+              :jira-key="currentDetail.jiraKey"
+              :open="drawerActiveTab === 'retrospective'"
+              :requirement="currentDetail"
+              :iterations="currentDetail.iterations"
+            />
+          </ElTabPane>
+        </ElTabs>
       </div>
     </ElDrawer>
   </section>

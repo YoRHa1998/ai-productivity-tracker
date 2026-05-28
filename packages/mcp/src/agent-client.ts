@@ -184,6 +184,32 @@ export class AgentClient {
       source: input.source
     })
   }
+
+  // v1.0.0-rc.23 单需求复盘报告(retrospective-report skill)
+
+  async extractRetrospectiveBundle(
+    input: ExtractRetrospectiveBundleInput
+  ): Promise<RetrospectiveBundleData> {
+    const jiraKey = encodeURIComponent(input.jiraKey)
+    return this.request<RetrospectiveBundleData>(
+      'GET',
+      `/ai-productivity/requirements/${jiraKey}/retrospective-bundle`
+    )
+  }
+
+  async saveRetrospective(input: SaveRetrospectiveInput): Promise<SaveRetrospectiveResult> {
+    const jiraKey = encodeURIComponent(input.jiraKey)
+    return this.request<SaveRetrospectiveResult>(
+      'POST',
+      `/ai-productivity/requirements/${jiraKey}/retrospective`,
+      {
+        narrative: input.narrative,
+        source: input.source,
+        referencedLessonIds: input.referencedLessonIds,
+        anchorIterationSeqs: input.anchorIterationSeqs
+      }
+    )
+  }
 }
 
 export interface ExtractBundleInput {
@@ -260,6 +286,87 @@ export interface LessonsBundle {
   existingLessons: unknown[]
   /** v2.18.0 客观信号摘要,老 agent 缺该字段时 undefined,formatExtractBundle 自然降级 */
   computedSignals?: BundleComputedSignals
+}
+
+// ─── v1.0.0-rc.23 retrospective-report ──────────────────────────────────
+
+export interface ExtractRetrospectiveBundleInput {
+  jiraKey: string
+  cwd?: string
+}
+
+export type RetrospectiveSource = 'cursor' | 'claude-code' | 'manual'
+
+export interface RetrospectivePhaseInput {
+  title: string
+  iterationSeqRange: [number, number]
+  summary: string
+}
+
+export interface RetrospectiveNarrativeInput {
+  overview: string
+  phases: RetrospectivePhaseInput[]
+  highlights: string[]
+  issues: string[]
+  improvements: string[]
+  pitfallsObserved: string[]
+  nextSteps: string[]
+  splitSuggestions?: string[]
+}
+
+export interface SaveRetrospectiveInput {
+  jiraKey: string
+  narrative: RetrospectiveNarrativeInput
+  source?: RetrospectiveSource
+  referencedLessonIds?: string[]
+  anchorIterationSeqs?: number[]
+}
+
+export interface RetrospectiveBundleRelatedLessonView {
+  id: string
+  jiraKey: string
+  type: LessonType
+  title: string
+  scope: 'general' | 'project' | ''
+  projectSlug: string
+  hitCount: number
+}
+
+export interface RetrospectiveBundleData {
+  jiraKey: string
+  currentProjectSlug: string
+  requirement: unknown | null
+  iterations: unknown[]
+  computedSignals: BundleComputedSignals
+  relatedLessons: RetrospectiveBundleRelatedLessonView[]
+  /** 已存在的报告(允许 LLM 看上次怎么写的避免无变化重复落盘);从未生成时为 null */
+  existingRetrospective: unknown | null
+}
+
+export interface SaveRetrospectiveResult {
+  schemaVersion: number
+  jiraKey: string
+  generatedAt: string
+  generatedAtIterationSeq: number
+  generatedAtIterationCount: number
+  source: RetrospectiveSource
+  snapshot: {
+    title: string
+    status: string
+    boost: number | null
+    cumulativeToken: number
+    totalThinkSeconds: number
+    elapsedMinutes: number
+    cumulativeDiffFiles: number
+    cumulativeDiffInsertions: number
+    cumulativeDiffDeletions: number
+    linkedBugCount: number
+    lessonsCount: number
+    abnormalStopReasonsCount: number
+  }
+  narrative: RetrospectiveNarrativeInput
+  referencedLessonIds: string[]
+  anchorIterationSeqs: number[]
 }
 
 /**
