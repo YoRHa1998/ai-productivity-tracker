@@ -116,6 +116,13 @@ interface StoredRequirement {
   branch: string // init 时的分支名
   repoRoot: string // git root
   initBaseCommit: string // HEAD sha,iteration 算 diff 用
+
+  // 需求级提效公式覆盖(rc.26+):
+  // - 数值 ∈ [0,1]:覆盖全局 wThink。init 时 daemon 自动把当下全局 wThink 快照写入,
+  //   之后调全局不再影响本需求 boost。
+  // - null:跟随全局(老需求兼容路径,首次在详情页编辑后会固化为具体数值)。
+  // - tokenPenaltyEnabled / tokenSoftCapK 不进入需求级,始终读全局 formula.json。
+  formulaWThinkOverride: number | null
 }
 ```
 

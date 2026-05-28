@@ -50,6 +50,17 @@ export interface StoredRequirement {
    * 空串表示无 HEAD (裸仓库 / 首次提交前 / 非 git) -> 退化使用 'HEAD'。
    */
   initBaseCommit: string
+  /**
+   * 需求级 wThink 覆盖值 ∈ [0, 1],null 表示跟随全局 `formula.json`。
+   *
+   * 语义采用 **snapshot-on-init**:`ai_productivity_init` 创建需求时,daemon 会把
+   * 当下全局 `formula.json` 的 `wThink` 整体快照写入本字段;之后用户在「设置 → 提效公式」
+   * 改全局,不再回写本字段 → 已有需求 boost 不受全局变更影响,只能在需求详情页单独编辑。
+   *
+   * 老 requirement.json(rc.26 之前)缺该字段时 load 后为 null,`buildSummaryView`
+   * 兜底回退到全局 `wThink`;用户首次在详情页编辑后即固化为具体数值。
+   */
+  formulaWThinkOverride: number | null
 }
 
 export type CreateRequirementInput = Partial<StoredRequirement> & {
@@ -81,7 +92,8 @@ function defaultRequirement(jiraKey: string, title: string, now: string): Stored
     startedAt: now,
     createdAt: now,
     updatedAt: now,
-    initBaseCommit: ''
+    initBaseCommit: '',
+    formulaWThinkOverride: null
   }
 }
 

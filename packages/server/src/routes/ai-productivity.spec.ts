@@ -786,6 +786,97 @@ describe('Panel handlers', () => {
     expect(body.data.status).toBe('finished')
   })
 
+  it('init 时 snapshot 当下全局 wThink 写入 requirement.formulaWThinkOverride', async () => {
+    // 先把全局 wThink 改成非默认值 0.42,确认 init 后被快照固化
+    handleAiProductivityPatchFormula(makeMockRes().res, { wThink: 0.42 })
+
+    await handleAiProductivityInit(makeMockRes().res, baseConfig, {
+      jiraInput: 'PANEL-1',
+      title: 't',
+      projectRoot: repo,
+      manualEstimateMinutes: 60
+    })
+
+    const mock = makeMockRes()
+    handleAiProductivityGetRequirement(mock.res, 'PANEL-1')
+    const body = JSON.parse(mock.body)
+    expect(body.data.formulaWThinkOverride).toBe(0.42)
+    expect(body.data.effectiveFormula.wThink).toBe(0.42)
+
+    // 后续调全局,GET 详情仍读取需求级 snapshot(已脱钩)
+    handleAiProductivityPatchFormula(makeMockRes().res, { wThink: 0.1 })
+    const mock2 = makeMockRes()
+    handleAiProductivityGetRequirement(mock2.res, 'PANEL-1')
+    const body2 = JSON.parse(mock2.body)
+    expect(body2.data.formulaWThinkOverride).toBe(0.42)
+    expect(body2.data.effectiveFormula.wThink).toBe(0.42)
+  })
+
+  it('PATCH requirement formulaWThinkOverride: 数值写入 + null 清除 + clamp', async () => {
+    handleAiProductivityPatchFormula(makeMockRes().res, { wThink: 0.7 })
+    await handleAiProductivityInit(makeMockRes().res, baseConfig, {
+      jiraInput: 'PANEL-1',
+      title: 't',
+      projectRoot: repo,
+      manualEstimateMinutes: 480
+    })
+    // 给个 coding iteration,便于验证 boost / effectiveMinutes 用 override 重算
+    appendIteration(
+      'PANEL-1',
+      { kind: 'coding', branch: 'feature/PANEL-1-test', cumulativeToken: 0 },
+      undefined
+    )
+    const iters = listIterations('PANEL-1')
+    const codingIdx = iters.findIndex((it) => it.kind === 'coding')
+    expect(codingIdx).toBeGreaterThanOrEqual(0)
+    // 直接重写 iteration.jsonl 把 elapsed/think 调成已知值(避免依赖真实 wall clock)
+    const itersPath = join(aipRoot(), 'PANEL-1', 'iterations.jsonl')
+    const lines = readFileSync(itersPath, 'utf-8').trim().split('\n').filter(Boolean)
+    const patched = lines.map((line) => {
+      const obj = JSON.parse(line) as {
+        kind: string
+        elapsedMinutes?: number
+        thinkSeconds?: number
+      }
+      if (obj.kind === 'coding') {
+        obj.elapsedMinutes = 60
+        obj.thinkSeconds = 1800
+      }
+      return JSON.stringify(obj)
+    })
+    writeFileSync(itersPath, patched.join('\n') + '\n', 'utf-8')
+
+    // override=0.3 → effectiveMinutes = 0.7×60 + 0.3×30 = 51
+    handleAiProductivityPatchRequirement(makeMockRes().res, 'PANEL-1', {
+      formulaWThinkOverride: 0.3
+    })
+    let mock = makeMockRes()
+    handleAiProductivityGetRequirement(mock.res, 'PANEL-1')
+    let body = JSON.parse(mock.body)
+    expect(body.data.formulaWThinkOverride).toBe(0.3)
+    expect(body.data.effectiveFormula.wThink).toBe(0.3)
+    expect(body.data.metrics.effectiveMinutes).toBeCloseTo(51, 2)
+
+    // 越界值 clamp 到 [0,1]
+    handleAiProductivityPatchRequirement(makeMockRes().res, 'PANEL-1', {
+      formulaWThinkOverride: 5
+    })
+    mock = makeMockRes()
+    handleAiProductivityGetRequirement(mock.res, 'PANEL-1')
+    body = JSON.parse(mock.body)
+    expect(body.data.formulaWThinkOverride).toBe(1)
+
+    // 显式 null 清除,效果上仍跟当前全局 wThink=0.7(因为 init snapshot 已被覆盖,这里清掉)
+    handleAiProductivityPatchRequirement(makeMockRes().res, 'PANEL-1', {
+      formulaWThinkOverride: null
+    })
+    mock = makeMockRes()
+    handleAiProductivityGetRequirement(mock.res, 'PANEL-1')
+    body = JSON.parse(mock.body)
+    expect(body.data.formulaWThinkOverride).toBeNull()
+    expect(body.data.effectiveFormula.wThink).toBe(0.7)
+  })
+
   it('patch subtask 记录 event 并切换 done 状态', async () => {
     await handleAiProductivityInit(makeMockRes().res, baseConfig, {
       jiraInput: 'PANEL-1',

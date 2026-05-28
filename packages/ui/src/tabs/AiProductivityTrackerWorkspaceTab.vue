@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
+  ElButton,
   ElDrawer,
   ElEmpty,
   ElInput,
@@ -9,6 +10,7 @@ import {
   ElMessageBox,
   ElOption,
   ElSelect,
+  ElSlider,
   ElTable,
   ElTableColumn,
   ElTabPane,
@@ -96,6 +98,34 @@ const titleEditing = ref(false)
 const titleDraft = ref('')
 const titleSaving = ref(false)
 const titleSyncing = ref(false)
+
+/**
+ * 需求级 wThink 滑块状态。
+ *
+ * - `wThinkDraftPercent`:滑块绑定的百分比草稿值 ∈ [0, 100],与后端字段
+ *   `formulaWThinkOverride ∈ [0, 1]` 1:1 换算。
+ * - `wThinkSaving`:保存按钮 loading 态。
+ *
+ * 抽屉每次打开或切换需求,通过 watch 把 currentDetail 的 effectiveFormula.wThink
+ * 同步到草稿(无单独"编辑/取消"按钮,即时编辑 + 显式保存语义)。
+ */
+const wThinkDraftPercent = ref<number>(70)
+const wThinkSaving = ref(false)
+watch(
+  () => currentDetail.value?.effectiveFormula?.wThink,
+  (next) => {
+    if (typeof next === 'number' && Number.isFinite(next)) {
+      wThinkDraftPercent.value = Math.round(next * 100)
+    }
+  },
+  { immediate: true }
+)
+const wThinkDirty = computed(() => {
+  const current = currentDetail.value?.effectiveFormula?.wThink
+  if (typeof current !== 'number') return false
+  return Math.round(current * 100) !== wThinkDraftPercent.value
+})
+const wElapsedDraftPercent = computed(() => 100 - wThinkDraftPercent.value)
 /** 已经为当前 jiraKey 触发过一次自动兜底,避免每次 openDetail 都打一次接口 */
 const titleAutoSyncedKeys = ref<Set<string>>(new Set())
 
@@ -257,6 +287,27 @@ async function handleSaveTitle() {
     ElMessage.error((err as Error).message || '保存失败')
   } finally {
     titleSaving.value = false
+  }
+}
+
+async function handleSaveWThink() {
+  if (!currentDetail.value) return
+  const next = Math.max(0, Math.min(1, wThinkDraftPercent.value / 100))
+  wThinkSaving.value = true
+  try {
+    await patchRequirement(currentDetail.value.jiraKey, { formulaWThinkOverride: next })
+    // 用最新详情刷新本抽屉 + 列表 + 总览,让 boost / 加权耗时 即时联动
+    await Promise.all([
+      getRequirementDetail(currentDetail.value.jiraKey).then((detail) => {
+        currentDetail.value = detail
+      }),
+      loadList()
+    ])
+    ElMessage.success('时间权重已更新,本需求 boost 已重算')
+  } catch (err) {
+    ElMessage.error((err as Error).message || '保存失败')
+  } finally {
+    wThinkSaving.value = false
   }
 }
 
@@ -1077,7 +1128,7 @@ onMounted(() => {
                   >
                   <strong
                     class="aip-drawer__metric-num aipt-num"
-                    :title="`= (1 − wThink) × 墙钟 + wThink × (AI 工作累计 / 60),单位:分钟`"
+                    :title="`= (1 − wThink) × 墙钟 + wThink × (AI 工作累计 / 60),单位:分钟。当前本需求 wThink = ${Math.round((currentDetail.effectiveFormula?.wThink ?? 0) * 100)}%`"
                     >{{ formatMinutes(currentDetail.metrics.effectiveMinutes) }}</strong
                   >
                 </div>
@@ -1104,6 +1155,55 @@ onMounted(() => {
                   <ElOption label="已完成" value="finished" />
                   <ElOption label="已放弃" value="abandoned" />
                 </ElSelect>
+              </div>
+            </article>
+
+            <!-- 提效公式(本需求) -->
+            <article class="aip-card aip-card--flat aip-drawer__section aip-drawer__formula">
+              <header class="aip-card__header">
+                <h3 class="aip-card__title">提效公式(本需求)</h3>
+                <span class="aip-card__meta"
+                  >仅影响本需求 boost · Token 软上限仍在设置页全局配置</span
+                >
+              </header>
+              <p class="aip-card__caption aip-drawer__formula-caption">
+                新建需求时会把当下全局 wThink 快照写入本需求,之后调全局不再影响这里。
+                串行需求建议把权重往墙钟推,并行多任务建议把权重往 AI 工作时间推。
+              </p>
+              <section class="aip-drawer__formula-panel">
+                <header class="aip-drawer__formula-legend">
+                  <span class="aip-drawer__formula-legend-title">时间权重</span>
+                  <span class="aip-drawer__formula-legend-hint">
+                    AI 工作 <strong>{{ wThinkDraftPercent }}%</strong>
+                    <span class="aip-drawer__formula-legend-sep">·</span>
+                    墙钟 <strong>{{ wElapsedDraftPercent }}%</strong>
+                  </span>
+                </header>
+                <div class="aip-drawer__formula-slider">
+                  <ElSlider
+                    v-model="wThinkDraftPercent"
+                    :min="0"
+                    :max="100"
+                    :step="5"
+                    :marks="{ 0: '0%', 25: '25%', 50: '50%', 75: '75%', 100: '100%' }"
+                  />
+                  <div class="aip-drawer__formula-slider-tips">
+                    <span>← 纯墙钟(单线程)</span>
+                    <span>50 / 50</span>
+                    <span>纯 AI 工作(强并行) →</span>
+                  </div>
+                </div>
+              </section>
+              <div class="aip-drawer__formula-actions">
+                <ElButton
+                  type="primary"
+                  size="small"
+                  :loading="wThinkSaving"
+                  :disabled="!wThinkDirty"
+                  @click="handleSaveWThink"
+                >
+                  保存权重
+                </ElButton>
               </div>
             </article>
 
@@ -1969,6 +2069,80 @@ onMounted(() => {
 
 .aip-drawer__status-select {
   width: 140px;
+}
+
+/* ===== 提效公式(本需求)===== */
+.aip-drawer__formula-caption {
+  margin: 0 0 var(--aipt-space-3);
+}
+
+.aip-drawer__formula-panel {
+  padding: var(--aipt-space-3) var(--aipt-space-4) var(--aipt-space-4);
+  border: 1px solid var(--aipt-border-faint);
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-surface-soft);
+}
+
+.aip-drawer__formula-legend {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--aipt-space-2);
+}
+
+.aip-drawer__formula-legend-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aipt-text-strong, var(--aipt-text));
+}
+
+.aip-drawer__formula-legend-hint {
+  font-size: 12px;
+  color: var(--aipt-text-secondary);
+}
+
+.aip-drawer__formula-legend-hint strong {
+  font-weight: 600;
+  color: var(--aipt-text-strong, var(--aipt-text));
+  font-variant-numeric: tabular-nums;
+}
+
+.aip-drawer__formula-legend-sep {
+  margin: 0 4px;
+  color: var(--aipt-text-muted);
+}
+
+.aip-drawer__formula-slider {
+  padding: 0 12px;
+  margin-top: 6px;
+}
+
+.aip-drawer__formula-slider :deep(.el-slider__marks-text) {
+  font-size: 11px;
+  color: var(--aipt-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aip-drawer__formula-slider :deep(.el-slider) {
+  --el-slider-main-bg-color: var(--aipt-aurora-2, #4f7cff);
+  margin-bottom: 4px;
+}
+
+.aip-drawer__formula-slider-tips {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 24px;
+  font-size: 12px;
+  color: var(--aipt-text-muted);
+}
+
+.aip-drawer__formula-slider-tips span:nth-child(2) {
+  color: var(--aipt-text-secondary);
+}
+
+.aip-drawer__formula-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--aipt-space-3);
 }
 
 /* ===== Bug ===== */

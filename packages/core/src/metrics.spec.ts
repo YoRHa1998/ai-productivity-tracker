@@ -62,6 +62,7 @@ function req(partial: Partial<StoredRequirement>): StoredRequirement {
     createdAt: '2026-05-01T00:00:00.000Z',
     updatedAt: '2026-05-01T00:00:00.000Z',
     initBaseCommit: '',
+    formulaWThinkOverride: null,
     ...partial
   }
 }
@@ -268,6 +269,63 @@ describe('metrics', () => {
     // metrics 视图本身不直接复用 source,但通过 storedIteration 流入 detail 端;
     // 这里只验证 normalize 不破坏字段(回归保护)
     expect(view.iterationCount).toBe(2)
+  })
+
+  it('buildSummaryView 在 formulaWThinkOverride 非 null 时使用需求级 wThink 重算 boost', () => {
+    // globalFormula.wThink=0.7,但需求 override 为 0.3:
+    // elapsed=60, totalThinkSeconds=1800 → thinkMinutes=30
+    // override 后 effectiveMinutes = (1-0.3) × 60 + 0.3 × 30 = 42 + 9 = 51
+    // 全局值下应是 39(0.3 × 60 + 0.7 × 30),证明确实生效
+    const view = buildSummaryView(
+      req({
+        jiraKey: 'PROJ-OV',
+        manualEstimateMinutes: 480,
+        formulaWThinkOverride: 0.3
+      }),
+      [iter({ kind: 'coding', elapsedMinutes: 60, thinkSeconds: 1800 })],
+      DEFAULT_FORMULA
+    )
+    expect(view.formulaWThinkOverride).toBe(0.3)
+    expect(view.effectiveFormula.wThink).toBe(0.3)
+    // tokenPenaltyEnabled / tokenSoftCapK 仍读全局
+    expect(view.effectiveFormula.tokenPenaltyEnabled).toBe(DEFAULT_FORMULA.tokenPenaltyEnabled)
+    expect(view.effectiveFormula.tokenSoftCapK).toBe(DEFAULT_FORMULA.tokenSoftCapK)
+    expect(view.metrics.effectiveMinutes).toBeCloseTo(51, 4)
+    expect(view.metrics.boost).toBeCloseTo(480 / 51, 2)
+  })
+
+  it('buildSummaryView formulaWThinkOverride=null 时回退到全局 wThink', () => {
+    const view = buildSummaryView(
+      req({
+        jiraKey: 'PROJ-FB',
+        manualEstimateMinutes: 480,
+        formulaWThinkOverride: null
+      }),
+      [iter({ kind: 'coding', elapsedMinutes: 60, thinkSeconds: 1800 })],
+      { ...DEFAULT_FORMULA, wThink: 0.5 }
+    )
+    expect(view.formulaWThinkOverride).toBeNull()
+    expect(view.effectiveFormula.wThink).toBe(0.5)
+    // effectiveMinutes = 0.5 × 60 + 0.5 × 30 = 45
+    expect(view.metrics.effectiveMinutes).toBeCloseTo(45, 4)
+  })
+
+  it('buildSummaryView formulaWThinkOverride 越界值 clamp 到 [0,1]', () => {
+    const high = buildSummaryView(
+      req({ manualEstimateMinutes: 480, formulaWThinkOverride: 2 }),
+      [iter({ kind: 'coding', elapsedMinutes: 60, thinkSeconds: 1800 })],
+      DEFAULT_FORMULA
+    )
+    expect(high.formulaWThinkOverride).toBe(1)
+    expect(high.effectiveFormula.wThink).toBe(1)
+
+    const low = buildSummaryView(
+      req({ manualEstimateMinutes: 480, formulaWThinkOverride: -0.5 }),
+      [iter({ kind: 'coding', elapsedMinutes: 60, thinkSeconds: 1800 })],
+      DEFAULT_FORMULA
+    )
+    expect(low.formulaWThinkOverride).toBe(0)
+    expect(low.effectiveFormula.wThink).toBe(0)
   })
 
   it('buildOverallSummary 计算 average boost', () => {

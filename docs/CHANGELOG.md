@@ -10,7 +10,54 @@
 
 ## [Unreleased]
 
+### Added
+
+**v1.0.0-rc.26 需求级 wThink 时间权重配置(snapshot-on-init 语义)**
+
+老版本 `formula.json` 是**全局单值**:无论 5 条并行需求还是 1 条串行需求,boost 公式分母里 AI 工作时间 / 墙钟时间的权重比例只能取同一个 wThink。但实际开发情况各不相同 —— 有的需求长期单线程(墙钟 ≈ 真实成本),有的需求穿插在多任务里(墙钟严重膨胀,必须靠 AI 工作时间矫正)。一刀切的全局 wThink 让用户在「调高 = 多任务需求准 / 串行需求虚高」与「调低 = 串行需求准 / 多任务需求被低估」之间二选一。
+
+本版本把 wThink 升级为**需求级独立配置**,语义采用 **snapshot-on-init**:
+
+- 新建需求时,daemon 自动把当下全局 `formula.json.wThink` **整体快照写入** `requirement.json.formulaWThinkOverride`(新字段,number ∈ [0,1])
+- 之后调全局 wThink **不再回写** 已存在的需求,只影响后续新建需求
+- 详情抽屉新增独立卡片「提效公式(本需求)」,只放 wThink 滑块,直接调 `PATCH /ai-productivity/requirements/:jiraKey { formulaWThinkOverride }` 保存
+- 保存后 daemon 重新计算该需求的 boost / effectiveMinutes,UI 抽屉指标卡片实时联动刷新
+- `tokenPenaltyEnabled` / `tokenSoftCapK` 不进入需求级,仍在设置页全局配置(单需求场景对 token 软上限的精调需求较弱)
+
+**老数据兼容**:rc.26 之前创建的 requirement.json 缺 `formulaWThinkOverride` 字段 → daemon load 时默认 null → `buildSummaryView` 回退到全局 wThink 计算 boost,展示一致;用户首次在详情页编辑后即固化为具体数值,与新需求行为对齐。
+
+**改动清单**:
+
+- **core**:
+  - `packages/core/src/store/requirement-store.ts`:`StoredRequirement` 新增 `formulaWThinkOverride: number | null`(默认 null);老 requirement.json round-trip 兼容
+  - `packages/core/src/metrics.ts`:`buildSummaryView` 接收 `globalFormula`,内部合并出 `effectiveFormula = { ...globalFormula, wThink: override ?? globalFormula.wThink }` 传给 `computeMetrics`;`RequirementSummaryView` 新增 `formulaWThinkOverride` + `effectiveFormula` 字段,供前端直接渲染当前生效值
+- **server**:
+  - `packages/server/src/routes/ai-productivity.ts`:`handleAiProductivityInit` 在 `saveRequirement` 入参里把 `formulaWThinkOverride: readFormula().wThink` 一起写入(snapshot)
+  - `PatchRequirementBody` 加 `formulaWThinkOverride?: number | null`,handler 内 clamp 到 [0,1] + 显式 null 走清除路径
+- **ui**:
+  - `packages/ui/src/api.ts`:`RequirementSummary` 类型扩展(`formulaWThinkOverride` + `effectiveFormula`);`patchRequirement` 形参扩展 `formulaWThinkOverride: number | null`
+  - `packages/ui/src/tabs/AiProductivityTrackerWorkspaceTab.vue`:在「指标」与「关联 Bug」之间插入独立卡片「提效公式(本需求)」,只暴露 wThink 滑块 + 「AI 工作 X% · 墙钟 Y%」实时回显 + 「保存权重」按钮(脏检查决定 disabled);保存后 `getRequirementDetail` + `loadList` 并行刷新让抽屉指标与列表 boost 立刻联动;「加权耗时」tile 的 hover tooltip 补当前生效 wThink
+- **测试**:
+  - `requirement-store.spec.ts` +2 用例(字段 round-trip + 老数据兜底为 null)
+  - `metrics.spec.ts` +3 用例(override 改变 boost / null 回退全局 / 越界 clamp)
+  - `ai-productivity.spec.ts` Panel handlers +2 用例(init snapshot 全局当下 wThink / PATCH 写入+null 清除+clamp)
+- **文档**:
+  - `docs/DATA-MODEL.md` requirement.json schema 补 `formulaWThinkOverride` 字段说明
+  - 本 CHANGELOG 条目
+
+**回归**:`pnpm test`(823/823) / `pnpm typecheck` / `pnpm lint` / `pnpm format:check` 全绿。
+
 ### Fixed
+
+**v1.0.0-rc.26 ElButton type+link 组合被 override 强加 chip 风格(复盘经验列表「删除」按钮视觉修复 · 同 rc 一起发)**
+
+复盘经验 Tab 列表「操作」列的「删除」按钮(`<ElButton type="danger" link>`)显示成淡红色背景 + 红色描边 + 圆角胶囊,跟周围的玻璃极光 chip 撞设计语言,看起来像一个独立小标签。
+
+根因:`element-overrides.css` 里 `.el-button--danger` / `--success` / `--warning` / `--primary` 选择器没有排除 `.is-link` / `.is-text`,导致所有带 type 的文字 / 链接按钮都被强行叠加实心 type 样式(背景 + 描边),把本应"零视觉重量"的 link 按钮渲染成了 chip。
+
+修复:把这几个 type override 改成 `:not(.is-link):not(.is-text)`,让背景 / 描边只作用于实心和 plain 按钮。link / text 按钮保持透明背景 + 透明描边,只继承文字色;同时为它们补上 `.is-link.el-button--danger` / `--success` / `--warning` 的红/绿/橙文字色 + 极淡 hover 背景,跟整体玻璃 chip 风格保持一致,且 light 主题下也能读得清。
+
+唯一关联改动:`packages/ui/src/styles/element-overrides.css`。无 schema / API / 依赖变化;`pnpm typecheck` / `pnpm test` / `pnpm lint` / `pnpm format:check` 全绿。
 
 **v1.0.0-rc.25 图表文字在浅色主题下看不清(对比度修复)**
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -66,5 +66,40 @@ describe('requirement-store', () => {
     saveRequirement({ jiraKey: 'B-2', title: 'B' }, { root })
     const list = listRequirementsFromStore(root)
     expect(list.map((r) => r.jiraKey).sort()).toEqual(['A-1', 'B-2'])
+  })
+
+  it('formulaWThinkOverride 默认 null,可写入并 round-trip', () => {
+    const first = saveRequirement({ jiraKey: 'PROJ-7', title: 't' }, { root })
+    expect(first.formulaWThinkOverride).toBeNull()
+
+    const updated = updateRequirement('PROJ-7', { formulaWThinkOverride: 0.35 }, root)
+    expect(updated.formulaWThinkOverride).toBe(0.35)
+
+    const reloaded = loadRequirement('PROJ-7', root)
+    expect(reloaded?.formulaWThinkOverride).toBe(0.35)
+
+    const cleared = updateRequirement('PROJ-7', { formulaWThinkOverride: null }, root)
+    expect(cleared.formulaWThinkOverride).toBeNull()
+  })
+
+  it('loadRequirement 老 requirement.json(缺 formulaWThinkOverride)兜底为 null', () => {
+    // 模拟 rc.27 之前的 requirement.json:不包含 formulaWThinkOverride 字段
+    const jiraKey = 'LEGACY-1'
+    const dir = join(root, jiraKey)
+    const file = join(dir, 'requirement.json')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      file,
+      JSON.stringify({
+        jiraKey,
+        title: 'legacy',
+        status: 'in_progress',
+        manualEstimateMinutes: 60
+      }),
+      'utf-8'
+    )
+    const loaded = loadRequirement(jiraKey, root)
+    expect(loaded).not.toBeNull()
+    expect(loaded?.formulaWThinkOverride).toBeNull()
   })
 })

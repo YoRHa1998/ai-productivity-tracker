@@ -212,6 +212,10 @@ export async function handleAiProductivityInit(
     // 3. 记录 init 时的 HEAD sha, 后续 iteration 用作 diff baseRef
     const initBaseCommit = getHeadSha(gitRoot)
 
+    // 4. snapshot-on-init:把当下全局 formula.wThink 整体快照到 requirement,
+    //    之后调全局不再影响这条需求 boost,只能在需求详情卡片里单独编辑。
+    const initFormulaWThinkOverride = readFormula().wThink
+
     const requirement = saveRequirement(
       {
         jiraKey: ref.jiraKey,
@@ -224,6 +228,7 @@ export async function handleAiProductivityInit(
         subtasks: normalizedSubtasks,
         projectSlug,
         initBaseCommit,
+        formulaWThinkOverride: initFormulaWThinkOverride,
         clarifyReportPath: body.clarifyReportPath ?? '',
         clarifyReviewerScore: body.clarifyReviewerScore ?? null,
         clarifyConflicts: body.clarifyConflicts ?? [],
@@ -1218,6 +1223,13 @@ export interface PatchRequirementBody {
   summary?: string
   manualEstimateMinutes?: number
   complexity?: 'low' | 'medium' | 'high'
+  /**
+   * 需求级 wThink 覆盖值。
+   * - `number`(取值 ∈ [0,1],超出范围会被 daemon clamp):写入覆盖,需求与全局解耦
+   * - `null`:显式清除,回退到「跟随全局 wThink」(老需求兼容路径)
+   * - `undefined`(字段缺省):不修改该字段
+   */
+  formulaWThinkOverride?: number | null
 }
 
 export function handleAiProductivityPatchRequirement(
@@ -1237,6 +1249,15 @@ export function handleAiProductivityPatchRequirement(
   if (typeof body.manualEstimateMinutes === 'number')
     patch.manualEstimateMinutes = body.manualEstimateMinutes
   if (body.complexity) patch.complexity = body.complexity
+  if ('formulaWThinkOverride' in body) {
+    const raw = body.formulaWThinkOverride
+    if (raw === null) {
+      patch.formulaWThinkOverride = null
+    } else if (typeof raw === 'number' && Number.isFinite(raw)) {
+      // 与 metrics/store 保持一致的 clamp 边界,避免越界写盘
+      patch.formulaWThinkOverride = Math.max(0, Math.min(1, raw))
+    }
+  }
 
   const next = updateRequirement(jiraKey, patch)
   ok(res, { jiraKey: next.jiraKey, status: next.status })

@@ -125,20 +125,41 @@ export interface RequirementSummaryView {
   metrics: RequirementMetrics
   iterationCount: number
   latestIterationAt: string | null
+  /**
+   * 需求级 wThink 覆盖值原样回传(null = 未覆盖,跟随全局)。前端用来在「提效公式(本需求)」
+   * 卡片渲染当前 snapshot 值;rc.27 之前的老需求 load 后即为 null,首次编辑后才会固化。
+   */
+  formulaWThinkOverride: number | null
+  /**
+   * 当前生效公式 = 全局 formula + 需求级覆盖合并后的产物。`wThink` = override ?? global,
+   * `tokenPenaltyEnabled` / `tokenSoftCapK` 始终取全局。供前端直接渲染当前生效配置,
+   * 避免重复合并逻辑。
+   */
+  effectiveFormula: FormulaSettings
 }
 
 export function buildSummaryView(
   requirement: StoredRequirement,
   iterations: StoredIteration[],
-  formula: FormulaSettings
+  globalFormula: FormulaSettings
 ): RequirementSummaryView {
   const subtasks = Array.isArray(requirement.subtasks) ? requirement.subtasks : []
+  // wThink 走 snapshot-on-init 语义:需求级 override 优先,缺失(老数据)回退到全局。
+  // tokenPenaltyEnabled / tokenSoftCapK 不进入需求级,始终读全局。
+  const effectiveFormula: FormulaSettings = {
+    ...globalFormula,
+    wThink:
+      typeof requirement.formulaWThinkOverride === 'number' &&
+      Number.isFinite(requirement.formulaWThinkOverride)
+        ? clamp01(requirement.formulaWThinkOverride)
+        : globalFormula.wThink
+  }
   const metrics = computeMetrics({
     manualEstimateMinutes: requirement.manualEstimateMinutes,
     iterations,
     subtasks,
     linkedBugCount: requirement.linkedBugCount,
-    formula
+    formula: effectiveFormula
   })
 
   return {
@@ -166,7 +187,13 @@ export function buildSummaryView(
       : [],
     metrics,
     iterationCount: iterations.length,
-    latestIterationAt: iterations.length ? iterations[iterations.length - 1].reportedAt : null
+    latestIterationAt: iterations.length ? iterations[iterations.length - 1].reportedAt : null,
+    formulaWThinkOverride:
+      typeof requirement.formulaWThinkOverride === 'number' &&
+      Number.isFinite(requirement.formulaWThinkOverride)
+        ? clamp01(requirement.formulaWThinkOverride)
+        : null,
+    effectiveFormula
   }
 }
 

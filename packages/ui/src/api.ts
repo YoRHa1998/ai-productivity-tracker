@@ -156,6 +156,16 @@ export type RequirementSummary = {
   metrics: RequirementMetrics
   iterationCount: number
   latestIterationAt: string | null
+  /**
+   * 需求级 wThink 覆盖值。`init` 时由 daemon 把当下全局 `formula.wThink` 快照写入,之后
+   * 调全局不再影响该需求。`null` 表示老数据(rc.26 之前)未固化,前端按全局值兜底显示。
+   */
+  formulaWThinkOverride: number | null
+  /**
+   * 当前生效公式(已合并需求级覆盖 + 全局 token 配置),供前端直接渲染当前生效值,无需重复合并。
+   * `wThink` = `formulaWThinkOverride ?? globalFormula.wThink`;token 字段始终读全局。
+   */
+  effectiveFormula: FormulaSettings
 }
 
 export type RequirementDetail = RequirementSummary & {
@@ -273,6 +283,12 @@ export function patchRequirement(
     summary: string
     manualEstimateMinutes: number
     complexity: Complexity
+    /**
+     * 需求级 wThink 覆盖。
+     * - `number` ∈ [0,1]:daemon 写入(越界自动 clamp)
+     * - `null`:显式清除回退到「跟随全局」(老数据兼容路径)
+     */
+    formulaWThinkOverride: number | null
   }>
 ) {
   return agentRequest<{ jiraKey: string; status: string }>(
