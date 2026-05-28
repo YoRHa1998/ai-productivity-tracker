@@ -365,9 +365,14 @@ function formatBoost(value: number | null) {
 }
 
 function formatMinutes(value: number) {
-  if (value < 60) return `${value} min`
-  const hours = Math.floor(value / 60)
-  const mins = value % 60
+  /**
+   * effectiveMinutes 是后端按权重算出来的浮点,直接 % 60 会出现
+   * 50.940000000000055min 这种长尾,先 round 再拆 h/min 显示。
+   */
+  const total = Math.max(0, Math.round(value))
+  if (total < 60) return `${total} min`
+  const hours = Math.floor(total / 60)
+  const mins = total % 60
   return mins ? `${hours}h ${mins}min` : `${hours}h`
 }
 
