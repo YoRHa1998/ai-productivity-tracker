@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { useChartTheme } from '../composables/useChartTheme'
 import { VChart, type ECOption } from './echarts'
 
 /**
@@ -48,62 +49,68 @@ const indicators = computed(() =>
 
 const values = computed(() => props.dimensions.map((d) => clamp(d.value, d.max)))
 
-const option = computed<ECOption>(() => ({
-  tooltip: {
-    trigger: 'item',
-    backgroundColor: 'rgba(20, 24, 40, 0.92)',
-    borderColor: 'rgba(255,255,255,0.1)',
-    borderWidth: 1,
-    textStyle: { color: 'rgba(255,255,255,0.92)', fontSize: 12 },
-    formatter: () => {
-      const lines = [`<strong>${props.seriesName}</strong>`]
-      for (let i = 0; i < props.dimensions.length; i += 1) {
-        const dim = props.dimensions[i]
-        lines.push(
-          `${dim.name}: ${values.value[i].toFixed(2)} / ${(dim.max > 0 ? dim.max : 1).toFixed(2)}`
-        )
-      }
-      return lines.join('<br/>')
-    }
-  },
-  radar: {
-    indicator: indicators.value,
-    shape: 'polygon',
-    splitNumber: 4,
-    axisName: {
-      color: 'rgba(220,224,235,0.85)',
-      fontSize: 12
-    },
-    axisLine: {
-      lineStyle: { color: 'rgba(255,255,255,0.16)' }
-    },
-    splitLine: {
-      lineStyle: { color: 'rgba(255,255,255,0.08)' }
-    },
-    splitArea: {
-      areaStyle: {
-        color: ['rgba(110,167,245,0.04)', 'rgba(110,167,245,0.08)']
-      }
-    }
-  },
-  series: [
-    {
-      type: 'radar',
-      name: props.seriesName,
-      symbol: 'circle',
-      symbolSize: 6,
-      lineStyle: { width: 2, color: '#6ea7f5' },
-      areaStyle: { color: 'rgba(110,167,245,0.22)' },
-      itemStyle: { color: '#6ea7f5' },
-      data: [
-        {
-          value: values.value,
-          name: props.seriesName
+const { tokens: themeTokens } = useChartTheme()
+
+const option = computed<ECOption>(() => {
+  const t = themeTokens.value
+  return {
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: t.tooltipBg,
+      borderColor: t.tooltipBorder,
+      borderWidth: 1,
+      textStyle: { color: t.tooltipText, fontSize: 12 },
+      formatter: () => {
+        const lines = [`<strong>${props.seriesName}</strong>`]
+        for (let i = 0; i < props.dimensions.length; i += 1) {
+          const dim = props.dimensions[i]
+          lines.push(
+            `${dim.name}: ${values.value[i].toFixed(2)} / ${(dim.max > 0 ? dim.max : 1).toFixed(2)}`
+          )
         }
-      ]
-    }
-  ]
-}))
+        return lines.join('<br/>')
+      }
+    },
+    radar: {
+      indicator: indicators.value,
+      shape: 'polygon',
+      splitNumber: 4,
+      axisName: {
+        color: t.text,
+        fontSize: 12,
+        fontWeight: 600
+      },
+      axisLine: {
+        lineStyle: { color: t.axisLine }
+      },
+      splitLine: {
+        lineStyle: { color: t.faint }
+      },
+      splitArea: {
+        areaStyle: {
+          color: ['rgba(110,167,245,0.04)', 'rgba(110,167,245,0.08)']
+        }
+      }
+    },
+    series: [
+      {
+        type: 'radar',
+        name: props.seriesName,
+        symbol: 'circle',
+        symbolSize: 6,
+        lineStyle: { width: 2, color: '#6ea7f5' },
+        areaStyle: { color: 'rgba(110,167,245,0.22)' },
+        itemStyle: { color: '#6ea7f5' },
+        data: [
+          {
+            value: values.value,
+            name: props.seriesName
+          }
+        ]
+      }
+    ]
+  }
+})
 </script>
 
 <template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { useChartTheme } from '../composables/useChartTheme'
 import { VChart, type ECOption } from './echarts'
 
 interface Slice {
@@ -29,15 +30,18 @@ const props = withDefaults(defineProps<DonutProps>(), {
 
 const DEFAULT_COLORS = ['#6ea7f5', '#86c5e8', '#f0a6c8', '#9fe5d4', '#f5c489']
 
+const { tokens: themeTokens } = useChartTheme()
+
 const option = computed<ECOption>(() => {
   const slices = props.data.length ? props.data : [{ name: '暂无数据', value: 1 }]
+  const t = themeTokens.value
   return {
     tooltip: {
       trigger: 'item',
-      backgroundColor: 'rgba(20, 24, 40, 0.92)',
-      borderColor: 'rgba(255,255,255,0.1)',
+      backgroundColor: t.tooltipBg,
+      borderColor: t.tooltipBorder,
       borderWidth: 1,
-      textStyle: { color: 'rgba(255,255,255,0.92)', fontSize: 12 },
+      textStyle: { color: t.tooltipText, fontSize: 12 },
       formatter: '{b}: {c} ({d}%)'
     },
     legend: {
@@ -52,7 +56,7 @@ const option = computed<ECOption>(() => {
         padAngle: 3,
         itemStyle: {
           borderRadius: 8,
-          borderColor: 'rgba(7, 10, 20, 0.6)',
+          borderColor: t.panelBg,
           borderWidth: 2
         },
         label: { show: false },

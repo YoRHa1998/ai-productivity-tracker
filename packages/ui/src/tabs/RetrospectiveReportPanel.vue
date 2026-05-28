@@ -28,6 +28,7 @@ import IterationPhaseTimeline, {
 } from '../charts/IterationPhaseTimeline.vue'
 import RadarMetric, { type RadarDimension } from '../charts/RadarMetric.vue'
 import { VChart, type ECOption } from '../charts/echarts'
+import { useChartTheme } from '../composables/useChartTheme'
 import { renderMarkdown } from '../lib/markdown'
 import '../styles/aip-shared.css'
 
@@ -243,18 +244,21 @@ const timelinePhases = computed<IterationTimelinePhase[]>(() => {
 
 // ─── 累积曲线(token / think 双 Y 轴)───────────────────
 
+const { tokens: chartTokens } = useChartTheme()
+
 const cumulativeOption = computed<ECOption>(() => {
   const rows = props.iterations.filter((it) => it.kind !== 'init')
+  const t = chartTokens.value
   return {
     tooltip: {
       trigger: 'axis',
-      backgroundColor: 'rgba(20, 24, 40, 0.92)',
-      borderColor: 'rgba(255,255,255,0.1)',
+      backgroundColor: t.tooltipBg,
+      borderColor: t.tooltipBorder,
       borderWidth: 1,
-      textStyle: { color: 'rgba(255,255,255,0.92)', fontSize: 12 }
+      textStyle: { color: t.tooltipText, fontSize: 12 }
     },
     legend: {
-      textStyle: { color: 'rgba(220,224,235,0.85)' },
+      textStyle: { color: t.text },
       top: 0,
       right: 12
     },
@@ -262,25 +266,25 @@ const cumulativeOption = computed<ECOption>(() => {
     xAxis: {
       type: 'category',
       data: rows.map((r) => `#${r.seq}`),
-      axisLabel: { color: 'rgba(220,224,235,0.7)', fontSize: 11 },
-      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.18)' } },
+      axisLabel: { color: t.text, fontSize: 11 },
+      axisLine: { lineStyle: { color: t.axisLine } },
       axisTick: { show: false }
     },
     yAxis: [
       {
         type: 'value',
         name: 'token',
-        nameTextStyle: { color: 'rgba(220,224,235,0.55)', fontSize: 11 },
-        axisLabel: { color: 'rgba(220,224,235,0.6)', fontSize: 11 },
+        nameTextStyle: { color: t.subtle, fontSize: 11 },
+        axisLabel: { color: t.text, fontSize: 11 },
         axisLine: { show: false },
-        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }
+        splitLine: { lineStyle: { color: t.faint } }
       },
       {
         type: 'value',
         name: '累计思考(s)',
         position: 'right',
-        nameTextStyle: { color: 'rgba(220,224,235,0.55)', fontSize: 11 },
-        axisLabel: { color: 'rgba(220,224,235,0.6)', fontSize: 11 },
+        nameTextStyle: { color: t.subtle, fontSize: 11 },
+        axisLabel: { color: t.text, fontSize: 11 },
         axisLine: { show: false },
         splitLine: { show: false }
       }

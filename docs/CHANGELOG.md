@@ -10,6 +10,27 @@
 
 ## [Unreleased]
 
+### Fixed
+
+**v1.0.0-rc.25 图表文字在浅色主题下看不清(对比度修复)**
+
+复盘报告的雷达图维度名(「AI 思考密度」「提效倍率」「关键文件集中度」等)、iteration 阶段时间线 Y 轴刻度数字、累积曲线坐标轴 label,在浅色主题下几乎贴近白底融化,雷达图维度名甚至完全读不出。
+
+根因:所有 echarts 图表 option 里把 `rgba(220,224,235,...)` / `rgba(255,255,255,0.45)` 这类**只适配深色背景**的灰白色硬编码到 `axisLabel` / `nameTextStyle` / `axisLine` / `splitLine` 上。看板支持 `data-theme=light` 切换(`tokens.css` 里 `--aipt-text-*` 走对应色阶),但 echarts 不消费 CSS 变量,硬编码字色无法跟随主题翻转。
+
+修复:抽出 `useChartTheme` composable 集中管理图表配色,按 `useTheme().resolvedTheme` 返回三档文字(`text` 主刻度 / `subtle` 次要 / `faint` 网格) + tooltip + 切片描边 token,所有图表 option 引用 token 而不是写死颜色。深色保持原视觉,浅色字色刻意比 `--aipt-text-*` 略深一档,避免被玻璃面板的渐变背景"吃"掉。
+
+改动清单:
+
+- `packages/ui/src/composables/useChartTheme.ts` 新增,`DARK_TOKENS` / `LIGHT_TOKENS` 两套
+- `RadarMetric.vue`:`axisName` 改用 `t.text` + `fontWeight: 600`,5 维标题在浅色下也保持清晰
+- `IterationPhaseTimeline.vue`:`xAxis/yAxis.axisLabel`、`nameTextStyle`、`splitLine`、`axisLine`、tooltip 全部主题感知;未分类柱子颜色从硬编码 `rgba(255,255,255,0.18)` 改 `t.axisLine`(浅色自动变深,不再"消失")
+- `RetrospectiveReportPanel.vue` 内联累积曲线:双 Y 轴 label / name、legend、splitLine 全部主题感知
+- `DonutMetric.vue`:tooltip + 切片描边色(`rgba(7,10,20,0.6)` → `t.panelBg`,浅色变近白色)
+- `AuroraLineCard.vue`(工作区 tab):同样接到 `useChartTheme`,XY 轴 label / legend / 轴指示器全部跟随主题
+
+无 schema / API 变化,无 npm 依赖变化;`pnpm typecheck` / `pnpm test`(816/816) / `pnpm lint` / `pnpm format:check` 全绿,UI 产物体积持平。
+
 ### Added
 
 **v1.0.0-rc.23 单需求复盘报告(retrospective)**

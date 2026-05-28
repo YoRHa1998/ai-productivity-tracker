@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { useChartTheme } from '../composables/useChartTheme'
 import { VChart, type ECOption } from './echarts'
 
 /**
@@ -42,7 +43,12 @@ const props = withDefaults(defineProps<TimelineProps>(), {
 })
 
 const PHASE_COLORS = ['#6ea7f5', '#9fe5d4', '#f5c489', '#f0a6c8', '#86c5e8']
-const UNCLASSIFIED_COLOR = 'rgba(255,255,255,0.18)'
+
+const { tokens: themeTokens } = useChartTheme()
+
+// 未分类柱子颜色复用 chart 主题的 axisLine 色阶,既能在深色背景上保留淡蒙层质感,
+// 也能在浅色背景上具备足够辨识度(避免硬编码白色 rgba 融进白底)。
+const unclassifiedColor = computed(() => themeTokens.value.axisLine)
 
 interface BarItem {
   seq: number
@@ -56,7 +62,7 @@ const items = computed<BarItem[]>(() => {
   const rows = [...props.iterations].sort((a, b) => a.seq - b.seq)
   return rows.map((row) => {
     let phaseTitle = '未分类'
-    let phaseColor = UNCLASSIFIED_COLOR
+    let phaseColor = unclassifiedColor.value
     for (let i = 0; i < props.phases.length; i += 1) {
       const phase = props.phases[i]
       if (
@@ -80,61 +86,64 @@ const items = computed<BarItem[]>(() => {
   })
 })
 
-const option = computed<ECOption>(() => ({
-  tooltip: {
-    trigger: 'item',
-    backgroundColor: 'rgba(20, 24, 40, 0.92)',
-    borderColor: 'rgba(255,255,255,0.1)',
-    borderWidth: 1,
-    textStyle: { color: 'rgba(255,255,255,0.92)', fontSize: 12 },
-    formatter: (params: unknown) => {
-      const p = params as { dataIndex: number }
-      const row = items.value[p.dataIndex]
-      if (!row) return ''
-      const lines = [
-        `<strong>iteration #${row.seq}</strong> · ${row.phaseTitle}`,
-        `思考时长: ${row.value.toFixed(1)} s`
-      ]
-      if (row.oneLine) lines.push(`一句话: ${escapeHtml(row.oneLine)}`)
-      return lines.join('<br/>')
-    }
-  },
-  grid: {
-    left: 16,
-    right: 16,
-    top: 12,
-    bottom: 28,
-    containLabel: true
-  },
-  xAxis: {
-    type: 'category',
-    data: items.value.map((row) => `#${row.seq}`),
-    axisLine: { lineStyle: { color: 'rgba(255,255,255,0.18)' } },
-    axisLabel: { color: 'rgba(220,224,235,0.7)', fontSize: 11 },
-    axisTick: { show: false }
-  },
-  yAxis: {
-    type: 'value',
-    name: 'thinkSeconds',
-    nameTextStyle: { color: 'rgba(220,224,235,0.55)', fontSize: 11, padding: [0, 0, 0, -8] },
-    axisLine: { show: false },
-    axisLabel: { color: 'rgba(220,224,235,0.6)', fontSize: 11 },
-    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }
-  },
-  series: [
-    {
-      type: 'bar',
-      barMaxWidth: 28,
-      itemStyle: {
-        borderRadius: [4, 4, 0, 0]
-      },
-      data: items.value.map((row) => ({
-        value: row.value,
-        itemStyle: { color: row.phaseColor }
-      }))
-    }
-  ]
-}))
+const option = computed<ECOption>(() => {
+  const t = themeTokens.value
+  return {
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: t.tooltipBg,
+      borderColor: t.tooltipBorder,
+      borderWidth: 1,
+      textStyle: { color: t.tooltipText, fontSize: 12 },
+      formatter: (params: unknown) => {
+        const p = params as { dataIndex: number }
+        const row = items.value[p.dataIndex]
+        if (!row) return ''
+        const lines = [
+          `<strong>iteration #${row.seq}</strong> · ${row.phaseTitle}`,
+          `思考时长: ${row.value.toFixed(1)} s`
+        ]
+        if (row.oneLine) lines.push(`一句话: ${escapeHtml(row.oneLine)}`)
+        return lines.join('<br/>')
+      }
+    },
+    grid: {
+      left: 16,
+      right: 16,
+      top: 12,
+      bottom: 28,
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      data: items.value.map((row) => `#${row.seq}`),
+      axisLine: { lineStyle: { color: t.axisLine } },
+      axisLabel: { color: t.text, fontSize: 11 },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: 'thinkSeconds',
+      nameTextStyle: { color: t.subtle, fontSize: 11, padding: [0, 0, 0, -8] },
+      axisLine: { show: false },
+      axisLabel: { color: t.text, fontSize: 11 },
+      splitLine: { lineStyle: { color: t.faint } }
+    },
+    series: [
+      {
+        type: 'bar',
+        barMaxWidth: 28,
+        itemStyle: {
+          borderRadius: [4, 4, 0, 0]
+        },
+        data: items.value.map((row) => ({
+          value: row.value,
+          itemStyle: { color: row.phaseColor }
+        }))
+      }
+    ]
+  }
+})
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { useChartTheme } from '../composables/useChartTheme'
 import { VChart, type ECOption } from './echarts'
 
 interface SeriesDef {
@@ -29,26 +30,29 @@ const props = withDefaults(defineProps<AuroraLineProps>(), {
 
 const DEFAULT_COLORS = ['#6ea7f5', '#86c5e8', '#f0a6c8', '#9fe5d4']
 
+const { tokens: themeTokens } = useChartTheme()
+
 const option = computed<ECOption>(() => {
   const cats = props.categories?.length ? props.categories : ['']
+  const t = themeTokens.value
   return {
     grid: { left: 8, right: 12, top: 16, bottom: 24, containLabel: true },
     tooltip: {
       trigger: 'axis',
-      backgroundColor: 'rgba(20, 24, 40, 0.92)',
-      borderColor: 'rgba(255,255,255,0.1)',
+      backgroundColor: t.tooltipBg,
+      borderColor: t.tooltipBorder,
       borderWidth: 1,
-      textStyle: { color: 'rgba(255,255,255,0.92)', fontSize: 12 },
+      textStyle: { color: t.tooltipText, fontSize: 12 },
       axisPointer: {
         type: 'line',
-        lineStyle: { color: 'rgba(255,255,255,0.18)', type: 'dashed' }
+        lineStyle: { color: t.axisLine, type: 'dashed' }
       }
     },
     legend: {
       show: props.series.length > 1,
       top: 0,
       right: 0,
-      textStyle: { color: 'rgba(255,255,255,0.6)', fontSize: 11 },
+      textStyle: { color: t.subtle, fontSize: 11 },
       itemWidth: 10,
       itemHeight: 6
     },
@@ -56,20 +60,20 @@ const option = computed<ECOption>(() => {
       type: 'category',
       boundaryGap: false,
       data: cats,
-      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+      axisLine: { lineStyle: { color: t.faint } },
       axisTick: { show: false },
       axisLabel: {
-        color: 'rgba(255,255,255,0.45)',
+        color: t.text,
         fontSize: 10,
         margin: 8
       }
     },
     yAxis: {
       type: 'value',
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)', type: 'dashed' } },
+      splitLine: { lineStyle: { color: t.faint, type: 'dashed' } },
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: 'rgba(255,255,255,0.4)', fontSize: 10 }
+      axisLabel: { color: t.text, fontSize: 10 }
     },
     series: props.series.map((s, idx) => {
       const color = s.color ?? DEFAULT_COLORS[idx % DEFAULT_COLORS.length]
