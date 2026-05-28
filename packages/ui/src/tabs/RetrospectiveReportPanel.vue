@@ -361,30 +361,41 @@ function renderMd(text: string): string {
     </p>
 
     <!-- 空态:没有报告 -->
-    <div v-else-if="!hasReport" class="aip-retro__empty">
-      <ElEmpty description="本需求暂无复盘报告">
-        <template #image>
-          <svg width="64" height="64" viewBox="0 0 24 24" fill="none">
+    <div v-else-if="!hasReport" class="aip-retro__empty aipt-glass aipt-glass--accent">
+      <div class="aip-retro__empty-icon" aria-hidden="true">
+        <svg width="42" height="42" viewBox="0 0 24 24" fill="none">
+          <path
+            d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </div>
+      <h4 class="aip-retro__empty-title">本需求暂无复盘报告</h4>
+      <p class="aip-retro__empty-desc">
+        回到 IDE 粘贴下方触发口令,即可由 LLM 通过 <code>retrospective-report</code> skill
+        基于本需求全部 iteration 自动生成结构化复盘。
+      </p>
+      <div class="aip-retro__empty-token" @click="copyTriggerHint">
+        <span class="aip-retro__empty-token-text">{{ triggerHint }}</span>
+        <span class="aip-retro__empty-token-action">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
             <path
-              d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"
+              d="M9 9V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-4M15 11H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-4"
               stroke="currentColor"
-              stroke-width="1.5"
+              stroke-width="1.8"
               stroke-linecap="round"
               stroke-linejoin="round"
             />
           </svg>
-        </template>
-        <div class="aip-retro__empty-actions">
-          <ElButton type="primary" @click="copyTriggerHint">复制触发口令</ElButton>
-        </div>
-        <p class="aip-retro__empty-hint">
-          回到 IDE 粘贴触发口令 <code>{{ triggerHint }}</code> 即可由 LLM 通过 retrospective-report
-          skill 生成完整复盘报告。
-        </p>
-        <p class="aip-retro__empty-hint aip-retro__empty-hint--muted">
-          建议在需求 status 切到 finished 后触发,效果最佳;开发中阶段复盘也可触发。
-        </p>
-      </ElEmpty>
+          复制
+        </span>
+      </div>
+      <p class="aip-retro__empty-hint">
+        建议在需求 status 切到 <strong>finished</strong> 后触发,开发中阶段亦可生成预览版。
+      </p>
     </div>
 
     <!-- 有报告 -->
@@ -646,37 +657,105 @@ function renderMd(text: string): string {
 }
 
 .aip-retro__empty {
-  padding: var(--aipt-space-6) 0;
+  padding: var(--aipt-space-8) var(--aipt-space-6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
+  gap: var(--aipt-space-3);
 }
 
-.aip-retro__empty-actions {
+.aip-retro__empty-icon {
   display: flex;
+  align-items: center;
   justify-content: center;
-  gap: 12px;
-  margin: var(--aipt-space-3) 0 var(--aipt-space-2);
+  width: 72px;
+  height: 72px;
+  border-radius: var(--aipt-radius-lg);
+  background: rgba(110, 167, 245, 0.12);
+  border: 1px solid rgba(110, 167, 245, 0.28);
+  color: var(--aipt-aurora-1);
+  margin-bottom: var(--aipt-space-2);
+}
+
+.aip-retro__empty-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--aipt-text-strong);
+  letter-spacing: -0.01em;
+}
+
+.aip-retro__empty-desc {
+  margin: 0;
+  max-width: 480px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--aipt-text-secondary);
+}
+
+.aip-retro__empty-desc code {
+  background: rgba(110, 167, 245, 0.12);
+  border: 1px solid rgba(110, 167, 245, 0.28);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12px;
+  color: var(--aipt-aurora-1);
+  font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+}
+
+.aip-retro__empty-token {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aipt-space-3);
+  padding: 10px 14px;
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-surface);
+  border: 1px dashed var(--aipt-border-strong);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background var(--aipt-duration-base) var(--aipt-easing-out),
+    border-color var(--aipt-duration-base) var(--aipt-easing-out);
+}
+
+.aip-retro__empty-token:hover {
+  background: var(--aipt-surface-hover);
+  border-color: var(--aipt-aurora-1);
+}
+
+.aip-retro__empty-token-text {
+  font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  color: var(--aipt-text);
+  letter-spacing: 0.01em;
+}
+
+.aip-retro__empty-token-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--aipt-radius-sm);
+  background: var(--aipt-gradient-aurora);
+  color: var(--aipt-text-on-accent);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: var(--aipt-shadow-glow);
 }
 
 .aip-retro__empty-hint {
   font-size: 12px;
   color: var(--aipt-text-muted);
-  margin: 4px auto;
-  max-width: 480px;
+  margin: var(--aipt-space-1) 0 0;
+  max-width: 460px;
   line-height: 1.6;
 }
 
-.aip-retro__empty-hint code {
-  background: rgba(110, 167, 245, 0.1);
-  border: 1px solid rgba(110, 167, 245, 0.3);
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 12px;
-  font-family: var(--aipt-font-mono, ui-monospace, SFMono-Regular, monospace);
-}
-
-.aip-retro__empty-hint--muted {
-  color: var(--aipt-text-muted);
-  opacity: 0.7;
+.aip-retro__empty-hint strong {
+  color: var(--aipt-state-success);
+  font-weight: 700;
 }
 
 .aip-retro__body {

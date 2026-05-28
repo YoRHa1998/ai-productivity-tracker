@@ -764,18 +764,26 @@ onMounted(() => {
     </div>
 
     <!-- 抽屉详情 -->
-    <ElDrawer v-model="drawerOpen" size="880" destroy-on-close>
+    <ElDrawer
+      v-model="drawerOpen"
+      size="880"
+      destroy-on-close
+      class="aip-drawer"
+      :with-header="true"
+    >
       <template #header>
         <div class="aip-drawer__header">
           <div class="aip-drawer__header-main">
-            <span v-if="currentDetail" class="aip-chip aip-chip--primary">{{
+            <span v-if="currentDetail" class="aip-chip aip-chip--primary aip-drawer__header-chip">{{
               currentDetail.jiraKey
             }}</span>
             <template v-if="currentDetail && !titleEditing">
-              <h3 class="aip-drawer__header-title">{{ currentDetail.title }}</h3>
+              <h3 class="aip-drawer__header-title" :title="currentDetail.title">
+                {{ currentDetail.title }}
+              </h3>
               <button
                 type="button"
-                class="aip-drawer__header-iconbtn"
+                class="aip-drawer__iconbtn"
                 title="编辑标题"
                 @click="startEditTitle"
               >
@@ -791,7 +799,7 @@ onMounted(() => {
               </button>
               <button
                 type="button"
-                class="aip-drawer__header-iconbtn"
+                class="aip-drawer__iconbtn"
                 title="从 Jira 刷新标题"
                 :disabled="titleSyncing"
                 @click="handleSyncJiraTitle"
@@ -830,7 +838,7 @@ onMounted(() => {
               />
               <button
                 type="button"
-                class="aip-drawer__header-iconbtn aip-drawer__header-iconbtn--primary"
+                class="aip-drawer__iconbtn aip-drawer__iconbtn--primary"
                 :disabled="titleSaving"
                 title="保存"
                 @click="handleSaveTitle"
@@ -839,7 +847,7 @@ onMounted(() => {
               </button>
               <button
                 type="button"
-                class="aip-drawer__header-iconbtn"
+                class="aip-drawer__iconbtn"
                 :disabled="titleSaving"
                 title="取消"
                 @click="cancelEditTitle"
@@ -852,7 +860,7 @@ onMounted(() => {
             <button
               v-if="currentDetail"
               type="button"
-              class="aip-drawer__header-iconbtn"
+              class="aip-drawer__iconbtn"
               title="刷新详情(公式或数据变更后联动)"
               :disabled="detailRefreshing"
               @click="handleRefreshDetail"
@@ -883,9 +891,8 @@ onMounted(() => {
               v-if="currentDetail?.jiraUrl"
               :href="currentDetail.jiraUrl"
               target="_blank"
-              class="aip-drawer__header-link"
+              class="aip-drawer__jira-link"
             >
-              打开 Jira
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
                 <path
                   d="M14 3h7v7M21 3l-9 9M10 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4"
@@ -895,25 +902,34 @@ onMounted(() => {
                   stroke-linejoin="round"
                 />
               </svg>
+              <span>Jira</span>
             </a>
           </div>
         </div>
       </template>
 
-      <div v-if="detailLoading" class="aip-state">
-        <div class="aip-state__icon">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M21 12a9 9 0 1 1-3.6-7.2"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-            />
-          </svg>
+      <div v-if="detailLoading" class="aip-drawer__placeholder">
+        <div class="aip-state">
+          <div class="aip-state__icon">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              class="aip-workspace__refresh-spin"
+            >
+              <path
+                d="M21 12a9 9 0 1 1-3.6-7.2"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </div>
+          <p>加载中…</p>
         </div>
-        <p>加载中…</p>
       </div>
-      <div v-else-if="!currentDetail">
+      <div v-else-if="!currentDetail" class="aip-drawer__placeholder">
         <ElEmpty description="暂无数据" />
       </div>
       <div v-else class="aip-drawer__body">
@@ -929,7 +945,7 @@ onMounted(() => {
                   }}</span>
                   <button
                     type="button"
-                    class="aip-drawer__boost-edit-btn"
+                    class="aip-drawer__iconbtn aip-drawer__iconbtn--ghost"
                     title="编辑人工预估时间"
                     @click="startEditEstimate"
                   >
@@ -957,7 +973,7 @@ onMounted(() => {
                   <span class="aip-drawer__boost-unit">小时</span>
                   <button
                     type="button"
-                    class="aip-drawer__boost-edit-btn aip-drawer__boost-edit-btn--primary"
+                    class="aip-drawer__iconbtn aip-drawer__iconbtn--primary"
                     :disabled="estimateSaving"
                     @click="handleSaveEstimate"
                   >
@@ -965,43 +981,49 @@ onMounted(() => {
                   </button>
                   <button
                     type="button"
-                    class="aip-drawer__boost-edit-btn"
+                    class="aip-drawer__iconbtn"
                     :disabled="estimateSaving"
                     @click="cancelEditEstimate"
                   >
                     取消
                   </button>
                 </div>
+                <span class="aip-drawer__boost-sub">作为提效公式的分子</span>
               </div>
-              <div class="aip-drawer__boost-arrow">
-                <svg width="22" height="14" viewBox="0 0 22 14" fill="none">
+              <div class="aip-drawer__boost-arrow" aria-hidden="true">
+                <svg width="20" height="10" viewBox="0 0 20 10" fill="none">
                   <path
-                    d="M1 7h20m0 0-5-5m5 5-5 5"
+                    d="M1 5h18m0 0-4-4m4 4-4 4"
                     stroke="currentColor"
-                    stroke-width="1.6"
+                    stroke-width="1.4"
                     stroke-linecap="round"
                     stroke-linejoin="round"
                   />
                 </svg>
               </div>
               <div class="aip-drawer__boost-center">
+                <span class="aip-drawer__boost-label aip-drawer__boost-label--center"
+                  >提效倍数</span
+                >
                 <span class="aip-drawer__boost-main">{{
                   formatBoost(currentDetail.metrics.boost)
                 }}</span>
-                <span class="aip-drawer__boost-caption">提效倍数</span>
+                <span class="aip-drawer__boost-formula" title="boost = 人工预估 / 加权耗时"
+                  >人工预估 ÷ 加权耗时</span
+                >
               </div>
-              <div class="aip-drawer__boost-arrow">
-                <svg width="22" height="14" viewBox="0 0 22 14" fill="none">
+              <div class="aip-drawer__boost-arrow" aria-hidden="true">
+                <svg width="20" height="10" viewBox="0 0 20 10" fill="none">
                   <path
-                    d="M1 7h20m0 0-5-5m5 5-5 5"
+                    d="M19 5H1m0 0 4-4M1 5l4 4"
                     stroke="currentColor"
-                    stroke-width="1.6"
+                    stroke-width="1.4"
                     stroke-linecap="round"
                     stroke-linejoin="round"
                   />
                 </svg>
               </div>
-              <div class="aip-drawer__boost-side">
+              <div class="aip-drawer__boost-side aip-drawer__boost-side--right">
                 <span class="aip-drawer__boost-label">墙钟耗时</span>
                 <span
                   class="aip-drawer__boost-value"
@@ -1009,62 +1031,79 @@ onMounted(() => {
                 >
                   {{ formatMinutes(currentDetail.metrics.latestElapsedMinutes) }}
                 </span>
-                <span class="aip-drawer__boost-subdivider" />
-                <span class="aip-drawer__boost-sublabel">AI 工作累计</span>
                 <span
-                  class="aip-drawer__boost-subvalue"
+                  class="aip-drawer__boost-sub"
                   title="各轮对话 thinkSeconds(用户提交 → AI 答完)的累加值,剔除空闲后 AI 实际参与的时长。在并行多任务场景下比墙钟更准。"
                 >
-                  {{ formatThinkDuration(currentDetail.metrics.totalThinkSeconds) }}
+                  AI 工作累计
+                  <strong class="aipt-num">{{
+                    formatThinkDuration(currentDetail.metrics.totalThinkSeconds)
+                  }}</strong>
                 </span>
               </div>
             </div>
 
             <!-- 指标 -->
-            <article class="aip-card aip-card--flat">
+            <article class="aip-card aip-card--flat aip-drawer__section">
               <header class="aip-card__header">
                 <h3 class="aip-card__title">指标</h3>
-                <!-- <span class="aip-card__meta">复杂度：{{ currentDetail.complexity }}</span> -->
+                <span class="aip-card__meta">含 boost 公式的核心输入</span>
               </header>
-              <div class="aip-drawer__metrics-grid">
-                <div class="aip-drawer__metric">
-                  <span>对话次数</span>
-                  <strong>{{ currentDetail.metrics.codingRuns }}</strong>
+              <div class="aip-drawer__metric-grid">
+                <div class="aip-drawer__metric-tile">
+                  <span class="aip-drawer__metric-label">对话次数</span>
+                  <strong class="aip-drawer__metric-num aipt-num">{{
+                    currentDetail.metrics.codingRuns
+                  }}</strong>
                 </div>
-                <div class="aip-drawer__metric">
-                  <span>累计 Token</span>
-                  <strong :title="formatTokenTitle(currentDetail.metrics.latestCumulativeToken)">
-                    {{ formatTokenCount(currentDetail.metrics.latestCumulativeToken) }}
-                  </strong>
-                </div>
-                <div class="aip-drawer__metric">
-                  <span title="boost 公式分母 = 加权耗时 × tokenPenalty">加权耗时</span>
-                  <strong :title="`= (1 − wThink) × 墙钟 + wThink × (AI 工作累计 / 60),单位:分钟`">
-                    {{ formatMinutes(currentDetail.metrics.effectiveMinutes) }}
-                  </strong>
-                </div>
-                <div class="aip-drawer__metric">
-                  <span title="可选 token 软上限惩罚,默认关闭时恒为 ×1">Token 惩罚</span>
-                  <strong>×{{ currentDetail.metrics.tokenPenalty }}</strong>
-                </div>
-                <div class="aip-drawer__metric aip-drawer__metric--full">
-                  <span>状态</span>
-                  <ElSelect
-                    v-model="statusDraft"
-                    size="small"
-                    style="width: 140px"
-                    @change="handleStatusChange"
+                <div class="aip-drawer__metric-tile">
+                  <span class="aip-drawer__metric-label">累计 Token</span>
+                  <strong
+                    class="aip-drawer__metric-num aipt-num"
+                    :title="formatTokenTitle(currentDetail.metrics.latestCumulativeToken)"
+                    >{{ formatTokenCount(currentDetail.metrics.latestCumulativeToken) }}</strong
                   >
-                    <ElOption label="进行中" value="in_progress" />
-                    <ElOption label="已完成" value="finished" />
-                    <ElOption label="已放弃" value="abandoned" />
-                  </ElSelect>
                 </div>
+                <div class="aip-drawer__metric-tile">
+                  <span
+                    class="aip-drawer__metric-label"
+                    title="boost 公式分母 = 加权耗时 × tokenPenalty"
+                    >加权耗时</span
+                  >
+                  <strong
+                    class="aip-drawer__metric-num aipt-num"
+                    :title="`= (1 − wThink) × 墙钟 + wThink × (AI 工作累计 / 60),单位:分钟`"
+                    >{{ formatMinutes(currentDetail.metrics.effectiveMinutes) }}</strong
+                  >
+                </div>
+                <div class="aip-drawer__metric-tile">
+                  <span
+                    class="aip-drawer__metric-label"
+                    title="可选 token 软上限惩罚,默认关闭时恒为 ×1"
+                    >Token 惩罚</span
+                  >
+                  <strong class="aip-drawer__metric-num aipt-num"
+                    >×{{ currentDetail.metrics.tokenPenalty }}</strong
+                  >
+                </div>
+              </div>
+              <div class="aip-drawer__status-row">
+                <span class="aip-drawer__status-label">状态</span>
+                <ElSelect
+                  v-model="statusDraft"
+                  size="small"
+                  class="aip-drawer__status-select"
+                  @change="handleStatusChange"
+                >
+                  <ElOption label="进行中" value="in_progress" />
+                  <ElOption label="已完成" value="finished" />
+                  <ElOption label="已放弃" value="abandoned" />
+                </ElSelect>
               </div>
             </article>
 
             <!-- 关联 Bug -->
-            <article class="aip-card aip-card--flat">
+            <article class="aip-card aip-card--flat aip-drawer__section">
               <header class="aip-card__header">
                 <h3 class="aip-card__title">关联 Bug</h3>
                 <button
@@ -1098,25 +1137,35 @@ onMounted(() => {
                 </button>
               </header>
               <div class="aip-drawer__bug">
-                <div class="aip-drawer__bug-row">
-                  <span>数量</span>
-                  <strong>{{ currentDetail.linkedBugCount }}</strong>
+                <div class="aip-drawer__bug-main">
+                  <span class="aip-drawer__bug-num aipt-num">{{
+                    currentDetail.linkedBugCount
+                  }}</span>
+                  <span class="aip-drawer__bug-caption">来自 Jira 关联查询的 Bug 数量</span>
                 </div>
-                <div class="aip-drawer__bug-row">
-                  <span>JQL</span>
-                  <code class="aip-inline-code">{{
-                    currentDetail.linkedBugJql || '(未配置)'
-                  }}</code>
-                </div>
-                <div class="aip-drawer__bug-row">
-                  <span>最近刷新</span>
-                  <code class="aip-inline-code">{{ currentDetail.bugsRefreshedAt ?? '从未' }}</code>
-                </div>
+                <dl class="aip-drawer__bug-meta">
+                  <div class="aip-drawer__bug-meta-row">
+                    <dt>JQL</dt>
+                    <dd>
+                      <code class="aip-inline-code">{{
+                        currentDetail.linkedBugJql || '(未配置)'
+                      }}</code>
+                    </dd>
+                  </div>
+                  <div class="aip-drawer__bug-meta-row">
+                    <dt>最近刷新</dt>
+                    <dd>
+                      <code class="aip-inline-code">{{
+                        currentDetail.bugsRefreshedAt ?? '从未'
+                      }}</code>
+                    </dd>
+                  </div>
+                </dl>
               </div>
             </article>
 
             <!-- Iteration 时间线 -->
-            <article class="aip-card aip-card--flat">
+            <article class="aip-card aip-card--flat aip-drawer__section">
               <header class="aip-card__header">
                 <h3 class="aip-card__title">Iteration 时间线</h3>
                 <div class="aip-drawer__timeline-header-actions">
@@ -1469,146 +1518,276 @@ onMounted(() => {
 }
 
 /* ===== Drawer ===== */
+.aip-drawer :deep(.el-drawer__header) {
+  margin-bottom: 0;
+  padding: 16px 24px 14px;
+  border-bottom: 1px solid var(--aipt-border);
+  background: var(--aipt-surface-soft);
+  align-items: center;
+  gap: var(--aipt-space-3);
+}
+
+.aip-drawer :deep(.el-drawer__close-btn) {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--aipt-radius-sm);
+  color: var(--aipt-text-muted);
+  transition:
+    background var(--aipt-duration-base) var(--aipt-easing-out),
+    color var(--aipt-duration-base) var(--aipt-easing-out);
+}
+
+.aip-drawer :deep(.el-drawer__close-btn:hover) {
+  background: var(--aipt-surface-hover);
+  color: var(--aipt-text);
+}
+
+.aip-drawer :deep(.el-drawer__body) {
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .aip-drawer__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  width: 100%;
+  gap: var(--aipt-space-3);
+  flex: 1;
+  min-width: 0;
 }
 
 .aip-drawer__header-main {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--aipt-space-2);
   flex-wrap: wrap;
   min-width: 0;
+  flex: 1;
 }
 
-.aip-drawer__header-main h3 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text-primary);
-  line-height: 1.4;
+.aip-drawer__header-chip {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .aip-drawer__header-title {
   margin: 0;
   font-size: 15px;
   font-weight: 700;
-  color: var(--text-primary);
+  color: var(--aipt-text-strong);
   line-height: 1.4;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 460px;
+}
+
+.aip-drawer__header-title-input {
+  width: 320px;
 }
 
 .aip-drawer__header-actions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--aipt-space-2);
   flex-shrink: 0;
 }
 
-.aip-drawer__header-iconbtn {
+/* 统一的 icon button — header / boost / metric 都用同一个 */
+.aip-drawer__iconbtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: 1px solid rgba(96, 114, 153, 0.18);
-  background: transparent;
-  color: var(--text-secondary);
+  gap: 4px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--aipt-radius-sm);
+  border: 1px solid var(--aipt-border);
+  background: var(--aipt-surface);
+  color: var(--aipt-text-secondary);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition:
-    background 0.15s,
-    color 0.15s,
-    border-color 0.15s;
+    background var(--aipt-duration-base) var(--aipt-easing-out),
+    color var(--aipt-duration-base) var(--aipt-easing-out),
+    border-color var(--aipt-duration-base) var(--aipt-easing-out);
 }
 
-.aip-drawer__header-iconbtn:hover:not(:disabled) {
-  background: rgba(79, 110, 245, 0.08);
-  border-color: rgba(79, 110, 245, 0.24);
-  color: var(--accent-primary, #4f6ef5);
+.aip-drawer__iconbtn:hover:not(:disabled) {
+  background: var(--aipt-surface-hover);
+  border-color: var(--aipt-border-strong);
+  color: var(--aipt-aurora-1);
 }
 
-.aip-drawer__header-iconbtn:disabled {
+.aip-drawer__iconbtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.aip-drawer__header-iconbtn--primary {
-  background: var(--accent-primary, #4f6ef5);
-  border-color: var(--accent-primary, #4f6ef5);
-  color: #fff;
+.aip-drawer__iconbtn--primary {
+  background: var(--aipt-gradient-aurora);
+  border-color: transparent;
+  color: var(--aipt-text-on-accent);
+  box-shadow: var(--aipt-shadow-glow);
 }
 
-.aip-drawer__header-iconbtn--primary:hover:not(:disabled) {
-  background: #3a59da;
-  border-color: #3a59da;
-  color: #fff;
+.aip-drawer__iconbtn--primary:hover:not(:disabled) {
+  color: var(--aipt-text-on-accent);
+  box-shadow: var(--aipt-shadow-glow-strong);
 }
 
-.aip-drawer__header-title-input {
-  width: 260px;
+.aip-drawer__iconbtn--ghost {
+  background: transparent;
+  border-color: transparent;
 }
 
-.aip-drawer__header-link {
+.aip-drawer__iconbtn--ghost:hover:not(:disabled) {
+  background: var(--aipt-surface);
+  border-color: var(--aipt-border);
+}
+
+.aip-drawer__jira-link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--aipt-radius-sm);
+  background: rgba(110, 167, 245, 0.12);
+  border: 1px solid rgba(110, 167, 245, 0.28);
+  color: var(--aipt-aurora-1);
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent-primary, #4f6ef5);
   text-decoration: none;
+  transition:
+    background var(--aipt-duration-base) var(--aipt-easing-out),
+    color var(--aipt-duration-base) var(--aipt-easing-out);
 }
 
-.aip-drawer__header-link:hover {
-  text-decoration: underline;
+.aip-drawer__jira-link:hover {
+  background: rgba(110, 167, 245, 0.2);
 }
 
 .aip-drawer__body {
-  display: grid;
-  gap: 14px;
-  padding: 0 4px 16px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
-/* Boost Hero */
+.aip-drawer__placeholder {
+  padding: var(--aipt-space-6);
+}
+
+/* Tabs — 紧贴 header 下沿,做成"工具栏 tab"风格 */
+.aip-drawer__tabs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.aip-drawer__tabs :deep(.el-tabs__header) {
+  margin: 0;
+  padding: 0 24px;
+  background: var(--aipt-surface-soft);
+  border-bottom: 1px solid var(--aipt-border);
+}
+
+.aip-drawer__tabs :deep(.el-tabs__nav-wrap)::after {
+  display: none;
+}
+
+.aip-drawer__tabs :deep(.el-tabs__nav) {
+  border: none !important;
+}
+
+.aip-drawer__tabs :deep(.el-tabs__item) {
+  height: 42px;
+  line-height: 42px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aipt-text-muted);
+  padding: 0 var(--aipt-space-4) !important;
+  border: none !important;
+  transition: color var(--aipt-duration-base) var(--aipt-easing-out);
+}
+
+.aip-drawer__tabs :deep(.el-tabs__item:hover) {
+  color: var(--aipt-text);
+}
+
+.aip-drawer__tabs :deep(.el-tabs__item.is-active) {
+  color: var(--aipt-aurora-1);
+}
+
+.aip-drawer__tabs :deep(.el-tabs__active-bar) {
+  background: var(--aipt-gradient-aurora) !important;
+  height: 2px;
+  border-radius: 1px;
+  box-shadow: 0 0 12px rgba(110, 167, 245, 0.5);
+}
+
+.aip-drawer__tabs :deep(.el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+  padding: var(--aipt-space-5) var(--aipt-space-6) var(--aipt-space-6);
+  overflow-y: auto;
+}
+
+.aip-drawer__tabs :deep(.el-tab-pane) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipt-space-4);
+}
+
+.aip-drawer__section {
+  padding: var(--aipt-space-4) var(--aipt-space-5);
+}
+
+/* ===== Boost Hero ===== */
 .aip-drawer__boost {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1.05fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 20px 22px;
+  gap: var(--aipt-space-3);
+  padding: var(--aipt-space-5) var(--aipt-space-6);
   border-radius: var(--aipt-radius-lg);
   background: var(--aipt-surface);
   border: 1px solid var(--aipt-border);
   backdrop-filter: blur(var(--aipt-blur-md)) saturate(140%);
   -webkit-backdrop-filter: blur(var(--aipt-blur-md)) saturate(140%);
   overflow: hidden;
-  box-shadow: var(--aipt-shadow-glow);
+  box-shadow: var(--aipt-shadow-soft);
 }
 
 .aip-drawer__boost::before {
   content: '';
   position: absolute;
-  inset: 0;
-  background: var(--aipt-gradient-aurora-soft);
-  opacity: 0.35;
-  pointer-events: none;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: var(--aipt-gradient-aurora);
+  opacity: 0.55;
 }
 
 .aip-drawer__boost::after {
   content: '';
   position: absolute;
-  right: -100px;
-  top: -100px;
-  width: 260px;
-  height: 260px;
+  right: -120px;
+  top: -120px;
+  width: 280px;
+  height: 280px;
   background: var(--aipt-gradient-mint);
-  opacity: 0.18;
-  filter: blur(60px);
+  opacity: 0.14;
+  filter: blur(70px);
   pointer-events: none;
   border-radius: 50%;
 }
@@ -1619,25 +1798,28 @@ onMounted(() => {
 }
 
 .aip-drawer__boost-side {
-  display: grid;
-  gap: 3px;
-  justify-items: center;
-  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   min-width: 0;
+}
+
+.aip-drawer__boost-side--right {
+  align-items: flex-end;
+  text-align: right;
 }
 
 .aip-drawer__boost-label {
   font-size: 11px;
-  color: var(--text-soft);
-  letter-spacing: 0.04em;
+  color: var(--aipt-text-muted);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+  font-weight: 600;
 }
 
-.aip-drawer__boost-value {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
+.aip-drawer__boost-label--center {
+  text-align: center;
 }
 
 .aip-drawer__boost-value-row {
@@ -1646,72 +1828,34 @@ onMounted(() => {
   gap: 6px;
 }
 
-.aip-drawer__boost-subdivider {
-  width: 24px;
-  height: 1px;
-  margin: 4px 0 2px;
-  background: rgba(96, 114, 153, 0.2);
-}
-
-.aip-drawer__boost-sublabel {
-  font-size: 10px;
-  color: var(--text-soft);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.aip-drawer__boost-subvalue {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-secondary);
+.aip-drawer__boost-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--aipt-text-strong);
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
 }
 
-.aip-drawer__boost-edit-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 3px 8px;
-  border-radius: 6px;
-  border: 1px solid rgba(96, 114, 153, 0.18);
-  background: transparent;
-  color: var(--text-secondary);
+.aip-drawer__boost-sub {
+  font-size: 11px;
+  color: var(--aipt-text-muted);
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+}
+
+.aip-drawer__boost-sub strong {
+  color: var(--aipt-text-secondary);
+  font-weight: 700;
   font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    color 0.15s,
-    border-color 0.15s;
-}
-
-.aip-drawer__boost-edit-btn:hover:not(:disabled) {
-  background: rgba(79, 110, 245, 0.08);
-  border-color: rgba(79, 110, 245, 0.24);
-  color: var(--accent-primary, #4f6ef5);
-}
-
-.aip-drawer__boost-edit-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.aip-drawer__boost-edit-btn--primary {
-  background: var(--accent-primary, #4f6ef5);
-  border-color: var(--accent-primary, #4f6ef5);
-  color: #fff;
-}
-
-.aip-drawer__boost-edit-btn--primary:hover:not(:disabled) {
-  background: #3a59da;
-  border-color: #3a59da;
-  color: #fff;
+  margin-left: 4px;
 }
 
 .aip-drawer__boost-edit {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
 .aip-drawer__boost-input {
@@ -1720,108 +1864,169 @@ onMounted(() => {
 
 .aip-drawer__boost-unit {
   font-size: 12px;
-  color: var(--text-soft);
+  color: var(--aipt-text-muted);
 }
 
 .aip-drawer__boost-arrow {
-  color: rgba(96, 114, 153, 0.4);
+  color: var(--aipt-text-faint);
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .aip-drawer__boost-center {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 4px;
-  justify-items: center;
-  padding: 0 10px;
+  padding: 0 var(--aipt-space-2);
 }
 
 .aip-drawer__boost-main {
-  font-size: 38px;
+  font-size: 44px;
   font-weight: 800;
   background: var(--aipt-gradient-mint);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  filter: drop-shadow(0 4px 18px rgba(159, 229, 212, 0.32));
+  filter: drop-shadow(0 4px 24px rgba(159, 229, 212, 0.32));
 }
 
-.aip-drawer__boost-caption {
+.aip-drawer__boost-formula {
   font-size: 11px;
-  color: var(--text-soft);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-/* 指标网格 */
-.aip-drawer__metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.aip-drawer__metric {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--surface-elevated, rgba(255, 255, 255, 0.6));
-  border: 1px solid rgba(96, 114, 153, 0.08);
-}
-
-.aip-drawer__metric--full {
-  grid-column: span 3;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.aip-drawer__metric span {
-  color: var(--text-soft);
-  font-size: 11.5px;
+  color: var(--aipt-text-muted);
   letter-spacing: 0.02em;
 }
 
-.aip-drawer__metric strong {
-  color: var(--text-primary);
-  font-size: 16px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Bug */
-.aip-drawer__bug {
+/* ===== 指标网格 ===== */
+.aip-drawer__metric-grid {
   display: grid;
-  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--aipt-space-3);
 }
 
-.aip-drawer__bug-row {
+.aip-drawer__metric-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--aipt-space-3) var(--aipt-space-4);
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-surface-soft);
+  border: 1px solid var(--aipt-border-faint);
+  transition:
+    background var(--aipt-duration-base) var(--aipt-easing-out),
+    border-color var(--aipt-duration-base) var(--aipt-easing-out);
+}
+
+.aip-drawer__metric-tile:hover {
+  background: var(--aipt-surface);
+  border-color: var(--aipt-border);
+}
+
+.aip-drawer__metric-label {
+  font-size: 11px;
+  color: var(--aipt-text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.aip-drawer__metric-num {
+  color: var(--aipt-text-strong);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.aip-drawer__status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aipt-space-3);
+  margin-top: var(--aipt-space-3);
+  padding: var(--aipt-space-3) var(--aipt-space-4);
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-surface-soft);
+  border: 1px solid var(--aipt-border-faint);
+}
+
+.aip-drawer__status-label {
+  font-size: 12px;
+  color: var(--aipt-text-secondary);
+  font-weight: 600;
+}
+
+.aip-drawer__status-select {
+  width: 140px;
+}
+
+/* ===== Bug ===== */
+.aip-drawer__bug {
+  display: flex;
+  gap: var(--aipt-space-5);
+  flex-wrap: wrap;
+}
+
+.aip-drawer__bug-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--aipt-space-3) var(--aipt-space-4);
+  border-radius: var(--aipt-radius-md);
+  background: var(--aipt-state-warning-soft);
+  border: 1px solid rgba(245, 196, 137, 0.3);
+  min-width: 160px;
+}
+
+.aip-drawer__bug-num {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--aipt-state-warning);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.aip-drawer__bug-caption {
+  font-size: 11px;
+  color: var(--aipt-text-muted);
+  letter-spacing: 0.02em;
+}
+
+.aip-drawer__bug-meta {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipt-space-2);
+  margin: 0;
+}
+
+.aip-drawer__bug-meta-row {
   display: flex;
   align-items: baseline;
-  gap: 10px;
-  padding: 6px 0;
+  gap: var(--aipt-space-3);
 }
 
-.aip-drawer__bug-row span {
+.aip-drawer__bug-meta-row dt {
   flex-shrink: 0;
-  width: 80px;
-  font-size: 12px;
-  color: var(--text-soft);
+  width: 72px;
+  font-size: 11px;
+  color: var(--aipt-text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 600;
 }
 
-.aip-drawer__bug-row strong {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.aip-drawer__bug-row code {
+.aip-drawer__bug-meta-row dd {
+  margin: 0;
   flex: 1;
+  min-width: 0;
   word-break: break-all;
 }
 
@@ -1829,18 +2034,23 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
-  border: 1px solid rgba(79, 110, 245, 0.2);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--accent-primary, #4f6ef5);
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(110, 167, 245, 0.28);
+  border-radius: var(--aipt-radius-sm);
+  background: rgba(110, 167, 245, 0.1);
+  color: var(--aipt-aurora-1);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+  transition:
+    background var(--aipt-duration-base) var(--aipt-easing-out),
+    border-color var(--aipt-duration-base) var(--aipt-easing-out);
 }
 
 .aip-drawer__refresh-btn:hover:not(:disabled) {
-  background: rgba(79, 110, 245, 0.08);
+  background: rgba(110, 167, 245, 0.18);
+  border-color: rgba(110, 167, 245, 0.42);
 }
 
 .aip-drawer__refresh-btn:disabled {
@@ -2041,18 +2251,25 @@ onMounted(() => {
 }
 
 @media (max-width: 720px) {
-  .aip-drawer__metrics-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .aip-drawer__metric--full {
-    grid-column: span 2;
-  }
   .aip-drawer__boost {
-    flex-wrap: wrap;
-    justify-content: center;
+    grid-template-columns: 1fr;
+    gap: var(--aipt-space-3);
+    text-align: center;
+  }
+  .aip-drawer__boost-side,
+  .aip-drawer__boost-side--right {
+    align-items: center;
+    text-align: center;
   }
   .aip-drawer__boost-arrow {
-    display: none;
+    transform: rotate(90deg);
+    margin: 0 auto;
+  }
+  .aip-drawer__header-title {
+    max-width: 220px;
+  }
+  .aip-drawer__tabs :deep(.el-tabs__content) {
+    padding: var(--aipt-space-4);
   }
 }
 
