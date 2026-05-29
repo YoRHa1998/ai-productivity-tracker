@@ -8,6 +8,7 @@ import {
   RETROSPECTIVE_LIMITS,
   buildRetrospectiveBundle,
   computeRetrospectiveSnapshot,
+  listHarnessSuggestions,
   loadRetrospective,
   removeRetrospective,
   writeRetrospective,
@@ -337,6 +338,84 @@ describe('retrospective-store', () => {
       appendIteration(jiraKey, { kind: 'coding', cumulativeToken: 2000 }, root) // seq 3
     }
 
+    it('scope 归一化:缺省兜底 project + 注入需求 projectSlug;general 清空 projectSlug', () => {
+      saveRequirement(
+        {
+          jiraKey: 'PROJ-HS',
+          title: 'scope 测试',
+          projectSlug: '@scope/app',
+          manualEstimateMinutes: 60
+        },
+        { root }
+      )
+      appendIteration('PROJ-HS', { kind: 'init' }, root)
+      appendIteration('PROJ-HS', { kind: 'coding', cumulativeToken: 1 }, root)
+
+      const written = writeRetrospective(
+        'PROJ-HS',
+        {
+          narrative: makeNarrative(),
+          harnessSummary: {
+            suggestions: [
+              // 缺 scope → 兜底 project,projectSlug 回退需求的 @scope/app
+              { category: 'guardrail-rule', title: '默认项目护栏', signal: '', content: 'c1' },
+              // 显式 general → projectSlug 强制清空(即便误传也忽略)
+              {
+                category: 'self-evolution',
+                scope: 'general',
+                projectSlug: '不该出现',
+                title: '通用协作护栏',
+                signal: '',
+                content: 'c2'
+              },
+              // 显式 project + 显式 projectSlug → 保留显式值
+              {
+                category: 'checklist',
+                scope: 'project',
+                projectSlug: '@scope/other',
+                title: '另一项目护栏',
+                signal: '',
+                content: 'c3'
+              }
+            ]
+          }
+        },
+        root
+      )
+
+      const s = written.harnessSummary!.suggestions
+      expect(s[0].scope).toBe('project')
+      expect(s[0].projectSlug).toBe('@scope/app')
+      expect(s[1].scope).toBe('general')
+      expect(s[1].projectSlug).toBe('')
+      expect(s[2].scope).toBe('project')
+      expect(s[2].projectSlug).toBe('@scope/other')
+    })
+
+    it('向后兼容:盘上老 suggestion 无 scope 字段,读回归 ""(未分类)', () => {
+      seedRequirementWithIterations('PROJ-HLEGACY')
+      // 先正常落一份,再手动改盘文件抹掉 scope/projectSlug 模拟老数据
+      writeRetrospective(
+        'PROJ-HLEGACY',
+        {
+          narrative: makeNarrative(),
+          harnessSummary: {
+            suggestions: [{ category: 'baseline', title: '老护栏', signal: '', content: 'c' }]
+          }
+        },
+        root
+      )
+      const file = retrospectivePath('PROJ-HLEGACY', root)
+      const onDisk = JSON.parse(readFileSync(file, 'utf-8'))
+      delete onDisk.harnessSummary.suggestions[0].scope
+      delete onDisk.harnessSummary.suggestions[0].projectSlug
+      writeFileSync(file, JSON.stringify(onDisk), 'utf-8')
+
+      const back = loadRetrospective('PROJ-HLEGACY', root)
+      expect(back!.harnessSummary!.suggestions[0].scope).toBe('')
+      expect(back!.harnessSummary!.suggestions[0].projectSlug).toBe('')
+    })
+
     it('落盘并读回结构化护栏建议', () => {
       seedRequirementWithIterations('PROJ-H1')
       const written = writeRetrospective(
@@ -475,6 +554,118 @@ describe('retrospective-store', () => {
       expect(back).not.toBeNull()
       expect(back!.harnessSummary).toBeUndefined()
     })
+  })
+})
+
+describe('listHarnessSuggestions', () => {
+  let root: string
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'aip-harness-agg-'))
+  })
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  function seed(jiraKey: string, title: string): void {
+    saveRequirement({ jiraKey, title, manualEstimateMinutes: 120 }, { root })
+    appendIteration(jiraKey, { kind: 'init' }, root)
+    appendIteration(jiraKey, { kind: 'coding', cumulativeToken: 1000 }, root)
+  }
+
+  it('无任何复盘时返回空数组', () => {
+    expect(listHarnessSuggestions(root)).toEqual([])
+  })
+
+  it('跨需求摊平 harnessSummary 并附来源信息', () => {
+    seed('PROJ-A', '需求 A')
+    seed('PROJ-B', '需求 B')
+
+    writeRetrospective(
+      'PROJ-A',
+      {
+        narrative: makeNarrative(),
+        harnessSummary: {
+          suggestions: [
+            { category: 'guardrail-rule', title: 'A1', signal: 's', content: 'c' },
+            { category: 'checklist', title: 'A2', signal: '', content: 'c2' }
+          ]
+        }
+      },
+      root
+    )
+    writeRetrospective(
+      'PROJ-B',
+      {
+        narrative: makeNarrative(),
+        harnessSummary: {
+          suggestions: [{ category: 'check-script', title: 'B1', signal: '', content: 'c3' }]
+        }
+      },
+      root
+    )
+
+    const all = listHarnessSuggestions(root)
+    expect(all).toHaveLength(3)
+    const a1 = all.find((s) => s.title === 'A1')
+    expect(a1).toBeDefined()
+    expect(a1!.jiraKey).toBe('PROJ-A')
+    expect(a1!.jiraTitle).toBe('需求 A')
+    expect(a1!.generatedAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
+  })
+
+  it('跳过没有 harnessSummary 的复盘 / 需求', () => {
+    seed('PROJ-C', '需求 C')
+    seed('PROJ-D', '需求 D')
+    // C 有复盘但无 harness;D 有 harness
+    writeRetrospective('PROJ-C', { narrative: makeNarrative() }, root)
+    writeRetrospective(
+      'PROJ-D',
+      {
+        narrative: makeNarrative(),
+        harnessSummary: {
+          suggestions: [{ category: 'baseline', title: 'D1', signal: '', content: 'c' }]
+        }
+      },
+      root
+    )
+
+    const all = listHarnessSuggestions(root)
+    expect(all).toHaveLength(1)
+    expect(all[0].jiraKey).toBe('PROJ-D')
+  })
+
+  it('按 generatedAt 倒序(最新复盘在前)', async () => {
+    seed('PROJ-E', '需求 E')
+    seed('PROJ-F', '需求 F')
+
+    writeRetrospective(
+      'PROJ-E',
+      {
+        narrative: makeNarrative(),
+        harnessSummary: {
+          suggestions: [{ category: 'guardrail-rule', title: 'E1', signal: '', content: 'c' }]
+        }
+      },
+      root
+    )
+    // 确保 generatedAt 严格晚于 E(ISO 毫秒精度)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    writeRetrospective(
+      'PROJ-F',
+      {
+        narrative: makeNarrative(),
+        harnessSummary: {
+          suggestions: [{ category: 'manifest', title: 'F1', signal: '', content: 'c' }]
+        }
+      },
+      root
+    )
+
+    const all = listHarnessSuggestions(root)
+    expect(all[0].jiraKey).toBe('PROJ-F')
+    expect(all[1].jiraKey).toBe('PROJ-E')
   })
 })
 

@@ -664,7 +664,7 @@ agent 返回「本轮未沉淀新经验」,原样转述给用户。
  *     - lessons-extract = 跨需求复用的知识条目(自动合并去重)
  * ────────────────────────────────────────────────────────────────────*/
 
-export const RETROSPECTIVE_SKILL_VERSION = '1.1.0'
+export const RETROSPECTIVE_SKILL_VERSION = '1.2.0'
 
 export const RETROSPECTIVE_SKILL_KEY = 'retrospective-report'
 export const RETROSPECTIVE_CLAUDE_FILENAME = 'SKILL.md'
@@ -781,6 +781,14 @@ ai_productivity_extract_retro_bundle({ jiraKey: "<解析出的 jiraKey>" })
 
 映射指引:\`fileChurnMap\` 反复改 → guardrail-rule(能脚本化再补 check-script);\`abnormalStopReasons\` → checklist;\`topThinkSeqs\` 卡点 → checklist / self-evolution;pitfall / tooling 类 lesson → 对应护栏。\`content\` 写成可直接贴进 harness 的规则文字 / 脚本片段 / checklist 条目。
 
+**每条必标 \`scope\`(通用 / 项目专属,默认 project)**:
+
+- \`scope: "general"\` = **跨项目通用护栏**:与具体业务/仓库无关,换个项目也成立。典型是 AI 协作元规则(如「\`stale_timeout\` 出现一次即 \`/session-handoff\` 切窗」「上下文偏长立即拆轮」)、语言/框架通用陷阱、self-evolution 触发时机约定。\`projectSlug\` 留空。
+- \`scope: "project"\`(默认)= **本仓库架构专属护栏**:引用本项目的模块/store/composable/目录约定(如「派生状态必须经 segmentStore getter 收口」)。\`projectSlug\` 填 bundle 的 \`currentProjectSlug\`。
+- 判定口诀:**把规则正文里的项目专有名词抹掉后是否还成立** —— 成立 → general,不成立 → project。判定不清保守归 project。
+
+**抽象层级(关键,避免"太下沉到业务"):**\`title\` / \`content\` 写**持久不变式**(架构约定 / 协作约束),不是本次事件流水。把"#182 才抽 bridge""这次反复改 album.vue"这类一次性证据放进 \`signal\` 与 \`anchorSeqs\`,**不要混进 title/content**。一条好的护栏读起来像 lint 规则,不像 changelog。
+
 **价值优先**:无可沉淀的 harness 约束(本需求没暴露值得固化的工程信号)时,传 \`harnessSummary: { suggestions: [] }\` 或整体省略,**禁止凑数**。空 title / content 或非法 category 的条目会被 agent 静默丢弃。
 
 ### Step 3:落盘复盘报告
@@ -804,11 +812,20 @@ ai_productivity_save_retrospective({
     suggestions: [
       {
         category: "guardrail-rule",
+        scope: "project", // 本仓库架构专属
+        projectSlug: "<currentProjectSlug>",
         title: "API 必须经 src/api 收口",
         signal: "本需求多轮反复在组件里直引 axios",
         content: "禁止业务代码 import axios,统一走 src/utils/request.ts",
         targetFile: "docs/ai/harness/technical-harness-guardrails.md",
         anchorSeqs: [4, 6]
+      },
+      {
+        category: "self-evolution",
+        scope: "general", // 跨项目通用的 AI 协作护栏,projectSlug 留空
+        title: "上下文偏长立即切窗",
+        signal: "本需求出现一次 stale_timeout / 上下文明显偏长",
+        content: "单需求累计触碰文件 ≥ N 或出现一次 stale_timeout,立即 /session-handoff 切窗,不要硬撑"
       }
     ]
   },
@@ -928,7 +945,17 @@ ai_productivity_extract_retro_bundle({ jiraKey: "<解析出的 jiraKey>" })
 - \`manifest\`:manifest.json 治理边界调整 ← 治理域 / 边界变化
 - \`self-evolution\`:触发时机 / AGENTS.md 入口约定 ← topThinkSeqs 卡点暴露规则没写清
 
-\`content\` 写成可直接贴进 harness 的规则文字 / 脚本片段 / checklist 条目。**价值优先**:无可沉淀护栏时传 \`harnessSummary: { suggestions: [] }\` 或省略,**禁止凑数**;空 title/content 或非法 category 的条目会被静默丢弃。
+\`content\` 写成可直接贴进 harness 的规则文字 / 脚本片段 / checklist 条目。
+
+**每条必标 \`scope\`(默认 project):**
+
+- \`scope: "general"\` = 跨项目通用护栏(AI 协作元规则 / 语言框架通用陷阱,如 \`stale_timeout\`→\`/session-handoff\` 切窗),\`projectSlug\` 留空
+- \`scope: "project"\`(默认)= 本仓库架构专属(引用项目 store/composable/目录约定),\`projectSlug\` 填 \`currentProjectSlug\`
+- 判定口诀:抹掉规则正文里的项目专有名词后是否仍成立 → 成立 general / 不成立 project,不清保守 project
+
+**抽象层级(避免"太下沉到业务"):**\`title\`/\`content\` 写持久不变式(架构约定/协作约束),把「本次反复改某文件 / #182 才收敛」这类一次性证据放 \`signal\` + \`anchorSeqs\`,不混进 title/content。好护栏读起来像 lint 规则不像 changelog。
+
+**价值优先**:无可沉淀护栏时传 \`harnessSummary: { suggestions: [] }\` 或省略,**禁止凑数**;空 title/content 或非法 category 的条目会被静默丢弃。
 
 ## Step 3:落盘
 
@@ -937,7 +964,7 @@ ai_productivity_save_retrospective({
   jiraKey: "<解析出的 jiraKey>",
   source: "cursor",
   narrative: { overview, phases, highlights, issues, improvements, pitfallsObserved, nextSteps, splitSuggestions? },
-  harnessSummary: { overview?, suggestions: [{ category, title, signal, content, targetFile?, anchorSeqs? }] }, // 可选,无则省略/空数组
+  harnessSummary: { overview?, suggestions: [{ category, scope, projectSlug?, title, signal, content, targetFile?, anchorSeqs? }] }, // 可选,无则省略/空数组;scope=project 填 projectSlug,general 留空
   referencedLessonIds: [...],
   anchorIterationSeqs: [...]
 })

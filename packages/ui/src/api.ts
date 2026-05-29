@@ -157,6 +157,11 @@ export type RequirementSummary = {
   iterationCount: number
   latestIterationAt: string | null
   /**
+   * 需求进入终态(finished/abandoned)的定格时刻;非空时 metrics 已定格在该时刻,
+   * 墙钟 / boost 不再随完成后的自动上报膨胀。null = 进行中或老数据未记录。
+   */
+  finishedAt: string | null
+  /**
    * 需求级 wThink 覆盖值。`init` 时由 daemon 把当下全局 `formula.wThink` 快照写入,之后
    * 调全局不再影响该需求。`null` 表示老数据(rc.26 之前)未固化,前端按全局值兜底显示。
    */
@@ -764,8 +769,15 @@ export type HarnessSuggestionCategory =
   | 'manifest'
   | 'self-evolution'
 
+/** harness 护栏适用范围:'general' 通用 | 'project' 项目专属 | '' 老数据未分类 */
+export type HarnessScope = 'general' | 'project' | ''
+
 export type RetrospectiveHarnessSuggestion = {
   category: HarnessSuggestionCategory
+  /** 适用范围:通用护栏(跨项目)/ 项目专属 / '' 老数据未分类 */
+  scope: HarnessScope
+  /** scope='project' 时的项目标识(=package.json name) */
+  projectSlug: string
   title: string
   signal: string
   content: string
@@ -832,5 +844,25 @@ export function deleteRetrospective(jiraKey: string) {
   return agentRequest<{ deleted: boolean; jiraKey: string }>(
     `/ai-productivity/requirements/${encodeURIComponent(jiraKey)}/retrospective`,
     { method: 'DELETE' }
+  )
+}
+
+/** 跨需求聚合后的单条 harness 护栏建议(在 suggestion 基础上带来源需求信息) */
+export type AggregatedHarnessSuggestion = RetrospectiveHarnessSuggestion & {
+  /** 来源需求 jiraKey */
+  jiraKey: string
+  /** 来源需求标题 */
+  jiraTitle: string
+  /** 来源复盘报告生成时间(ISO) */
+  generatedAt: string
+}
+
+/**
+ * 跨需求聚合所有复盘报告里的 harness 护栏建议(供「复盘经验」页 harness 视图)。
+ * 实时从各需求 retrospective.json 摊平,按 generatedAt 倒序。
+ */
+export function listHarnessSuggestions() {
+  return agentRequest<{ suggestions: AggregatedHarnessSuggestion[] }>(
+    '/ai-productivity/harness-suggestions'
   )
 }

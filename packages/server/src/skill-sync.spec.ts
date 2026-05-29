@@ -747,7 +747,7 @@ describe('retrospective-report skill 同步注入(v1.0.0-rc.23)', () => {
   it('install 时同步写入 retrospective-report 到 ~/.claude/skills 与 ~/.cursor/rules', async () => {
     const res = await installAiTrackSkillBundle()
 
-    expect(res.retrospective.version).toBe('1.1.0')
+    expect(res.retrospective.version).toBe('1.2.0')
     expect(res.retrospective.claude.path).toBe(
       path.join(tmpHome, '.claude', 'skills', 'retrospective-report', 'SKILL.md')
     )
@@ -771,7 +771,7 @@ describe('retrospective-report skill 同步注入(v1.0.0-rc.23)', () => {
 
   it('inspect:bundle 状态包含 retrospective.{claude,cursor} 同步态', async () => {
     const empty = await inspectAiTrackSkillBundle()
-    expect(empty.retrospective.version).toBe('1.1.0')
+    expect(empty.retrospective.version).toBe('1.2.0')
     expect(empty.retrospective.claude.installed).toBe(false)
     expect(empty.retrospective.cursor.installed).toBe(false)
 

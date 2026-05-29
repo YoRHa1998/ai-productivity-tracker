@@ -19,13 +19,27 @@ import {
   AgentRequestError,
   deleteLesson,
   getLessonDetail,
+  listHarnessSuggestions,
   listLessons,
+  type AggregatedHarnessSuggestion,
+  type HarnessSuggestionCategory,
   type LessonDetail,
   type LessonScope,
   type LessonSummary,
   type LessonType
 } from '../api'
 import DonutMetric from '../charts/DonutMetric.vue'
+import {
+  HARNESS_CATEGORY_CHIP,
+  HARNESS_CATEGORY_LABEL,
+  HARNESS_CATEGORY_OPTIONS,
+  HARNESS_CATEGORY_ORDER,
+  HARNESS_SCOPE_CHIP,
+  buildSuggestionMarkdown,
+  harnessScopeLabel,
+  normalizeHarnessScope
+} from '../lib/harness'
+import { renderMarkdown } from '../lib/markdown'
 import '../styles/aip-shared.css'
 
 /**
@@ -80,7 +94,7 @@ const SOURCE_LABEL: Record<string, string> = {
   manual: '手动'
 }
 
-const TRIGGER_HINT = '经验提取 当前需求 INSTANT-XXXX'
+const TRIGGER_HINT = '需求复盘 当前需求 INSTANT-XXXX'
 
 /**
  * v2.17.0「范围」筛选下拉选项构造规则:
@@ -190,6 +204,143 @@ const typeDistribution = computed(() => {
   return slices
 })
 
+// ── harness 沉淀(跨需求聚合各复盘报告的护栏建议)──────────────────
+type ViewMode = 'lessons' | 'harness'
+const viewMode = ref<ViewMode>('lessons')
+
+const harnessLoading = ref(false)
+const harnessLoaded = ref(false)
+const harnessError = ref('')
+const harnessSuggestions = ref<AggregatedHarnessSuggestion[]>([])
+
+const filterCategory = ref<HarnessSuggestionCategory | ''>('')
+const filterHarnessJiraKey = ref<string>('')
+// harness scope 筛选:'all' / 'general'(通用) / 'project'(项目专属,任意 slug) / 具体 projectSlug
+const filterHarnessScope = ref<string>('all')
+
+const HARNESS_CATEGORY_COLOR: Record<HarnessSuggestionCategory, string> = {
+  'guardrail-rule': '#6ea7f5',
+  'check-script': '#9fe5d4',
+  checklist: '#f5c489',
+  baseline: 'rgba(255,255,255,0.28)',
+  manifest: '#b89ff5',
+  'self-evolution': '#f08597'
+}
+
+const harnessStats = computed(() => {
+  const counts = {} as Record<HarnessSuggestionCategory, number>
+  for (const cat of HARNESS_CATEGORY_ORDER) counts[cat] = 0
+  for (const s of harnessSuggestions.value) {
+    counts[s.category] = (counts[s.category] ?? 0) + 1
+  }
+  return counts
+})
+
+const harnessJiraKeyOptions = computed(() => {
+  const set = new Set<string>()
+  for (const s of harnessSuggestions.value) if (s.jiraKey) set.add(s.jiraKey)
+  return Array.from(set).sort()
+})
+
+// harness scope 下拉:固定「通用」+ 各项目专属 slug;有老数据(scope='')时补「未分类」
+const harnessProjectSlugOptions = computed(() => {
+  const set = new Set<string>()
+  for (const s of harnessSuggestions.value) {
+    if (normalizeHarnessScope(s.scope) === 'project' && s.projectSlug) set.add(s.projectSlug)
+  }
+  return Array.from(set).sort()
+})
+
+const hasUnscopedHarness = computed(() =>
+  harnessSuggestions.value.some((s) => normalizeHarnessScope(s.scope) === '')
+)
+
+const filteredHarness = computed(() => {
+  const scopeFilter = filterHarnessScope.value
+  return harnessSuggestions.value.filter((s) => {
+    if (filterCategory.value && s.category !== filterCategory.value) return false
+    if (filterHarnessJiraKey.value && s.jiraKey !== filterHarnessJiraKey.value) return false
+    if (scopeFilter !== 'all') {
+      const normalized = normalizeHarnessScope(s.scope)
+      if (scopeFilter === 'general' && normalized !== 'general') return false
+      else if (scopeFilter === 'unscoped' && normalized !== '') return false
+      else if (
+        scopeFilter !== 'general' &&
+        scopeFilter !== 'unscoped' &&
+        !(normalized === 'project' && s.projectSlug === scopeFilter)
+      ) {
+        return false
+      }
+    }
+    return true
+  })
+})
+
+const harnessCategoryDistribution = computed(() => {
+  const slices: Array<{ name: string; value: number; color: string }> = []
+  for (const cat of HARNESS_CATEGORY_ORDER) {
+    const v = harnessStats.value[cat]
+    if (v <= 0) continue
+    slices.push({ name: HARNESS_CATEGORY_LABEL[cat], value: v, color: HARNESS_CATEGORY_COLOR[cat] })
+  }
+  return slices
+})
+
+function renderMd(text: string): string {
+  return renderMarkdown(text)
+}
+
+function selectLessonType(type: LessonType): void {
+  viewMode.value = 'lessons'
+  filterType.value = filterType.value === type ? '' : type
+}
+
+function selectHarnessCategory(category: HarnessSuggestionCategory): void {
+  viewMode.value = 'harness'
+  filterCategory.value = filterCategory.value === category ? '' : category
+  if (!harnessLoaded.value) void loadHarness()
+}
+
+async function loadHarness(): Promise<void> {
+  harnessLoading.value = true
+  harnessError.value = ''
+  try {
+    const res = await listHarnessSuggestions()
+    harnessSuggestions.value = res.suggestions
+    harnessLoaded.value = true
+  } catch (err) {
+    harnessError.value = err instanceof AgentRequestError ? err.message : (err as Error).message
+    harnessSuggestions.value = []
+  } finally {
+    harnessLoading.value = false
+  }
+}
+
+async function copyToClipboard(text: string, okMsg: string): Promise<void> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      await navigator.clipboard.writeText(text)
+      ElMessage.success(okMsg)
+    } else {
+      ElMessage.info('当前环境不支持剪贴板,请手动复制')
+    }
+  } catch {
+    ElMessage.info('复制失败,请手动复制')
+  }
+}
+
+function copyOneHarness(s: AggregatedHarnessSuggestion): void {
+  void copyToClipboard(buildSuggestionMarkdown(s), '已复制该护栏建议,可贴进项目 harness')
+}
+
+function copyAllHarness(): void {
+  const list = filteredHarness.value
+  if (!list.length) return
+  const parts: string[] = ['# Harness 增量建议（来自需求复盘）', '']
+  for (const s of list) parts.push(buildSuggestionMarkdown(s), '')
+  void copyToClipboard(parts.join('\n').trimEnd() + '\n', '已复制全部护栏建议为 Markdown')
+}
+
 async function refresh(): Promise<void> {
   loading.value = true
   errorMessage.value = ''
@@ -201,6 +352,8 @@ async function refresh(): Promise<void> {
   } finally {
     loading.value = false
   }
+  // harness 聚合数据已加载过 / 当前正处于 harness 视图时,刷新按钮一并刷新
+  if (harnessLoaded.value || viewMode.value === 'harness') void loadHarness()
 }
 
 async function openDetail(row: LessonSummary): Promise<void> {
@@ -284,6 +437,8 @@ onMounted(() => {
     await refresh()
     await consumeFocusQuery()
   })()
+  // 挂载即拉一次 harness 聚合,让「harness 沉淀」分类卡常驻显示真实计数
+  void loadHarness()
 })
 
 watch(
@@ -300,7 +455,7 @@ watch(
       <div class="aip-lessons__heading">
         <h1 class="aip-lessons__page-title aipt-aurora-text">复盘经验</h1>
         <p class="aip-lessons__page-sub">
-          每个需求结束时用「经验提取」触发 lessons-extract skill,5 维度可复用经验沉淀于此
+          每个需求结束时触发「需求复盘」,沉淀于此的可复用经验与 harness 护栏建议持续优化 AI
         </p>
       </div>
       <div class="aip-lessons__heading-actions">
@@ -310,21 +465,50 @@ watch(
     </header>
 
     <div class="aip-lessons__overview">
-      <div class="aip-lessons__metrics">
-        <button
-          v-for="meta in TYPE_OPTIONS"
-          :key="meta.value"
-          type="button"
-          class="aip-lessons__metric aipt-glass aipt-glow"
-          :class="{ 'is-active': filterType === meta.value }"
-          @click="filterType = filterType === meta.value ? '' : meta.value"
-        >
-          <span class="aip-lessons__metric-dot" :style="{ background: TYPE_COLOR[meta.value] }" />
-          <span class="aip-lessons__metric-label">{{ meta.label }}</span>
-          <span class="aip-lessons__metric-count aipt-num">{{ stats[meta.value] }}</span>
-        </button>
+      <div class="aip-lessons__stat-stack">
+        <div class="aip-lessons__stat-group">
+          <span class="aip-lessons__group-label">经验沉淀</span>
+          <div class="aip-lessons__metrics">
+            <button
+              v-for="meta in TYPE_OPTIONS"
+              :key="meta.value"
+              type="button"
+              class="aip-lessons__metric aipt-glass aipt-glow"
+              :class="{ 'is-active': viewMode === 'lessons' && filterType === meta.value }"
+              @click="selectLessonType(meta.value)"
+            >
+              <span
+                class="aip-lessons__metric-dot"
+                :style="{ background: TYPE_COLOR[meta.value] }"
+              />
+              <span class="aip-lessons__metric-label">{{ meta.label }}</span>
+              <span class="aip-lessons__metric-count aipt-num">{{ stats[meta.value] }}</span>
+            </button>
+          </div>
+        </div>
+        <div class="aip-lessons__stat-group">
+          <span class="aip-lessons__group-label">harness 沉淀</span>
+          <div class="aip-lessons__metrics">
+            <button
+              v-for="opt in HARNESS_CATEGORY_OPTIONS"
+              :key="opt.value"
+              type="button"
+              class="aip-lessons__metric aipt-glass aipt-glow"
+              :class="{ 'is-active': viewMode === 'harness' && filterCategory === opt.value }"
+              @click="selectHarnessCategory(opt.value)"
+            >
+              <span
+                class="aip-lessons__metric-dot"
+                :style="{ background: HARNESS_CATEGORY_COLOR[opt.value] }"
+              />
+              <span class="aip-lessons__metric-label">{{ opt.label }}</span>
+              <span class="aip-lessons__metric-count aipt-num">{{ harnessStats[opt.value] }}</span>
+            </button>
+          </div>
+        </div>
       </div>
       <DonutMetric
+        v-if="viewMode === 'lessons'"
         title="经验类型占比"
         subtitle="点击左侧分类卡可一键筛选"
         :data="typeDistribution"
@@ -332,9 +516,18 @@ watch(
         center-label="总数"
         :height="180"
       />
+      <DonutMetric
+        v-else
+        title="harness 分类占比"
+        subtitle="来自各需求复盘沉淀的护栏建议"
+        :data="harnessCategoryDistribution"
+        :center-value="harnessSuggestions.length"
+        center-label="总数"
+        :height="180"
+      />
     </div>
 
-    <div class="aip-toolbar aip-lessons__toolbar">
+    <div v-show="viewMode === 'lessons'" class="aip-toolbar aip-lessons__toolbar">
       <ElSelect
         v-model="filterType"
         clearable
@@ -389,15 +582,19 @@ watch(
       >
     </div>
 
-    <p v-if="errorMessage" class="aip-card__caption aip-card__caption--inline">
+    <p
+      v-if="viewMode === 'lessons' && errorMessage"
+      class="aip-card__caption aip-card__caption--inline"
+    >
       <span class="aip-chip aip-chip--danger">错误</span>
       {{ errorMessage }}
     </p>
 
     <ElTable
+      v-show="viewMode === 'lessons'"
       :data="filteredLessons"
       :empty-text="
-        loading ? '加载中…' : '暂无经验。在 jiraKey 分支下让 IDE LLM 跑「经验提取」即可生成。'
+        loading ? '加载中…' : '暂无经验。在需求详情里触发「需求复盘」即可沉淀可复用经验。'
       "
       class="aip-lessons__table"
       stripe
@@ -490,6 +687,113 @@ watch(
         <ElEmpty description="暂无沉淀经验" />
       </template>
     </ElTable>
+
+    <!-- harness 视图:跨需求聚合各复盘报告的护栏建议 -->
+    <template v-if="viewMode === 'harness'">
+      <div class="aip-toolbar aip-lessons__toolbar">
+        <ElSelect
+          v-model="filterCategory"
+          clearable
+          placeholder="全部分类"
+          size="small"
+          style="width: 150px"
+        >
+          <ElOption
+            v-for="opt in HARNESS_CATEGORY_OPTIONS"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </ElSelect>
+        <ElSelect
+          v-model="filterHarnessScope"
+          placeholder="全部范围"
+          size="small"
+          style="width: 170px"
+        >
+          <ElOption label="全部范围" value="all" />
+          <ElOption label="通用（跨项目）" value="general" />
+          <ElOption
+            v-for="slug in harnessProjectSlugOptions"
+            :key="slug"
+            :label="`项目: ${slug}`"
+            :value="slug"
+          />
+          <ElOption v-if="hasUnscopedHarness" label="未分类（老数据）" value="unscoped" />
+        </ElSelect>
+        <ElSelect
+          v-model="filterHarnessJiraKey"
+          clearable
+          placeholder="全部需求"
+          size="small"
+          style="width: 180px"
+          filterable
+        >
+          <ElOption v-for="key in harnessJiraKeyOptions" :key="key" :label="key" :value="key" />
+        </ElSelect>
+        <ElButton size="small" plain :disabled="!filteredHarness.length" @click="copyAllHarness"
+          >复制全部为 Markdown</ElButton
+        >
+        <span class="aip-lessons__toolbar-count"
+          >共 {{ filteredHarness.length }} / {{ harnessSuggestions.length }} 条</span
+        >
+      </div>
+
+      <p v-if="harnessError" class="aip-card__caption aip-card__caption--inline">
+        <span class="aip-chip aip-chip--danger">错误</span>
+        {{ harnessError }}
+      </p>
+
+      <div v-if="harnessLoading" class="aip-lessons__harness-loading">加载中…</div>
+      <ElEmpty
+        v-else-if="!filteredHarness.length"
+        description="暂无 harness 沉淀。在需求详情里触发「需求复盘」，复盘报告生成的护栏建议会汇总到此。"
+      />
+      <ul v-else class="aip-lessons__harness-list">
+        <li
+          v-for="(s, idx) in filteredHarness"
+          :key="`${s.jiraKey}-${idx}`"
+          class="aip-lessons__harness-item aipt-glass"
+        >
+          <header class="aip-lessons__harness-head">
+            <span class="aip-chip" :class="HARNESS_CATEGORY_CHIP[s.category]">
+              {{ HARNESS_CATEGORY_LABEL[s.category] }}
+            </span>
+            <span
+              v-if="normalizeHarnessScope(s.scope)"
+              class="aip-chip"
+              :class="HARNESS_SCOPE_CHIP[normalizeHarnessScope(s.scope)]"
+              :title="
+                normalizeHarnessScope(s.scope) === 'general'
+                  ? '通用护栏,跨项目可复用'
+                  : '项目专属护栏'
+              "
+            >
+              {{ harnessScopeLabel(s.scope, s.projectSlug) }}
+            </span>
+            <span class="aip-lessons__harness-title">{{ s.title }}</span>
+            <ElButton size="small" text @click="copyOneHarness(s)">复制</ElButton>
+          </header>
+          <p v-if="s.signal" class="aip-lessons__harness-signal">
+            <span class="aip-lessons__harness-label">信号</span>{{ s.signal }}
+          </p>
+          <div class="aip-lessons__harness-content" v-html="renderMd(s.content)" />
+          <footer class="aip-lessons__harness-foot">
+            <span class="aip-chip aip-chip--muted">{{ s.jiraKey }}</span>
+            <span v-if="s.jiraTitle" class="aip-lessons__harness-source-title">{{
+              s.jiraTitle
+            }}</span>
+            <code v-if="s.targetFile" class="aip-lessons__harness-target">{{ s.targetFile }}</code>
+            <span
+              v-if="s.anchorSeqs && s.anchorSeqs.length"
+              class="aip-lessons__harness-seqs aipt-num"
+            >
+              <span v-for="seq in s.anchorSeqs" :key="seq">#{{ seq }}</span>
+            </span>
+          </footer>
+        </li>
+      </ul>
+    </template>
 
     <ElDrawer
       v-model="drawerOpen"
@@ -706,6 +1010,120 @@ watch(
   font-weight: 800;
   color: var(--aipt-text-strong);
   letter-spacing: -0.02em;
+}
+
+.aip-lessons__stat-stack {
+  display: grid;
+  gap: var(--aipt-space-3);
+  align-content: start;
+}
+
+.aip-lessons__stat-group {
+  display: grid;
+  gap: var(--aipt-space-2);
+}
+
+.aip-lessons__group-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--aipt-text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ── harness 视图 ────────────────────────────────────────── */
+.aip-lessons__harness-loading {
+  padding: 36px;
+  text-align: center;
+  color: var(--aipt-text-secondary);
+}
+
+.aip-lessons__harness-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--aipt-space-3);
+}
+
+.aip-lessons__harness-item {
+  padding: 12px 14px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aip-lessons__harness-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aip-lessons__harness-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--aipt-text-strong);
+  flex: 1;
+}
+
+.aip-lessons__harness-signal {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--aipt-text-secondary);
+  margin: 0;
+}
+
+.aip-lessons__harness-label {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: rgba(245, 196, 137, 0.16);
+  color: #f5c489;
+}
+
+.aip-lessons__harness-content {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--aipt-text-secondary);
+}
+
+.aip-lessons__harness-content :deep(p) {
+  margin: 0 0 6px;
+}
+
+.aip-lessons__harness-content :deep(pre) {
+  margin: 4px 0;
+  overflow-x: auto;
+}
+
+.aip-lessons__harness-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.aip-lessons__harness-source-title {
+  font-size: 12px;
+  color: var(--aipt-text-secondary);
+}
+
+.aip-lessons__harness-target {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(110, 167, 245, 0.14);
+  color: #6ea7f5;
+}
+
+.aip-lessons__harness-seqs {
+  display: inline-flex;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--aipt-text-tertiary, rgba(255, 255, 255, 0.45));
 }
 
 .aip-lessons__toolbar {

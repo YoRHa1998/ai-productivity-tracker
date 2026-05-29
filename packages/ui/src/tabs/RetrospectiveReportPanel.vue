@@ -16,7 +16,6 @@ import {
   deleteRetrospective,
   getLessonDetail,
   getRetrospective,
-  type HarnessSuggestionCategory,
   type IterationDetail,
   type LessonDetail,
   type RequirementDetail,
@@ -31,6 +30,14 @@ import IterationPhaseTimeline, {
 import RadarMetric, { type RadarDimension } from '../charts/RadarMetric.vue'
 import { VChart, type ECOption } from '../charts/echarts'
 import { useChartTheme } from '../composables/useChartTheme'
+import {
+  HARNESS_CATEGORY_CHIP,
+  HARNESS_CATEGORY_LABEL,
+  HARNESS_SCOPE_CHIP,
+  buildSuggestionMarkdown,
+  harnessScopeLabel,
+  normalizeHarnessScope
+} from '../lib/harness'
 import { renderMarkdown } from '../lib/markdown'
 import '../styles/aip-shared.css'
 
@@ -75,23 +82,6 @@ const TYPE_CHIP: Record<string, string> = {
   'best-practice': 'aip-chip--success',
   'split-suggestion': 'aip-chip--warning',
   tooling: 'aip-chip--muted'
-}
-
-const HARNESS_CATEGORY_LABEL: Record<HarnessSuggestionCategory, string> = {
-  'guardrail-rule': '硬护栏规则',
-  'check-script': '检查脚本',
-  checklist: '自检清单',
-  baseline: '存量债基线',
-  manifest: '治理清单',
-  'self-evolution': '自进化约定'
-}
-const HARNESS_CATEGORY_CHIP: Record<HarnessSuggestionCategory, string> = {
-  'guardrail-rule': 'aip-chip--primary',
-  'check-script': 'aip-chip--success',
-  checklist: 'aip-chip--warning',
-  baseline: 'aip-chip--muted',
-  manifest: 'aip-chip--primary',
-  'self-evolution': 'aip-chip--muted'
 }
 
 const harnessSummary = computed(() => report.value?.harnessSummary ?? null)
@@ -157,17 +147,6 @@ async function copyTriggerHint(): Promise<void> {
   } catch {
     ElMessage.info(triggerHint.value)
   }
-}
-
-function buildSuggestionMarkdown(s: RetrospectiveHarnessSuggestion): string {
-  const lines: string[] = [`### [${HARNESS_CATEGORY_LABEL[s.category]}] ${s.title}`, '']
-  if (s.signal) lines.push(`- 触发信号: ${s.signal}`)
-  if (s.targetFile) lines.push(`- 建议落到: \`${s.targetFile}\``)
-  if (s.anchorSeqs && s.anchorSeqs.length) {
-    lines.push(`- 关联轮次: ${s.anchorSeqs.map((n) => `#${n}`).join(' ')}`)
-  }
-  lines.push('', s.content)
-  return lines.join('\n')
 }
 
 async function copyToClipboard(text: string, okMsg: string): Promise<void> {
@@ -683,6 +662,18 @@ function renderMd(text: string): string {
                 <header class="aip-retro__harness-head">
                   <span class="aip-chip" :class="HARNESS_CATEGORY_CHIP[s.category]">
                     {{ HARNESS_CATEGORY_LABEL[s.category] }}
+                  </span>
+                  <span
+                    v-if="normalizeHarnessScope(s.scope)"
+                    class="aip-chip"
+                    :class="HARNESS_SCOPE_CHIP[normalizeHarnessScope(s.scope)]"
+                    :title="
+                      normalizeHarnessScope(s.scope) === 'general'
+                        ? '通用护栏,跨项目可复用'
+                        : '项目专属护栏'
+                    "
+                  >
+                    {{ harnessScopeLabel(s.scope, s.projectSlug) }}
                   </span>
                   <span class="aip-retro__harness-title">{{ s.title }}</span>
                   <ElButton

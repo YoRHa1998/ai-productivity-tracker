@@ -45,6 +45,7 @@ import {
   handleAiProductivityGetRetrospective,
   handleAiProductivitySaveRetrospective,
   handleAiProductivityDeleteRetrospective,
+  handleAiProductivityListHarnessSuggestions,
   type InitRequestBody,
   type HookRequestBody,
   type TurnStartRequestBody,
@@ -430,6 +431,12 @@ async function routeAiProductivity(
       handleAiProductivityDeleteRetrospective(res, params.jiraKey!)
       return true
     }
+  }
+
+  // ── harness 护栏建议跨需求聚合 (panel-origin 放行)──────────────
+  if (method === 'GET' && pathname === '/ai-productivity/harness-suggestions') {
+    handleAiProductivityListHarnessSuggestions(res)
+    return true
   }
 
   // ── lessons 端点(v2.16.0+ panel-origin 放行)──────────────────

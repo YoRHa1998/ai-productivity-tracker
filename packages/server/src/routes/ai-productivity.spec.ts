@@ -38,6 +38,7 @@ import {
   handleAiProductivityRetrospectiveBundle,
   handleAiProductivityGetRetrospective,
   handleAiProductivitySaveRetrospective,
+  handleAiProductivityListHarnessSuggestions,
   handleAiProductivityDeleteRetrospective,
   __resetCursorTurnStartsForTest,
   __snapshotCursorTurnStarts
@@ -3041,23 +3042,34 @@ describe('retrospective handlers (v1.0.0-rc.23)', () => {
     expect(back!.narrative.overview).toContain('需求 X')
   })
 
-  it('handleAiProductivitySaveRetrospective 透传 harnessSummary 并落盘回读', () => {
-    saveRequirement({ jiraKey: 'RTRO-H', title: 'Harness', manualEstimateMinutes: 120 }, {})
+  it('handleAiProductivitySaveRetrospective 透传 harnessSummary(含 scope)并落盘回读', () => {
+    saveRequirement(
+      { jiraKey: 'RTRO-H', title: 'Harness', projectSlug: '@org/web', manualEstimateMinutes: 120 },
+      {}
+    )
     appendIteration('RTRO-H', { kind: 'init' }) // seq 1
     appendIteration('RTRO-H', { kind: 'coding', cumulativeToken: 1000 }) // seq 2
 
     const body = {
       ...makeNarrativeBody(),
       harnessSummary: {
-        overview: '可沉淀 1 条护栏',
+        overview: '可沉淀 2 条护栏',
         suggestions: [
           {
             category: 'guardrail-rule' as const,
+            // 缺 scope → 兜底 project + 注入需求 projectSlug @org/web
             title: 'API 收口',
             signal: '反复直引 axios',
             content: '禁止业务代码 import axios',
             targetFile: 'docs/ai/harness/technical-harness-guardrails.md',
             anchorSeqs: [2, 999]
+          },
+          {
+            category: 'self-evolution' as const,
+            scope: 'general' as const,
+            title: '上下文偏长切窗',
+            signal: '出现一次 stale_timeout',
+            content: '立即 /session-handoff,不硬撑'
           }
         ]
       }
@@ -3066,8 +3078,12 @@ describe('retrospective handlers (v1.0.0-rc.23)', () => {
     handleAiProductivitySaveRetrospective(mock.res, 'RTRO-H', body)
     expect(mock.statusCode).toBe(200)
     const data = JSON.parse(mock.body).data
-    expect(data.harnessSummary.suggestions).toHaveLength(1)
+    expect(data.harnessSummary.suggestions).toHaveLength(2)
     expect(data.harnessSummary.suggestions[0].category).toBe('guardrail-rule')
+    expect(data.harnessSummary.suggestions[0].scope).toBe('project')
+    expect(data.harnessSummary.suggestions[0].projectSlug).toBe('@org/web')
+    expect(data.harnessSummary.suggestions[1].scope).toBe('general')
+    expect(data.harnessSummary.suggestions[1].projectSlug).toBe('')
     // 越界 seq 999 被过滤
     expect(data.harnessSummary.suggestions[0].anchorSeqs).toEqual([2])
 
@@ -3196,5 +3212,45 @@ describe('retrospective handlers (v1.0.0-rc.23)', () => {
     const mock = makeMockRes()
     handleAiProductivityDeleteRetrospective(mock.res, 'GHOST-1')
     expect(mock.statusCode).toBe(404)
+  })
+
+  it('handleAiProductivityListHarnessSuggestions 跨需求聚合 harnessSummary', () => {
+    saveRequirement({ jiraKey: 'AGG-1', title: '聚合 A', manualEstimateMinutes: 120 }, {})
+    appendIteration('AGG-1', { kind: 'init' })
+    appendIteration('AGG-1', { kind: 'coding', cumulativeToken: 1000 })
+    handleAiProductivitySaveRetrospective(makeMockRes().res, 'AGG-1', {
+      ...makeNarrativeBody(),
+      harnessSummary: {
+        suggestions: [
+          {
+            category: 'guardrail-rule' as const,
+            title: 'A 护栏',
+            signal: 's',
+            content: 'c'
+          }
+        ]
+      }
+    })
+
+    // AGG-2 有复盘但无 harness → 不应出现在聚合结果里
+    saveRequirement({ jiraKey: 'AGG-2', title: '聚合 B', manualEstimateMinutes: 120 }, {})
+    appendIteration('AGG-2', { kind: 'init' })
+    handleAiProductivitySaveRetrospective(makeMockRes().res, 'AGG-2', makeNarrativeBody())
+
+    const mock = makeMockRes()
+    handleAiProductivityListHarnessSuggestions(mock.res)
+    expect(mock.statusCode).toBe(200)
+    const data = JSON.parse(mock.body).data
+    expect(data.suggestions).toHaveLength(1)
+    expect(data.suggestions[0].title).toBe('A 护栏')
+    expect(data.suggestions[0].jiraKey).toBe('AGG-1')
+    expect(data.suggestions[0].jiraTitle).toBe('聚合 A')
+  })
+
+  it('handleAiProductivityListHarnessSuggestions 无复盘时返回空数组', () => {
+    const mock = makeMockRes()
+    handleAiProductivityListHarnessSuggestions(mock.res)
+    expect(mock.statusCode).toBe(200)
+    expect(JSON.parse(mock.body).data.suggestions).toEqual([])
   })
 })

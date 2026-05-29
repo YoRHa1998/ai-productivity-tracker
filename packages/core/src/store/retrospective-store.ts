@@ -28,7 +28,11 @@ import {
   type LessonIndexEntry
 } from './lessons-store.js'
 import { listIterations, loadRawPayload, type StoredIteration } from './iteration-store.js'
-import { loadRequirement, type StoredRequirement } from './requirement-store.js'
+import {
+  listRequirementsFromStore,
+  loadRequirement,
+  type StoredRequirement
+} from './requirement-store.js'
 import { readFormula, DEFAULT_FORMULA } from './formula-store.js'
 import { ensureRequirementDir, retrospectivePath } from './paths.js'
 
@@ -68,6 +72,16 @@ export type HarnessSuggestionCategory =
   | 'manifest' // manifest.json 治理边界调整
   | 'self-evolution' // 触发时机 / AGENTS.md 入口约定
 
+/**
+ * Harness 护栏建议的适用范围。语义对齐 lessons 的 scope:
+ * - 'general' = 通用护栏(跨项目/AI 协作元规则,如 stale_timeout→session-handoff),projectSlug 为空串
+ * - 'project' = 项目专属护栏(本仓库架构约定),projectSlug 必填(=package.json name)
+ * - ''        = 老数据(未带 scope 时落盘) 读取兜底,前端展示「未分类」
+ */
+export type HarnessScope = 'general' | 'project' | ''
+
+export const HARNESS_SCOPES: readonly Exclude<HarnessScope, ''>[] = ['general', 'project']
+
 export const HARNESS_SUGGESTION_CATEGORIES: readonly HarnessSuggestionCategory[] = [
   'guardrail-rule',
   'check-script',
@@ -80,6 +94,10 @@ export const HARNESS_SUGGESTION_CATEGORIES: readonly HarnessSuggestionCategory[]
 export interface RetrospectiveHarnessSuggestion {
   /** 护栏类别 */
   category: HarnessSuggestionCategory
+  /** 适用范围:'general' 通用护栏 | 'project' 项目专属 | '' 老数据未分类 */
+  scope: HarnessScope
+  /** scope='project' 时的项目标识(=package.json name);'general'/'' 时为空串 */
+  projectSlug: string
   /** 一句话标题(≤80 字) */
   title: string
   /** 触发该建议的本需求失败信号(≤200 字) */
@@ -97,6 +115,20 @@ export interface RetrospectiveHarnessSummary {
   overview?: string
   /** 结构化护栏建议(最多 12 条) */
   suggestions: RetrospectiveHarnessSuggestion[]
+}
+
+/**
+ * 跨需求聚合后的单条 harness 护栏建议。
+ * 在 `RetrospectiveHarnessSuggestion` 基础上补来源需求信息,
+ * 供「复盘经验」看板的 harness 视图扁平展示(不新建存储,实时从各 retrospective.json 摊平)。
+ */
+export interface AggregatedHarnessSuggestion extends RetrospectiveHarnessSuggestion {
+  /** 来源需求 jiraKey */
+  jiraKey: string
+  /** 来源需求标题(优先 snapshot.title,回退 requirement.title) */
+  jiraTitle: string
+  /** 来源复盘报告生成时间(ISO),用于排序与展示 */
+  generatedAt: string
 }
 
 export interface RetrospectivePhase {
@@ -267,6 +299,30 @@ function normalizeNarrative(input: unknown): RetrospectiveNarrative {
 }
 
 /**
+ * 归一化单条 harness 建议的 scope / projectSlug。
+ *
+ * - 写盘(isWrite):scope 缺/非法 → 'project'(保守);'general' 清空 projectSlug;
+ *   'project' 优先显式 projectSlug,缺省回退 defaultProjectSlug
+ * - 读盘:scope 合法则保留,否则归 ''(老数据未分类);projectSlug 取盘上字符串
+ */
+function resolveHarnessScope(
+  rawScope: unknown,
+  rawProjectSlug: unknown,
+  isWrite: boolean,
+  defaultProjectSlug: string
+): { scope: HarnessScope; projectSlug: string } {
+  const valid = rawScope === 'general' || rawScope === 'project'
+  const explicitSlug = typeof rawProjectSlug === 'string' ? rawProjectSlug.trim() : ''
+  if (isWrite) {
+    const scope: HarnessScope = valid ? (rawScope as HarnessScope) : 'project'
+    if (scope === 'general') return { scope, projectSlug: '' }
+    return { scope, projectSlug: explicitSlug || defaultProjectSlug || '' }
+  }
+  const scope: HarnessScope = valid ? (rawScope as HarnessScope) : ''
+  return { scope, projectSlug: scope === 'general' ? '' : explicitSlug }
+}
+
+/**
  * 归一化 Harness 总结。
  *
  * - 过滤非法 / 缺 content / 缺 title 的 suggestion
@@ -274,13 +330,19 @@ function normalizeNarrative(input: unknown): RetrospectiveNarrative {
  * - clip 各字段长度
  * - `validSeqs` 传入时(写盘场景)按实际 iteration 范围过滤 anchorSeqs;
  *   不传时(读盘场景)仅去重排序(写盘时已过滤过,读盘信任已有数据)
+ * - scope/projectSlug 归一化:写盘场景(validSeqs 传入)缺/非法 scope 兜底 'project'
+ *   (保守,避免把项目专属护栏错挂到通用);'general' 强制清空 projectSlug,'project'
+ *   缺省时回退 `defaultProjectSlug`(由调用方按 requirement.projectSlug 注入)。
+ *   读盘场景保留盘上已有值,非法 scope 归 ''(老数据未分类)。
  * - suggestions 为空时整体返回 undefined,保持"无价值即不落"
  */
 function normalizeHarnessSummary(
   input: unknown,
-  validSeqs?: Set<number>
+  validSeqs?: Set<number>,
+  defaultProjectSlug = ''
 ): RetrospectiveHarnessSummary | undefined {
   if (!input || typeof input !== 'object') return undefined
+  const isWrite = validSeqs !== undefined
   const r = input as Record<string, unknown>
   const rawSuggestions = Array.isArray(r.suggestions) ? r.suggestions : []
   const suggestions: RetrospectiveHarnessSuggestion[] = []
@@ -298,8 +360,16 @@ function normalizeHarnessSummary(
     const content = clipString(s.content, RETROSPECTIVE_LIMITS.harnessContentMaxChars)
     // title / content 任一为空视为无效条目
     if (!title || !content) continue
+    const { scope, projectSlug } = resolveHarnessScope(
+      s.scope,
+      s.projectSlug,
+      isWrite,
+      defaultProjectSlug
+    )
     const suggestion: RetrospectiveHarnessSuggestion = {
       category: category as HarnessSuggestionCategory,
+      scope,
+      projectSlug,
       title,
       signal: clipString(s.signal, RETROSPECTIVE_LIMITS.harnessSignalMaxChars),
       content
@@ -505,7 +575,11 @@ export function writeRetrospective(
     RETROSPECTIVE_LIMITS.anchorIterationsMaxCount
   ).filter((seq) => validSeqs.has(seq))
 
-  const harnessSummary = normalizeHarnessSummary(input.harnessSummary, validSeqs)
+  const harnessSummary = normalizeHarnessSummary(
+    input.harnessSummary,
+    validSeqs,
+    requirement?.projectSlug ?? ''
+  )
 
   const generatedAtIterationCount = iterations.length
   const generatedAtIterationSeq = iterations.length ? iterations[iterations.length - 1].seq : 0
@@ -645,4 +719,28 @@ export function buildRetrospectiveBundle(jiraKey: string, root?: string): Retros
     relatedLessons,
     existingRetrospective
   }
+}
+
+/**
+ * 跨需求聚合所有复盘报告里的 harness 护栏建议。
+ *
+ * 实时遍历 `listRequirementsFromStore()` → 对每个 jiraKey `loadRetrospective` →
+ * 摊平 `harnessSummary.suggestions`,附来源需求信息。不新建存储:harness 规则随复盘
+ * 单文件覆盖(重新复盘会替换该需求的建议),无独立合并去重。
+ *
+ * 返回按 `generatedAt` 倒序(最新复盘在前);同一报告内保持原 suggestions 顺序。
+ */
+export function listHarnessSuggestions(root?: string): AggregatedHarnessSuggestion[] {
+  const out: AggregatedHarnessSuggestion[] = []
+  for (const req of listRequirementsFromStore(root)) {
+    const retro = loadRetrospective(req.jiraKey, root)
+    const suggestions = retro?.harnessSummary?.suggestions
+    if (!retro || !suggestions || suggestions.length === 0) continue
+    const jiraTitle = retro.snapshot?.title || req.title || ''
+    for (const s of suggestions) {
+      out.push({ ...s, jiraKey: req.jiraKey, jiraTitle, generatedAt: retro.generatedAt })
+    }
+  }
+  out.sort((a, b) => (a.generatedAt < b.generatedAt ? 1 : a.generatedAt > b.generatedAt ? -1 : 0))
+  return out
 }

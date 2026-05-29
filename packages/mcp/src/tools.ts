@@ -360,7 +360,19 @@ const harnessSuggestionSchema = z.object({
     .describe(
       '护栏类别:guardrail-rule=写进 guardrails.md 的硬护栏 / check-script=可脚本化的静态检查 / checklist=人工自检项 / baseline=存量债登记 / manifest=治理边界调整 / self-evolution=触发时机或入口约定'
     ),
-  title: z.string().describe('一句话标题(≤80 字)'),
+  scope: z
+    .enum(['general', 'project'])
+    .optional()
+    .describe(
+      '适用范围:general=通用护栏(跨项目/AI 协作元规则,如 stale_timeout→session-handoff、上下文偏长切窗),project=本仓库架构专属护栏(如某 store/composable 收口约定)。缺省按 project 兜底。判定不清优先 project'
+    ),
+  projectSlug: z
+    .string()
+    .optional()
+    .describe(
+      'scope=project 时的项目标识(=package.json name,取 bundle 的 currentProjectSlug);scope=general 留空或省略,缺省时 agent 端按需求 projectSlug 兜底'
+    ),
+  title: z.string().describe('一句话标题(≤80 字)。写成持久不变式,不要带本次轮次/事件描述'),
   signal: z
     .string()
     .describe('触发该建议的本需求失败信号(≤200 字),例如反复改某文件 / 踩的工具坑 / 卡点'),

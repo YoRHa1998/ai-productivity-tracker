@@ -845,7 +845,23 @@ describe('registerAiProductivityTools', () => {
       anchorIterationSeqs: [3, 5],
       harnessSummary: {
         overview: 'h-ov',
-        suggestions: [{ category: 'checklist', title: 't', signal: 's', content: 'c' }]
+        suggestions: [
+          {
+            category: 'checklist',
+            scope: 'general',
+            title: 't',
+            signal: 's',
+            content: 'c'
+          },
+          {
+            category: 'guardrail-rule',
+            scope: 'project',
+            projectSlug: 'my-app',
+            title: 't2',
+            signal: 's2',
+            content: 'c2'
+          }
+        ]
       }
     })
     expect(saveSpy).toHaveBeenCalledWith(
@@ -857,7 +873,14 @@ describe('registerAiProductivityTools', () => {
         narrative: expect.objectContaining({ overview: '总览' }),
         harnessSummary: expect.objectContaining({
           overview: 'h-ov',
-          suggestions: [expect.objectContaining({ category: 'checklist' })]
+          suggestions: [
+            expect.objectContaining({ category: 'checklist', scope: 'general' }),
+            expect.objectContaining({
+              category: 'guardrail-rule',
+              scope: 'project',
+              projectSlug: 'my-app'
+            })
+          ]
         })
       })
     )

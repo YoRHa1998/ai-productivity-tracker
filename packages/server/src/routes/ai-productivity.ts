@@ -82,6 +82,7 @@ import {
   writeLessons,
   buildRetrospectiveBundle,
   loadRetrospective,
+  listHarnessSuggestions,
   removeRetrospective,
   writeRetrospective,
   type StoredRequirement,
@@ -2195,6 +2196,19 @@ export function handleAiProductivityDeleteRetrospective(
   }
   const deleted = removeRetrospective(jiraKey)
   ok(res, { deleted, jiraKey })
+}
+
+/**
+ * 看板侧 GET /ai-productivity/harness-suggestions (panel-origin 放行)
+ *
+ * 跨需求实时聚合所有复盘报告里的 harness 护栏建议,供「复盘经验」看板的 harness 视图展示。
+ * 不新建存储:每次请求遍历各需求 retrospective.json 摊平 harnessSummary.suggestions。
+ *
+ * 返回:`{ suggestions: AggregatedHarnessSuggestion[] }`(按 generatedAt 倒序)。
+ */
+export function handleAiProductivityListHarnessSuggestions(res: ServerResponse): void {
+  const suggestions = listHarnessSuggestions()
+  ok(res, { suggestions })
 }
 
 // 缺省导出,提供给 server.ts 注册
