@@ -12,14 +12,14 @@ import {
  *   - 落盘逻辑全部由 hook-core 提供(`<agentRoot>/hook-state/<JIRA-KEY>.<seq>.lesson-handled.json`),
  *     save_lessons handler 与 stop-check 共享同一份路径定位代码,杜绝目录漂移
  *   - 本模块是 agent 端的「单一调用入口」,save_lessons handler / 单测都通过这里访问 sentinel
- *   - 测试时通过设置 `TRUESIGHT_LOCAL_AGENT_ROOT` env 隔离到 tmp 目录
+ *   - 测试时通过设置 `AIPT_LOCAL_AGENT_ROOT` env 隔离到 tmp 目录
  *
  * 语义:文件存在 = 该 (jiraKey, seq) 经验候选已处理(用户已确认落盘 / stop hook 已提示过一次),
  * stop hook 兜底据此对同一候选最多打扰一次。不带时间窗判定。
  */
 
 // 与 recent-attach-sentinel 共用同一个 env key;此处不重复 export,避免 store/index 聚合冲突。
-const LOCAL_AGENT_ROOT_ENV = 'TRUESIGHT_LOCAL_AGENT_ROOT'
+const LOCAL_AGENT_ROOT_ENV = 'AIPT_LOCAL_AGENT_ROOT'
 
 export type { LessonHandledPayload }
 

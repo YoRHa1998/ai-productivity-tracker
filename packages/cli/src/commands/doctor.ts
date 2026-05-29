@@ -1,17 +1,17 @@
 /**
  * `aipt doctor`:体检命令。
  *
- * 10 项检查(PRD §13):
+ * 检查项(PRD §13):
  *   1. Node 版本 ≥ 20.10
  *   2. ~/.ai-productivity-tracker/ home 目录存在 + 权限位
- *   3. runtime.json 与 daemon 状态(pid 存活 / port 端口探活)
- *   4. data 根目录可读写 + 是否有数据
- *   5. ~/.cursor/mcp.json 是否含 ai-productivity-tracker server
- *   6. ~/.claude.json 是否含 ai-productivity-tracker server (rc.16+ 新增)
- *   7. ~/.cursor/hooks.json 是否含 afterAgentResponse hook
- *   8. ~/.claude/skills/ai-productivity-track/SKILL.md 是否就位
- *   9. ~/.cursor/rules/ai-productivity-track.mdc 是否就位
- *   10. 老数据 ~/.truesight-local-agent/ai-productivity/ 是否仍未迁移
+ *   3. 用户配置 config.json
+ *   4. runtime.json 与 daemon 状态(pid 存活 / port 端口探活)
+ *   5. data 根目录可读写 + 是否有数据
+ *   6. ~/.cursor/mcp.json 是否含 ai-productivity-tracker server
+ *   7. ~/.claude.json 是否含 ai-productivity-tracker server (rc.16+ 新增)
+ *   8. ~/.cursor/hooks.json 是否含 afterAgentResponse hook
+ *   9. ~/.claude/skills/ai-productivity-track/SKILL.md 是否就位
+ *   10. ~/.cursor/rules/ai-productivity-track.mdc 是否就位
  *
  * 全部以 ✓/✗/⚠ 三态彩色输出(无 ANSI 颜色依赖,纯字符)。
  */
@@ -21,13 +21,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { VERSION } from '../version.js'
-import {
-  aiptHome,
-  configJsonPath,
-  dataRoot,
-  legacyDataRoot,
-  runtimeJsonPath
-} from '../lib/paths.js'
+import { aiptHome, configJsonPath, dataRoot, runtimeJsonPath } from '../lib/paths.js'
 import { readUserConfig } from '../lib/config.js'
 import { isPidAlive, readRuntimeLock } from '../lib/runtime-lock.js'
 import { MCP_SERVER_KEY, LEGACY_MCP_SERVER_KEYS } from './install-mcp.js'
@@ -55,7 +49,6 @@ export async function runDoctor(): Promise<number> {
   checks.push(checkCursorHooks())
   checks.push(checkClaudeSkill())
   checks.push(checkCursorRule())
-  checks.push(checkLegacyData())
 
   let warnCount = 0
   let failCount = 0
@@ -323,24 +316,4 @@ function checkCursorRule(): CheckResult {
     return { status: 'ok', label: 'Cursor rule', message: file }
   }
   return { status: 'info', label: 'Cursor rule', message: '未注入(跑 `aipt install`)' }
-}
-
-function checkLegacyData(): CheckResult {
-  const legacy = legacyDataRoot()
-  if (!existsSync(legacy)) {
-    return { status: 'info', label: 'Legacy data', message: '无老 truesight-agent 数据(无需迁移)' }
-  }
-  const newRoot = dataRoot()
-  if (existsSync(newRoot)) {
-    return {
-      status: 'warn',
-      label: 'Legacy data',
-      message: `老数据仍在 ${legacy};新根已有数据,跑 \`aipt migrate --force\` 合并`
-    }
-  }
-  return {
-    status: 'warn',
-    label: 'Legacy data',
-    message: `检测到老数据,跑 \`aipt migrate\` 平迁到新目录`
-  }
 }

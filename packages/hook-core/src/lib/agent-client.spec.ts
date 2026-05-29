@@ -184,21 +184,21 @@ describe('postTurnThoughtToAgent 解析 200 响应体(区分 applied / no_pendin
 describe('loadAgentEndpoint', () => {
   let tmpDir: string
   let configPath: string
-  const origEnvToken = process.env.TRUESIGHT_AGENT_TOKEN
-  const origEnvBase = process.env.TRUESIGHT_AGENT_BASE_URL
+  const origEnvToken = process.env.AIPT_DAEMON_TOKEN
+  const origEnvBase = process.env.AIPT_DAEMON_URL
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'aip-hook-core-'))
     configPath = join(tmpDir, 'config.json')
-    delete process.env.TRUESIGHT_AGENT_TOKEN
-    delete process.env.TRUESIGHT_AGENT_BASE_URL
+    delete process.env.AIPT_DAEMON_TOKEN
+    delete process.env.AIPT_DAEMON_URL
   })
 
   afterEach(() => {
-    if (origEnvToken != null) process.env.TRUESIGHT_AGENT_TOKEN = origEnvToken
-    else delete process.env.TRUESIGHT_AGENT_TOKEN
-    if (origEnvBase != null) process.env.TRUESIGHT_AGENT_BASE_URL = origEnvBase
-    else delete process.env.TRUESIGHT_AGENT_BASE_URL
+    if (origEnvToken != null) process.env.AIPT_DAEMON_TOKEN = origEnvToken
+    else delete process.env.AIPT_DAEMON_TOKEN
+    if (origEnvBase != null) process.env.AIPT_DAEMON_URL = origEnvBase
+    else delete process.env.AIPT_DAEMON_URL
     rmSync(tmpDir, { recursive: true, force: true })
   })
 
@@ -222,10 +222,10 @@ describe('loadAgentEndpoint', () => {
     })
   })
 
-  it('env TRUESIGHT_AGENT_TOKEN + TRUESIGHT_AGENT_BASE_URL 优先于文件', () => {
+  it('env AIPT_DAEMON_TOKEN + AIPT_DAEMON_URL 优先于文件', () => {
     writeFileSync(configPath, JSON.stringify({ token: 'tk-file', port: 17280 }))
-    process.env.TRUESIGHT_AGENT_TOKEN = 'tk-env'
-    process.env.TRUESIGHT_AGENT_BASE_URL = 'http://example.com:9090/'
+    process.env.AIPT_DAEMON_TOKEN = 'tk-env'
+    process.env.AIPT_DAEMON_URL = 'http://example.com:9090/'
     expect(loadAgentEndpoint(configPath)).toEqual({
       baseUrl: 'http://example.com:9090',
       token: 'tk-env'
@@ -239,7 +239,7 @@ describe('loadAgentEndpoint', () => {
 
   it('config 解析失败 + 仅有 env token → 用默认 baseUrl 兜底', () => {
     writeFileSync(configPath, '{not json')
-    process.env.TRUESIGHT_AGENT_TOKEN = 'tk-env'
+    process.env.AIPT_DAEMON_TOKEN = 'tk-env'
     expect(loadAgentEndpoint(configPath)).toEqual({
       baseUrl: 'http://127.0.0.1:17350',
       token: 'tk-env'

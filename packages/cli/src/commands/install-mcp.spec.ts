@@ -223,7 +223,7 @@ describe('install-mcp', () => {
               type: 'stdio',
               command: 'node',
               args: ['/Users/x/Downloads/ai-productivity-mcp.mjs'],
-              env: { TRUESIGHT_AGENT_URL: 'http://127.0.0.1:17280' }
+              env: { LEGACY_AGENT_URL: 'http://127.0.0.1:17280' }
             }
           }
         })

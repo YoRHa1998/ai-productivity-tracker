@@ -14,15 +14,15 @@ import {
  *     agent 与 stop-check 共享同一份路径定位代码,杜绝目录漂移
  *   - 本模块是 agent 端的「单一调用入口」,attach-summary handler / 单测都通过这里访问 sentinel,
  *     未来若需要在 agent 侧加额外语义(例如 jiraKey 别名 / 监控埋点)也只动这一份
- *   - 测试时通过设置 `TRUESIGHT_LOCAL_AGENT_ROOT` env 隔离到 tmp 目录,
- *     避免污染真实 `~/.truesight-local-agent/hook-state/`
+ *   - 测试时通过设置 `AIPT_LOCAL_AGENT_ROOT` env 隔离到 tmp 目录,
+ *     避免污染真实 `~/.ai-productivity-tracker/hook-state/`
  *
  * 时间窗口判定逻辑放在 stop-check 那边,本模块刻意不耦合.
  */
 
 export const RECENT_ATTACH_WINDOW_MS = HOOK_CORE_WINDOW_MS
 
-export const LOCAL_AGENT_ROOT_ENV = 'TRUESIGHT_LOCAL_AGENT_ROOT'
+export const LOCAL_AGENT_ROOT_ENV = 'AIPT_LOCAL_AGENT_ROOT'
 
 export type { RecentAttachPayload }
 

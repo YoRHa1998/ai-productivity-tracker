@@ -22,8 +22,7 @@ COMMANDS
   install-mcp        将本 cli 写到 IDE 本机 MCP 配置(同时支持 Cursor 与 Claude Code)
     --ide=cursor|claude|all   (默认 all → 同时写 ~/.cursor/mcp.json + ~/.claude.json)
   ui open            在浏览器打开看板
-  migrate            把 ~/.truesight-local-agent 老数据搬到新根
-  doctor             体检 daemon / hook / skill / mcp.json / 数据迁移
+  doctor             体检 daemon / hook / skill / mcp.json
   version            打印版本
   --help, -h         打印本帮助
 

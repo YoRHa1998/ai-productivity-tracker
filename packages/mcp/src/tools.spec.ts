@@ -556,7 +556,7 @@ describe('registerAiProductivityTools', () => {
   it('ai_productivity_extract_bundle v2.17.0:输出展示 currentProjectSlug', async () => {
     const bundleSpy = vi.fn().mockResolvedValue({
       jiraKey: 'INSTANT-9100',
-      currentProjectSlug: 'truesight-web-tools',
+      currentProjectSlug: 'acme-web-tools',
       requirement: { jiraKey: 'INSTANT-9100', title: 'demo' },
       iterations: [],
       existingLessons: []
@@ -569,7 +569,7 @@ describe('registerAiProductivityTools', () => {
     const tool = server.tools.find((t) => t.name === 'ai_productivity_extract_bundle')!
     const result = await tool.handler({ jiraKey: 'INSTANT-9100' })
     expect(result.isError).toBeUndefined()
-    expect(result.content[0].text).toContain('currentProjectSlug: truesight-web-tools')
+    expect(result.content[0].text).toContain('currentProjectSlug: acme-web-tools')
     expect(result.content[0].text).toContain('BUNDLE_JSON_BEGIN')
   })
 
@@ -577,7 +577,7 @@ describe('registerAiProductivityTools', () => {
   it('ai_productivity_extract_bundle v2.18.0:输出含「=== 客观信号 ===」摘要(boost / topThinkSeqs / fileChurnMap)', async () => {
     const bundleSpy = vi.fn().mockResolvedValue({
       jiraKey: 'INSTANT-5321',
-      currentProjectSlug: 'truesight-web-tools',
+      currentProjectSlug: 'acme-web-tools',
       requirement: { jiraKey: 'INSTANT-5321', title: 'demo' },
       iterations: [],
       existingLessons: [],

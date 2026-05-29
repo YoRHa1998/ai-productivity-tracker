@@ -1,12 +1,12 @@
 /**
  * AI 提效面板看板 API 客户端。
  *
- * v2.0 改造后,所有需求 / iteration / formula / jira-config 都存放在用户本机
- * `~/.truesight-local-agent/ai-productivity/`,看板浏览器通过 agent 暴露的
- * `http://127.0.0.1:17280/ai-productivity/*` 端点直接读写本地数据;不再有平台
+ * 所有需求 / iteration / formula / jira-config 都存放在用户本机
+ * `~/.ai-productivity-tracker/data/`,看板浏览器通过 daemon 暴露的
+ * `http://127.0.0.1:17350/ai-productivity/*` 端点直接读写本地数据;不再有平台
  * API 与数据库参与。
  *
- * agent 会根据 Origin 头放行可信来源,因此面板请求无需 token,但需要带上
+ * daemon 会根据 Origin 头放行可信来源,因此面板请求无需 token,但需要带上
  * `credentials: 'omit'`(避免触发 CORS preflight 的 Cookie 复杂逻辑)。
  */
 

@@ -6,14 +6,12 @@ import { registerAiProductivityTools } from './tools.js'
 declare const __VERSION__: string
 const VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : '0.0.0-dev'
 
-/** v1.0 起优先读 AIPT_* env;同时保留 TRUESIGHT_* 老 env 兼容,空字符串与未设置等价 */
-function readEnvWithLegacy(primary: string, legacy: string, fallback?: string): string {
-  const main = process.env[primary]?.trim()
-  if (main) return main
-  const legacyVal = process.env[legacy]?.trim()
-  if (legacyVal) return legacyVal
+/** 读 AIPT_* env,空字符串与未设置等价;缺必需项时报错退出 */
+function readEnv(name: string, fallback?: string): string {
+  const val = process.env[name]?.trim()
+  if (val) return val
   if (fallback !== undefined) return fallback
-  console.error(`[ai-productivity-mcp] 缺少必需环境变量 ${primary}(或 legacy ${legacy})`)
+  console.error(`[ai-productivity-mcp] 缺少必需环境变量 ${name}`)
   process.exit(1)
 }
 
@@ -37,12 +35,8 @@ export interface MainDeps {
 }
 
 export async function startMcpServer(): Promise<void> {
-  const baseUrl = readEnvWithLegacy(
-    'AIPT_DAEMON_URL',
-    'TRUESIGHT_AGENT_URL',
-    'http://127.0.0.1:17350'
-  )
-  const token = readEnvWithLegacy('AIPT_DAEMON_TOKEN', 'TRUESIGHT_AGENT_TOKEN')
+  const baseUrl = readEnv('AIPT_DAEMON_URL', 'http://127.0.0.1:17350')
+  const token = readEnv('AIPT_DAEMON_TOKEN')
 
   const client = new AgentClient({ baseUrl, token })
   const server = new McpServer(

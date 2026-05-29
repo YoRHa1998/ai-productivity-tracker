@@ -14,7 +14,6 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 export const HOME_DIR_NAME = '.ai-productivity-tracker'
-export const LEGACY_HOME_DIR_NAME = '.truesight-local-agent'
 /**
  * 开发态/沙箱用 home 目录覆盖 env。生产链路严禁设置(会让全局 cli 找不到 runtime.json)。
  *
@@ -28,10 +27,6 @@ export function aiptHome(): string {
   const envHome = process.env[HOME_DIR_ENV]?.trim()
   if (envHome) return resolve(envHome)
   return resolve(homedir(), HOME_DIR_NAME)
-}
-
-export function legacyAiptHome(): string {
-  return resolve(homedir(), LEGACY_HOME_DIR_NAME)
 }
 
 export function runtimeJsonPath(): string {
@@ -49,13 +44,7 @@ export function logsDir(): string {
 export function dataRoot(): string {
   const envRoot = process.env.AIPT_DATA_ROOT?.trim()
   if (envRoot) return resolve(envRoot)
-  const legacyEnvRoot = process.env.TRUESIGHT_AIP_ROOT?.trim()
-  if (legacyEnvRoot) return resolve(legacyEnvRoot)
   return join(aiptHome(), 'data')
-}
-
-export function legacyDataRoot(): string {
-  return join(legacyAiptHome(), 'ai-productivity')
 }
 
 /** 确保 home / logs 目录存在,首次运行触发 */

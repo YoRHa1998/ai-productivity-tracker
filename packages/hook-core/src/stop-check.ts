@@ -26,7 +26,7 @@ import { isRequirementInitialized, resolveTrackingContext } from './lib/tracking
  *
  * v2.10.0 设计变更:
  *   - 老的 conv-gen 维度 sentinel(由 Cursor afterMCPExecution Hook 异步写)依赖 fire-and-forget
- *     时序与 tool_name 字段精确匹配,实测 ~/.truesight-local-agent/hook-state/ 长期为空
+ *     时序与 tool_name 字段精确匹配,实测 hook-state/ 长期为空
  *     → stop-check 永远走 inject_followup → 一次对话被强制重答两次 + 5-6 秒延迟.
  *   - 改为 agent attach-summary handler 同进程同步写 jiraKey 维度 sentinel.
  *     attach_summary HTTP 返回前 sentinel 必定落盘,stop-check 读取无 race.
@@ -68,7 +68,7 @@ export interface StopCheckOptions {
   fetchImpl?: typeof fetch
   /** 测试时跳过 agent 可达性检测(直接视为可达) */
   skipAgentReachability?: boolean
-  /** 注入 ~/.truesight-local-agent 根目录(测试用) */
+  /** 注入 ~/.ai-productivity-tracker 根目录(测试用) */
   agentRootOverride?: string
   /** 注入当前时间(测试用,默认 Date.now()) */
   now?: () => number

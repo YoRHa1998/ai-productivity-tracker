@@ -9,7 +9,7 @@
  *   - IDE 的 MCP server(`mcp`)
  *   - 后台 HTTP daemon(`daemon`)
  *   - Cursor / Claude IDE hook(`hook` / `stop-check`)
- *   - 各类管理子命令(`install` / `migrate` / `doctor` / `ui` / ...)
+ *   - 各类管理子命令(`install` / `doctor` / `ui` / ...)
  */
 
 import { runDaemon, type DaemonArgs } from './commands/daemon.js'
@@ -19,7 +19,6 @@ import { runHookCommand } from './commands/hook.js'
 import { runInstall, type InstallArgs, type InstallTargetIde } from './commands/install.js'
 import { runInstallMcpAll, type InstallMcpAllArgs } from './commands/install-mcp.js'
 import { runMcp } from './commands/mcp.js'
-import { runMigrate, type MigrateArgs } from './commands/migrate.js'
 import { runStopCheckCommand } from './commands/stop-check.js'
 import { runUi } from './commands/ui.js'
 import { runVersion } from './commands/version.js'
@@ -68,9 +67,6 @@ export async function main(argv: string[] = process.argv): Promise<ExitCode> {
 
     case 'install-mcp':
       return runInstallMcpAll(parseInstallMcpArgs(rest))
-
-    case 'migrate':
-      return runMigrate(parseMigrateArgs(rest))
 
     case 'doctor':
       return runDoctor()
@@ -137,14 +133,6 @@ function parseInstallMcpArgs(rest: string[]): InstallMcpAllArgs {
       const v = rest[++i] as InstallMcpAllArgs['ide'] | undefined
       if (v === 'cursor' || v === 'claude' || v === 'all') args.ide = v
     }
-  }
-  return args
-}
-
-function parseMigrateArgs(rest: string[]): MigrateArgs {
-  const args: MigrateArgs = {}
-  for (const a of rest) {
-    if (a === '--force' || a === '-f') args.force = true
   }
   return args
 }

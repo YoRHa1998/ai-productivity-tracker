@@ -5,8 +5,6 @@ import { join } from 'node:path'
 export const DEFAULT_AGENT_BASE = 'http://127.0.0.1:17350'
 /** v1.0 起 daemon 运行态写在 runtime.json,与 config.json (用户配置) 分离 */
 export const AGENT_CONFIG_PATH = join(homedir(), '.ai-productivity-tracker', 'runtime.json')
-/** v1.0 向后兼容:老 truesight-agent 用户的 config.json,优先级低于新 runtime.json */
-export const LEGACY_AGENT_CONFIG_PATH = join(homedir(), '.truesight-local-agent', 'config.json')
 
 interface AgentConfigShape {
   token?: string
@@ -21,30 +19,22 @@ interface AgentConfigShape {
  * 优先级:
  *   1) 环境变量 AIPT_DAEMON_TOKEN / AIPT_DAEMON_URL
  *   2) ~/.ai-productivity-tracker/runtime.json
- *   3) (向后兼容)环境变量 TRUESIGHT_AGENT_TOKEN / TRUESIGHT_AGENT_BASE_URL
- *   4) (向后兼容)~/.truesight-local-agent/config.json
  *
  * 找不到 token 时返回 null,调用方应当回退到本地 bindings.json 直写路径。
  */
 export function loadAgentEndpoint(
   configFilePath: string = AGENT_CONFIG_PATH
 ): { baseUrl: string; token: string } | null {
-  // 1) 新 env(优先)
-  const envToken = process.env.AIPT_DAEMON_TOKEN ?? process.env.TRUESIGHT_AGENT_TOKEN
-  const envBase = process.env.AIPT_DAEMON_URL ?? process.env.TRUESIGHT_AGENT_BASE_URL
+  // 1) env(优先)
+  const envToken = process.env.AIPT_DAEMON_TOKEN
+  const envBase = process.env.AIPT_DAEMON_URL
   if (envToken && envBase) {
     return { baseUrl: envBase.replace(/\/$/, ''), token: envToken }
   }
 
-  // 2) 新 runtime.json
+  // 2) runtime.json
   const fromFile = tryReadEndpointFile(configFilePath, envToken, envBase)
   if (fromFile) return fromFile
-
-  // 3) 老 config.json fallback(便于老 truesight-agent 用户平滑共存)
-  if (configFilePath === AGENT_CONFIG_PATH) {
-    const legacy = tryReadEndpointFile(LEGACY_AGENT_CONFIG_PATH, envToken, envBase)
-    if (legacy) return legacy
-  }
 
   return envToken
     ? { baseUrl: envBase?.replace(/\/$/, '') ?? DEFAULT_AGENT_BASE, token: envToken }

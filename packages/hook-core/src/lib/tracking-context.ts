@@ -70,22 +70,10 @@ export function resolveTrackingContext(
  *
  * 提供 rootOverride 以便测试(覆盖到一个隔离根,函数会在其下找
  * `data/<jiraKey>/requirement.json`).
- *
- * v1.0 兼容:存在 ~/.truesight-local-agent/ai-productivity/<jiraKey>/requirement.json 时
- * 也视为已初始化,便于老用户迁移期共存。
  */
 export function isRequirementInitialized(jiraKey: string, rootOverride?: string): boolean {
   if (!jiraKey) return false
   const base = rootOverride ?? join(homedir(), '.ai-productivity-tracker')
   const file = join(base, 'data', jiraKey, 'requirement.json')
-  if (existsSync(file)) return true
-  if (rootOverride) return false
-  const legacyFile = join(
-    homedir(),
-    '.truesight-local-agent',
-    'ai-productivity',
-    jiraKey,
-    'requirement.json'
-  )
-  return existsSync(legacyFile)
+  return existsSync(file)
 }

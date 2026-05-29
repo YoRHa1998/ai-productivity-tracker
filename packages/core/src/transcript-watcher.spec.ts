@@ -169,8 +169,8 @@ describe('TranscriptWatcher.processFileForTest', () => {
     stateDir = mkdtempSync(join(tmpdir(), 'aip-state-'))
     repoRoot = mkdtempSync(join(tmpdir(), 'aip-repo-'))
     aipRootDir = mkdtempSync(join(tmpdir(), 'aip-root-'))
-    originalAipRoot = process.env.TRUESIGHT_AIP_ROOT
-    process.env.TRUESIGHT_AIP_ROOT = aipRootDir
+    originalAipRoot = process.env.AIPT_DATA_ROOT
+    process.env.AIPT_DATA_ROOT = aipRootDir
     makeGitRepoAt(repoRoot, 'feature/ABC-1-watcher')
   })
 
@@ -179,8 +179,8 @@ describe('TranscriptWatcher.processFileForTest', () => {
     rmSync(stateDir, { recursive: true, force: true })
     rmSync(repoRoot, { recursive: true, force: true })
     rmSync(aipRootDir, { recursive: true, force: true })
-    if (originalAipRoot !== undefined) process.env.TRUESIGHT_AIP_ROOT = originalAipRoot
-    else delete process.env.TRUESIGHT_AIP_ROOT
+    if (originalAipRoot !== undefined) process.env.AIPT_DATA_ROOT = originalAipRoot
+    else delete process.env.AIPT_DATA_ROOT
   })
 
   function makeWatcher(): TranscriptWatcher {

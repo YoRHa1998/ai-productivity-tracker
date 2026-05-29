@@ -61,7 +61,7 @@ describe('agent recent-attach-sentinel store', () => {
     expect(writeRecentAttachSentinel('!!!', new Date(), agentRoot)).toBeNull()
   })
 
-  it('TRUESIGHT_LOCAL_AGENT_ROOT env 缺省时调用方不传 agentRoot 也能写到 env 指定目录', () => {
+  it('AIPT_LOCAL_AGENT_ROOT env 缺省时调用方不传 agentRoot 也能写到 env 指定目录', () => {
     const prev = process.env[LOCAL_AGENT_ROOT_ENV]
     process.env[LOCAL_AGENT_ROOT_ENV] = agentRoot
     try {

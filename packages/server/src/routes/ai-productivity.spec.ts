@@ -108,13 +108,13 @@ function makeRepoWithBranch(branch: string): string {
 
 function setupAipRoot(): { rootDir: string; restore: () => void } {
   const rootDir = mkdtempSync(join(tmpdir(), 'aip-store-root-'))
-  const prev = process.env.TRUESIGHT_AIP_ROOT
-  process.env.TRUESIGHT_AIP_ROOT = rootDir
+  const prev = process.env.AIPT_DATA_ROOT
+  process.env.AIPT_DATA_ROOT = rootDir
   return {
     rootDir,
     restore() {
-      if (prev !== undefined) process.env.TRUESIGHT_AIP_ROOT = prev
-      else delete process.env.TRUESIGHT_AIP_ROOT
+      if (prev !== undefined) process.env.AIPT_DATA_ROOT = prev
+      else delete process.env.AIPT_DATA_ROOT
       rmSync(rootDir, { recursive: true, force: true })
     }
   }
@@ -1506,7 +1506,7 @@ describe('handleAiProductivityCursorHookStatus', () => {
     mkdirSync(downloadsDir, { recursive: true })
     writeFileSync(
       join(downloadsDir, 'ai-productivity-mcp.mjs'),
-      '#!/usr/bin/env node\n// ai-productivity-mcp · truesight bundled entry\n// __AI_PRODUCTIVITY_MCP_VERSION__: 0.1.12\nconsole.log("...")\n'
+      '#!/usr/bin/env node\n// ai-productivity-mcp · bundled entry\n// __AI_PRODUCTIVITY_MCP_VERSION__: 0.1.12\nconsole.log("...")\n'
     )
     const mock = makeMockRes()
     handleAiProductivityCursorHookStatus(mock.res)
@@ -1638,7 +1638,7 @@ describe('handleAiProductivityAttachSummary (v2.7.0 pending model + v2.10.0 sent
     repo = makeRepoWithBranch('feature/ABC-700-attach')
     const setup = setupAipRoot()
     aipCleanup = setup.restore
-    // v2.10.0:agent store 默认根读 TRUESIGHT_LOCAL_AGENT_ROOT,把 sentinel 隔离到 tmp
+    // v2.10.0:agent store 默认根读 AIPT_LOCAL_AGENT_ROOT,把 sentinel 隔离到 tmp
     agentRoot = mkdtempSync(join(tmpdir(), 'aip-agent-attach-'))
     prevLocalAgentRoot = process.env[LOCAL_AGENT_ROOT_ENV]
     process.env[LOCAL_AGENT_ROOT_ENV] = agentRoot
@@ -2824,7 +2824,7 @@ describe('handleAiProductivityHook + cursorTurnStarts 联动 (v1.0.0-rc.18)', ()
 
   beforeEach(() => {
     __resetCursorTurnStartsForTest()
-    // 必须用 TRUESIGHT_AIP_ROOT(驱动 iterations.jsonl 落盘);
+    // 必须用 AIPT_DATA_ROOT(驱动 iterations.jsonl 落盘);
     // LOCAL_AGENT_ROOT_ENV 只是 recent-attach sentinel 用的,跟数据根不同。
     const { restore } = setupAipRoot()
     cleanup = restore

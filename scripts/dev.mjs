@@ -58,7 +58,7 @@ if (!existsSync(DEV_HOME)) {
 }
 
 // 共享真实 data 但隔离 home。
-// 注意:hook-core sentinel 读 `TRUESIGHT_LOCAL_AGENT_ROOT`(legacy env),
+// 注意:hook-core sentinel 读 `AIPT_LOCAL_AGENT_ROOT`,
 // dev daemon 自己也设置一份指向 DEV_HOME,避免 dev 写真实生产 hook-state/。
 const SHARED_ENV = {
   ...process.env,
@@ -66,7 +66,7 @@ const SHARED_ENV = {
   AIPT_DATA_ROOT: PROD_DATA_ROOT,
   AIPT_PORT: String(DEV_PORT),
   AIPT_HOST: '127.0.0.1',
-  TRUESIGHT_LOCAL_AGENT_ROOT: DEV_HOME
+  AIPT_LOCAL_AGENT_ROOT: DEV_HOME
 }
 if (!DEV_ENABLE_WATCHER) {
   SHARED_ENV.AIPT_DISABLE_TRANSCRIPT_WATCHER = '1'

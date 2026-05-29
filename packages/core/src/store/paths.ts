@@ -10,18 +10,12 @@ import { join, resolve } from 'node:path'
  *
  * 默认 `~/.ai-productivity-tracker/data`,可通过环境变量
  * `AIPT_DATA_ROOT` 覆盖。
- *
- * 向后兼容:仍然识别老的 `TRUESIGHT_AIP_ROOT`(优先级低于新 env),
- * 并在新根目录不存在但老根存在时不自动迁移 —— 由用户主动跑 `cli migrate`。
  */
 export const AIP_ROOT_ENV = 'AIPT_DATA_ROOT'
-export const LEGACY_AIP_ROOT_ENV = 'TRUESIGHT_AIP_ROOT'
 
 function resolveDefaultRoot(): string {
   const envRoot = process.env[AIP_ROOT_ENV]
   if (envRoot && envRoot.trim()) return resolve(envRoot.trim())
-  const legacyRoot = process.env[LEGACY_AIP_ROOT_ENV]
-  if (legacyRoot && legacyRoot.trim()) return resolve(legacyRoot.trim())
   return join(homedir(), '.ai-productivity-tracker', 'data')
 }
 
