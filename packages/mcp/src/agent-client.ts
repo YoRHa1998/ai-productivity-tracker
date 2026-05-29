@@ -206,7 +206,8 @@ export class AgentClient {
         narrative: input.narrative,
         source: input.source,
         referencedLessonIds: input.referencedLessonIds,
-        anchorIterationSeqs: input.anchorIterationSeqs
+        anchorIterationSeqs: input.anchorIterationSeqs,
+        harnessSummary: input.harnessSummary
       }
     )
   }
@@ -314,12 +315,35 @@ export interface RetrospectiveNarrativeInput {
   splitSuggestions?: string[]
 }
 
+export type HarnessSuggestionCategory =
+  | 'guardrail-rule'
+  | 'check-script'
+  | 'checklist'
+  | 'baseline'
+  | 'manifest'
+  | 'self-evolution'
+
+export interface RetrospectiveHarnessSuggestionInput {
+  category: HarnessSuggestionCategory
+  title: string
+  signal: string
+  content: string
+  targetFile?: string
+  anchorSeqs?: number[]
+}
+
+export interface RetrospectiveHarnessSummaryInput {
+  overview?: string
+  suggestions: RetrospectiveHarnessSuggestionInput[]
+}
+
 export interface SaveRetrospectiveInput {
   jiraKey: string
   narrative: RetrospectiveNarrativeInput
   source?: RetrospectiveSource
   referencedLessonIds?: string[]
   anchorIterationSeqs?: number[]
+  harnessSummary?: RetrospectiveHarnessSummaryInput
 }
 
 export interface RetrospectiveBundleRelatedLessonView {
@@ -367,6 +391,7 @@ export interface SaveRetrospectiveResult {
   narrative: RetrospectiveNarrativeInput
   referencedLessonIds: string[]
   anchorIterationSeqs: number[]
+  harnessSummary?: RetrospectiveHarnessSummaryInput
 }
 
 /**

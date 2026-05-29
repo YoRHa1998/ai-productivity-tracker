@@ -95,7 +95,8 @@ import {
   type WriteLessonInput,
   type WriteRetrospectiveInput,
   type RetrospectiveSource,
-  type RetrospectiveNarrative
+  type RetrospectiveNarrative,
+  type RetrospectiveHarnessSummary
 } from '@ai-productivity-tracker/core/store'
 
 // ────────────────────────────────────────────────────────────────────
@@ -2119,6 +2120,8 @@ export interface SaveRetrospectiveRequestBody {
   referencedLessonIds?: string[]
   /** 报告锚点 iteration seq;超出范围的 seq 会被静默过滤 */
   anchorIterationSeqs?: number[]
+  /** Harness 总结:可落地的工程护栏建议;非法 / 空条目会被静默过滤 */
+  harnessSummary?: RetrospectiveHarnessSummary
 }
 
 /**
@@ -2165,7 +2168,8 @@ export function handleAiProductivitySaveRetrospective(
         narrative: body.narrative,
         source: body.source,
         referencedLessonIds: body.referencedLessonIds,
-        anchorIterationSeqs: body.anchorIterationSeqs
+        anchorIterationSeqs: body.anchorIterationSeqs,
+        harnessSummary: body.harnessSummary
       } satisfies WriteRetrospectiveInput,
       undefined
     )

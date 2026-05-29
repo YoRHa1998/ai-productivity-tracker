@@ -842,7 +842,11 @@ describe('registerAiProductivityTools', () => {
       },
       source: 'claude-code',
       referencedLessonIds: ['lsn-X-1'],
-      anchorIterationSeqs: [3, 5]
+      anchorIterationSeqs: [3, 5],
+      harnessSummary: {
+        overview: 'h-ov',
+        suggestions: [{ category: 'checklist', title: 't', signal: 's', content: 'c' }]
+      }
     })
     expect(saveSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -850,7 +854,11 @@ describe('registerAiProductivityTools', () => {
         source: 'claude-code',
         referencedLessonIds: ['lsn-X-1'],
         anchorIterationSeqs: [3, 5],
-        narrative: expect.objectContaining({ overview: '总览' })
+        narrative: expect.objectContaining({ overview: '总览' }),
+        harnessSummary: expect.objectContaining({
+          overview: 'h-ov',
+          suggestions: [expect.objectContaining({ category: 'checklist' })]
+        })
       })
     )
     expect(result.isError).toBeUndefined()

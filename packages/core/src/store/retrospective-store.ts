@@ -45,8 +45,59 @@ export const RETROSPECTIVE_LIMITS = {
   phasesMaxCount: 8,
   bulletsMaxCount: 8,
   referencedLessonsMaxCount: 32,
-  anchorIterationsMaxCount: 16
+  anchorIterationsMaxCount: 16,
+  // ── Harness 总结(harnessSummary)字段上限 ──
+  harnessOverviewMaxChars: 400,
+  harnessTitleMaxChars: 80,
+  harnessSignalMaxChars: 200,
+  harnessContentMaxChars: 600,
+  harnessTargetMaxChars: 120,
+  harnessSuggestionsMaxCount: 12,
+  harnessAnchorMaxCount: 8
 } as const
+
+/**
+ * Harness 护栏建议的类别。对齐 instant-preview harness self-evolution 的产物维度,
+ * 让复盘产出的建议能直接对应到项目 harness 的某类资产。
+ */
+export type HarnessSuggestionCategory =
+  | 'guardrail-rule' // 写进 guardrails.md 的硬护栏
+  | 'check-script' // 可脚本化的 check-guardrails.mjs 检查
+  | 'checklist' // 进 change-checklist.md 的人工自检项
+  | 'baseline' // 存量债登记到 baseline.json
+  | 'manifest' // manifest.json 治理边界调整
+  | 'self-evolution' // 触发时机 / AGENTS.md 入口约定
+
+export const HARNESS_SUGGESTION_CATEGORIES: readonly HarnessSuggestionCategory[] = [
+  'guardrail-rule',
+  'check-script',
+  'checklist',
+  'baseline',
+  'manifest',
+  'self-evolution'
+] as const
+
+export interface RetrospectiveHarnessSuggestion {
+  /** 护栏类别 */
+  category: HarnessSuggestionCategory
+  /** 一句话标题(≤80 字) */
+  title: string
+  /** 触发该建议的本需求失败信号(≤200 字) */
+  signal: string
+  /** 可落地内容:规则文字 / 脚本片段 / checklist 条目(≤600 字) */
+  content: string
+  /** 建议落到的 harness 目标文件(可选,≤120 字) */
+  targetFile?: string
+  /** 关联 iteration seq(可选,≤8 个,writeRetrospective 时按实际范围过滤越界) */
+  anchorSeqs?: number[]
+}
+
+export interface RetrospectiveHarnessSummary {
+  /** 一句话总览本需求可沉淀的 harness 方向(可选,≤400 字) */
+  overview?: string
+  /** 结构化护栏建议(最多 12 条) */
+  suggestions: RetrospectiveHarnessSuggestion[]
+}
 
 export interface RetrospectivePhase {
   /** 阶段标题(≤80 字),例如「设计与拆分」「调试与修复」 */
@@ -111,6 +162,8 @@ export interface StoredRetrospective {
   referencedLessonIds: string[]
   /** 报告引用的关键 iteration(高 think / 高 churn / 异常 stop) */
   anchorIterationSeqs: number[]
+  /** 可落地的 harness 护栏建议(可选,无 suggestion 时整体省略) */
+  harnessSummary?: RetrospectiveHarnessSummary
 }
 
 /** LLM 通过 MCP 落盘时的最少入参,id/createdAt/snapshot 由 store 端兜底生成 */
@@ -119,6 +172,7 @@ export interface WriteRetrospectiveInput {
   source?: RetrospectiveSource
   referencedLessonIds?: string[]
   anchorIterationSeqs?: number[]
+  harnessSummary?: RetrospectiveHarnessSummary
 }
 
 export interface RetrospectiveBundleRelatedLesson {
@@ -210,6 +264,62 @@ function normalizeNarrative(input: unknown): RetrospectiveNarrative {
       RETROSPECTIVE_LIMITS.bulletsMaxCount
     )
   }
+}
+
+/**
+ * 归一化 Harness 总结。
+ *
+ * - 过滤非法 / 缺 content / 缺 title 的 suggestion
+ * - category 不在白名单内的整条丢弃
+ * - clip 各字段长度
+ * - `validSeqs` 传入时(写盘场景)按实际 iteration 范围过滤 anchorSeqs;
+ *   不传时(读盘场景)仅去重排序(写盘时已过滤过,读盘信任已有数据)
+ * - suggestions 为空时整体返回 undefined,保持"无价值即不落"
+ */
+function normalizeHarnessSummary(
+  input: unknown,
+  validSeqs?: Set<number>
+): RetrospectiveHarnessSummary | undefined {
+  if (!input || typeof input !== 'object') return undefined
+  const r = input as Record<string, unknown>
+  const rawSuggestions = Array.isArray(r.suggestions) ? r.suggestions : []
+  const suggestions: RetrospectiveHarnessSuggestion[] = []
+  for (const raw of rawSuggestions) {
+    if (!raw || typeof raw !== 'object') continue
+    const s = raw as Record<string, unknown>
+    const category = s.category
+    if (
+      typeof category !== 'string' ||
+      !(HARNESS_SUGGESTION_CATEGORIES as readonly string[]).includes(category)
+    ) {
+      continue
+    }
+    const title = clipString(s.title, RETROSPECTIVE_LIMITS.harnessTitleMaxChars)
+    const content = clipString(s.content, RETROSPECTIVE_LIMITS.harnessContentMaxChars)
+    // title / content 任一为空视为无效条目
+    if (!title || !content) continue
+    const suggestion: RetrospectiveHarnessSuggestion = {
+      category: category as HarnessSuggestionCategory,
+      title,
+      signal: clipString(s.signal, RETROSPECTIVE_LIMITS.harnessSignalMaxChars),
+      content
+    }
+    const targetFile = clipString(s.targetFile, RETROSPECTIVE_LIMITS.harnessTargetMaxChars)
+    if (targetFile) suggestion.targetFile = targetFile
+    const anchorSeqsRaw = normalizeSeqArray(
+      s.anchorSeqs,
+      RETROSPECTIVE_LIMITS.harnessAnchorMaxCount
+    )
+    const anchorSeqs = validSeqs ? anchorSeqsRaw.filter((seq) => validSeqs.has(seq)) : anchorSeqsRaw
+    if (anchorSeqs.length > 0) suggestion.anchorSeqs = anchorSeqs
+    suggestions.push(suggestion)
+    if (suggestions.length >= RETROSPECTIVE_LIMITS.harnessSuggestionsMaxCount) break
+  }
+  if (suggestions.length === 0) return undefined
+  const overview = clipString(r.overview, RETROSPECTIVE_LIMITS.harnessOverviewMaxChars)
+  const summary: RetrospectiveHarnessSummary = { suggestions }
+  if (overview) summary.overview = overview
+  return summary
 }
 
 function normalizeIdArray(input: unknown, limit: number): string[] {
@@ -334,7 +444,8 @@ export function loadRetrospective(jiraKey: string, root?: string): StoredRetrosp
       anchorIterationSeqs: normalizeSeqArray(
         parsed.anchorIterationSeqs,
         RETROSPECTIVE_LIMITS.anchorIterationsMaxCount
-      )
+      ),
+      harnessSummary: normalizeHarnessSummary(parsed.harnessSummary)
     }
   } catch (err) {
     console.warn(`[retrospective-store] 解析 ${file} 失败:`, err)
@@ -394,6 +505,8 @@ export function writeRetrospective(
     RETROSPECTIVE_LIMITS.anchorIterationsMaxCount
   ).filter((seq) => validSeqs.has(seq))
 
+  const harnessSummary = normalizeHarnessSummary(input.harnessSummary, validSeqs)
+
   const generatedAtIterationCount = iterations.length
   const generatedAtIterationSeq = iterations.length ? iterations[iterations.length - 1].seq : 0
 
@@ -409,7 +522,8 @@ export function writeRetrospective(
     snapshot,
     narrative,
     referencedLessonIds,
-    anchorIterationSeqs
+    anchorIterationSeqs,
+    ...(harnessSummary ? { harnessSummary } : {})
   }
 
   writeAtomic(retrospectivePath(jiraKey, root), next)

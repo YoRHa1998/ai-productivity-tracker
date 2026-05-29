@@ -664,7 +664,7 @@ agent 返回「本轮未沉淀新经验」,原样转述给用户。
  *     - lessons-extract = 跨需求复用的知识条目(自动合并去重)
  * ────────────────────────────────────────────────────────────────────*/
 
-export const RETROSPECTIVE_SKILL_VERSION = '1.0.0'
+export const RETROSPECTIVE_SKILL_VERSION = '1.1.0'
 
 export const RETROSPECTIVE_SKILL_KEY = 'retrospective-report'
 export const RETROSPECTIVE_CLAUDE_FILENAME = 'SKILL.md'
@@ -672,7 +672,7 @@ export const RETROSPECTIVE_CURSOR_FILENAME = 'retrospective-report.mdc'
 
 export const RETROSPECTIVE_CLAUDE_CONTENT = `---
 name: retrospective-report
-description: 需求复盘 / 生成复盘报告 / 复盘当前需求 / retrospective。当用户在「.ai-productivity-tracker/data」对应需求目录下或在含 Jira issue key 分支(正则 [A-Z][A-Z0-9]+-\\d+)的 git 仓库中,明确说出关键词「需求复盘」「复盘当前需求」「生成复盘报告」「retrospective」时,**必须**触发本 skill。skill 会拉取该需求的全部历史对话、iteration 数据、关联经验和客观信号,推理出结构化叙事(总览 / 阶段拆分 / 亮点 / 问题 / 改进 / 坑 / 下一步建议 / 拆分建议),按 schemaVersion=1 落盘到本机 \`<jiraKey>/retrospective.json\`(单文件覆盖)。看板「需求详情 → 复盘报告」Tab 自动可见。
+description: 需求复盘 / 生成复盘报告 / 复盘当前需求 / retrospective。当用户在「.ai-productivity-tracker/data」对应需求目录下或在含 Jira issue key 分支(正则 [A-Z][A-Z0-9]+-\\d+)的 git 仓库中,明确说出关键词「需求复盘」「复盘当前需求」「生成复盘报告」「retrospective」时,**必须**触发本 skill。skill 会拉取该需求的全部历史对话、iteration 数据、关联经验和客观信号,推理出结构化叙事(总览 / 阶段拆分 / 亮点 / 问题 / 改进 / 坑 / 下一步建议 / 拆分建议)与可落地的 Harness 护栏建议,按 schemaVersion=1 落盘到本机 \`<jiraKey>/retrospective.json\`(单文件覆盖)。看板「需求详情 → 复盘报告」Tab 自动可见。
 ---
 
 # retrospective-report (v${RETROSPECTIVE_SKILL_VERSION})
@@ -764,6 +764,25 @@ ai_productivity_extract_retro_bundle({ jiraKey: "<解析出的 jiraKey>" })
 - topThinkSeqs / fileChurnMap.touchedSeqs / abnormalStopReasons.seqs 中关键的几个
 - 超出实际 iteration 范围的 seq 会被 agent 静默过滤
 
+#### 2.6 Harness 总结(harnessSummary,强候选才产出)
+
+把本需求暴露的**失败信号**转译成**可直接配置进项目 harness 的工程护栏建议**,目标是让 AI 越用越好用。Harness 是一套"可执行护栏 + 可审查清单 + 可自进化基线"的工程治理层(参考项目 \`docs/ai/harness/\`),核心资产:guardrails 规则文档 / check 静态扫描脚本 / change-checklist 人工自检 / baseline 存量债 / manifest 机器清单 / self-evolution 失败信号闭环。
+
+每条 suggestion 必填 \`category\` + \`title\` + \`content\`,建议带 \`signal\`(触发依据) / \`targetFile\` / \`anchorSeqs\`。6 个 category:
+
+| category | 含义 | 典型来源信号 |
+|---|---|---|
+| \`guardrail-rule\` | 写进 guardrails.md 的硬护栏(目标规范 + 禁止项) | fileChurnMap 某文件反复改 / 同类架构违规反复出现 |
+| \`check-script\` | 可脚本化的静态检查(给 check-guardrails.mjs 加一条) | 上一条规则能用正则 / AST 稳定判定 |
+| \`checklist\` | 进 change-checklist.md 的人工自检项(脚本无法稳定判定) | abnormalStopReasons(max_tokens 截断)/ 只能人工确认的跨层职责 |
+| \`baseline\` | 存量债登记到 baseline.json(先防扩散,后还债) | 本需求确认是历史债、短期无法清理 |
+| \`manifest\` | manifest.json 治理边界 / surface 调整 | 新增治理域 / 边界变化 |
+| \`self-evolution\` | 触发时机 / AGENTS.md 入口约定 | topThinkSeqs 卡点暴露"规则没写清/触发时机不准" |
+
+映射指引:\`fileChurnMap\` 反复改 → guardrail-rule(能脚本化再补 check-script);\`abnormalStopReasons\` → checklist;\`topThinkSeqs\` 卡点 → checklist / self-evolution;pitfall / tooling 类 lesson → 对应护栏。\`content\` 写成可直接贴进 harness 的规则文字 / 脚本片段 / checklist 条目。
+
+**价值优先**:无可沉淀的 harness 约束(本需求没暴露值得固化的工程信号)时,传 \`harnessSummary: { suggestions: [] }\` 或整体省略,**禁止凑数**。空 title / content 或非法 category 的条目会被 agent 静默丢弃。
+
 ### Step 3:落盘复盘报告
 
 \`\`\`
@@ -779,6 +798,19 @@ ai_productivity_save_retrospective({
     pitfallsObserved: [...],
     nextSteps: [...],
     splitSuggestions: [...] // 可选
+  },
+  harnessSummary: { // 可选,无可沉淀护栏时省略或传空 suggestions
+    overview: "本需求可沉淀 2 条护栏方向", // 可选
+    suggestions: [
+      {
+        category: "guardrail-rule",
+        title: "API 必须经 src/api 收口",
+        signal: "本需求多轮反复在组件里直引 axios",
+        content: "禁止业务代码 import axios,统一走 src/utils/request.ts",
+        targetFile: "docs/ai/harness/technical-harness-guardrails.md",
+        anchorSeqs: [4, 6]
+      }
+    ]
   },
   referencedLessonIds: ["lsn-INSTANT-5321-abc", ...],
   anchorIterationSeqs: [3, 5, 7]
@@ -803,6 +835,7 @@ ai_productivity_save_retrospective({
 - **职责单一**:复盘报告 = 看板叙事产物;经验沉淀走 lessons-extract,不在复盘里落新 lesson
 - **零云端 LLM**:本 skill 完全靠 IDE 内 LLM 推理,agent 不调任何外部 API
 - **可重复生成**:用户可多次触发,单文件覆盖式更新
+- **Harness 可落地**:harnessSummary 产出的是能直接贴进项目 harness 的护栏建议,无值得固化的工程信号时宁缺毋滥(空 suggestions)
 
 ## 禁止
 
@@ -884,6 +917,19 @@ ai_productivity_extract_retro_bundle({ jiraKey: "<解析出的 jiraKey>" })
 
 \`anchorIterationSeqs\` ≤16 个,超出范围的 seq 会被静默过滤。
 
+### 2.6 Harness 总结(harnessSummary,强候选才产出)
+
+把本需求暴露的失败信号转译成**可直接配置进项目 harness 的工程护栏建议**(harness = 可执行护栏 + 可审查清单 + 可自进化基线的工程治理层,参考 \`docs/ai/harness/\`)。每条 suggestion 必填 \`category\` + \`title\` + \`content\`,建议带 \`signal\` / \`targetFile\` / \`anchorSeqs\`。6 个 category:
+
+- \`guardrail-rule\`:guardrails.md 硬护栏 ← fileChurnMap 反复改 / 反复架构违规
+- \`check-script\`:可脚本化的静态检查 ← 上条规则能正则/AST 稳定判定
+- \`checklist\`:change-checklist.md 人工自检 ← abnormalStopReasons / 只能人工确认
+- \`baseline\`:baseline.json 存量债登记 ← 确认是历史债、短期无法清理
+- \`manifest\`:manifest.json 治理边界调整 ← 治理域 / 边界变化
+- \`self-evolution\`:触发时机 / AGENTS.md 入口约定 ← topThinkSeqs 卡点暴露规则没写清
+
+\`content\` 写成可直接贴进 harness 的规则文字 / 脚本片段 / checklist 条目。**价值优先**:无可沉淀护栏时传 \`harnessSummary: { suggestions: [] }\` 或省略,**禁止凑数**;空 title/content 或非法 category 的条目会被静默丢弃。
+
 ## Step 3:落盘
 
 \`\`\`
@@ -891,6 +937,7 @@ ai_productivity_save_retrospective({
   jiraKey: "<解析出的 jiraKey>",
   source: "cursor",
   narrative: { overview, phases, highlights, issues, improvements, pitfallsObserved, nextSteps, splitSuggestions? },
+  harnessSummary: { overview?, suggestions: [{ category, title, signal, content, targetFile?, anchorSeqs? }] }, // 可选,无则省略/空数组
   referencedLessonIds: [...],
   anchorIterationSeqs: [...]
 })

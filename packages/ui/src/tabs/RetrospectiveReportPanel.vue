@@ -16,9 +16,11 @@ import {
   deleteRetrospective,
   getLessonDetail,
   getRetrospective,
+  type HarnessSuggestionCategory,
   type IterationDetail,
   type LessonDetail,
   type RequirementDetail,
+  type RetrospectiveHarnessSuggestion,
   type StoredRetrospective
 } from '../api'
 import DonutMetric from '../charts/DonutMetric.vue'
@@ -74,6 +76,28 @@ const TYPE_CHIP: Record<string, string> = {
   'split-suggestion': 'aip-chip--warning',
   tooling: 'aip-chip--muted'
 }
+
+const HARNESS_CATEGORY_LABEL: Record<HarnessSuggestionCategory, string> = {
+  'guardrail-rule': '硬护栏规则',
+  'check-script': '检查脚本',
+  checklist: '自检清单',
+  baseline: '存量债基线',
+  manifest: '治理清单',
+  'self-evolution': '自进化约定'
+}
+const HARNESS_CATEGORY_CHIP: Record<HarnessSuggestionCategory, string> = {
+  'guardrail-rule': 'aip-chip--primary',
+  'check-script': 'aip-chip--success',
+  checklist: 'aip-chip--warning',
+  baseline: 'aip-chip--muted',
+  manifest: 'aip-chip--primary',
+  'self-evolution': 'aip-chip--muted'
+}
+
+const harnessSummary = computed(() => report.value?.harnessSummary ?? null)
+const harnessSuggestions = computed<RetrospectiveHarnessSuggestion[]>(
+  () => harnessSummary.value?.suggestions ?? []
+)
 
 const triggerHint = computed(() => `需求复盘 当前需求 ${props.jiraKey}`)
 
@@ -133,6 +157,45 @@ async function copyTriggerHint(): Promise<void> {
   } catch {
     ElMessage.info(triggerHint.value)
   }
+}
+
+function buildSuggestionMarkdown(s: RetrospectiveHarnessSuggestion): string {
+  const lines: string[] = [`### [${HARNESS_CATEGORY_LABEL[s.category]}] ${s.title}`, '']
+  if (s.signal) lines.push(`- 触发信号: ${s.signal}`)
+  if (s.targetFile) lines.push(`- 建议落到: \`${s.targetFile}\``)
+  if (s.anchorSeqs && s.anchorSeqs.length) {
+    lines.push(`- 关联轮次: ${s.anchorSeqs.map((n) => `#${n}`).join(' ')}`)
+  }
+  lines.push('', s.content)
+  return lines.join('\n')
+}
+
+async function copyToClipboard(text: string, okMsg: string): Promise<void> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      await navigator.clipboard.writeText(text)
+      ElMessage.success(okMsg)
+    } else {
+      ElMessage.info('当前环境不支持剪贴板,请手动复制')
+    }
+  } catch {
+    ElMessage.info('复制失败,请手动复制')
+  }
+}
+
+function copyOneSuggestion(s: RetrospectiveHarnessSuggestion): void {
+  void copyToClipboard(buildSuggestionMarkdown(s), '已复制该护栏建议,可贴进项目 harness')
+}
+
+function copyAllHarness(): void {
+  const summary = harnessSummary.value
+  if (!summary || !summary.suggestions.length) return
+  const parts: string[] = ['# Harness 增量建议（来自需求复盘）', '']
+  if (summary.overview) parts.push(summary.overview, '')
+  for (const s of summary.suggestions) {
+    parts.push(buildSuggestionMarkdown(s), '')
+  }
+  void copyToClipboard(parts.join('\n').trimEnd() + '\n', '已复制全部护栏建议为 Markdown')
 }
 
 async function handleDelete(): Promise<void> {
@@ -594,6 +657,67 @@ function renderMd(text: string): string {
             />
           </ul>
         </ElCollapseItem>
+        <ElCollapseItem
+          v-if="harnessSuggestions.length"
+          name="harness"
+          :title="`Harness 总结(${harnessSuggestions.length})`"
+        >
+          <div class="aip-retro__harness">
+            <div
+              v-if="harnessSummary?.overview"
+              class="aip-retro__markdown aip-retro__harness-overview"
+              v-html="renderMd(harnessSummary.overview)"
+            />
+            <div class="aip-retro__harness-toolbar">
+              <span class="aip-retro__harness-hint"
+                >可落地的工程护栏建议,直接配置进项目 docs/ai/harness/ 让 AI 逐步进化</span
+              >
+              <ElButton size="small" plain @click="copyAllHarness">复制全部为 Markdown</ElButton>
+            </div>
+            <ul class="aip-retro__harness-list">
+              <li
+                v-for="(s, idx) in harnessSuggestions"
+                :key="idx"
+                class="aip-retro__harness-item aipt-glass"
+              >
+                <header class="aip-retro__harness-head">
+                  <span class="aip-chip" :class="HARNESS_CATEGORY_CHIP[s.category]">
+                    {{ HARNESS_CATEGORY_LABEL[s.category] }}
+                  </span>
+                  <span class="aip-retro__harness-title">{{ s.title }}</span>
+                  <ElButton
+                    class="aip-retro__harness-copy"
+                    size="small"
+                    text
+                    @click="copyOneSuggestion(s)"
+                    >复制</ElButton
+                  >
+                </header>
+                <p v-if="s.signal" class="aip-retro__harness-signal">
+                  <span class="aip-retro__harness-label">信号</span>{{ s.signal }}
+                </p>
+                <div
+                  class="aip-retro__markdown aip-retro__harness-content"
+                  v-html="renderMd(s.content)"
+                />
+                <footer
+                  v-if="s.targetFile || (s.anchorSeqs && s.anchorSeqs.length)"
+                  class="aip-retro__harness-foot"
+                >
+                  <code v-if="s.targetFile" class="aip-retro__harness-target">{{
+                    s.targetFile
+                  }}</code>
+                  <span
+                    v-if="s.anchorSeqs && s.anchorSeqs.length"
+                    class="aip-retro__harness-seqs aipt-num"
+                  >
+                    <span v-for="seq in s.anchorSeqs" :key="seq">#{{ seq }}</span>
+                  </span>
+                </footer>
+              </li>
+            </ul>
+          </div>
+        </ElCollapseItem>
       </ElCollapse>
 
       <!-- 引用经验卡片 -->
@@ -998,6 +1122,120 @@ function renderMd(text: string): string {
 }
 .aip-retro__bullets--muted li::marker {
   color: rgba(255, 255, 255, 0.32);
+}
+
+/* Harness 总结 */
+.aip-retro__harness {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipt-space-3);
+}
+
+.aip-retro__harness-overview {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--aipt-text-secondary);
+}
+
+.aip-retro__harness-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.aip-retro__harness-hint {
+  font-size: 12px;
+  color: var(--aipt-text-tertiary, rgba(255, 255, 255, 0.45));
+}
+
+.aip-retro__harness-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipt-space-3);
+}
+
+.aip-retro__harness-item {
+  padding: 12px 14px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aip-retro__harness-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aip-retro__harness-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--aipt-text-strong);
+  flex: 1;
+}
+
+.aip-retro__harness-copy {
+  flex-shrink: 0;
+}
+
+.aip-retro__harness-signal {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--aipt-text-secondary);
+  margin: 0;
+}
+
+.aip-retro__harness-label {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: rgba(245, 196, 137, 0.16);
+  color: #f5c489;
+}
+
+.aip-retro__harness-content {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--aipt-text-secondary);
+}
+
+.aip-retro__harness-content :deep(p) {
+  margin: 0 0 6px;
+}
+
+.aip-retro__harness-content :deep(pre) {
+  margin: 4px 0;
+  overflow-x: auto;
+}
+
+.aip-retro__harness-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.aip-retro__harness-target {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(110, 167, 245, 0.14);
+  color: #6ea7f5;
+}
+
+.aip-retro__harness-seqs {
+  display: inline-flex;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--aipt-text-tertiary, rgba(255, 255, 255, 0.45));
 }
 
 /* 引用经验 */

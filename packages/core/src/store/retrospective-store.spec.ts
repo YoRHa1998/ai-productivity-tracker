@@ -328,6 +328,154 @@ describe('retrospective-store', () => {
     expect(snap.lessonsCount).toBeGreaterThanOrEqual(1)
     expect(snap.abnormalStopReasonsCount).toBe(1)
   })
+
+  describe('harnessSummary', () => {
+    function seedRequirementWithIterations(jiraKey: string): void {
+      saveRequirement({ jiraKey, title: 'Harness 测试', manualEstimateMinutes: 120 }, { root })
+      appendIteration(jiraKey, { kind: 'init' }, root) // seq 1
+      appendIteration(jiraKey, { kind: 'coding', cumulativeToken: 1000 }, root) // seq 2
+      appendIteration(jiraKey, { kind: 'coding', cumulativeToken: 2000 }, root) // seq 3
+    }
+
+    it('落盘并读回结构化护栏建议', () => {
+      seedRequirementWithIterations('PROJ-H1')
+      const written = writeRetrospective(
+        'PROJ-H1',
+        {
+          narrative: makeNarrative(),
+          harnessSummary: {
+            overview: '可沉淀 2 条护栏方向',
+            suggestions: [
+              {
+                category: 'guardrail-rule',
+                title: 'API 必须经 src/api 收口',
+                signal: '本需求多轮反复在组件里直引 axios',
+                content: '禁止业务代码 import axios,统一走 src/utils/request.ts',
+                targetFile: 'docs/ai/harness/technical-harness-guardrails.md',
+                anchorSeqs: [2, 3]
+              },
+              {
+                category: 'checklist',
+                title: '改 i18n 资源后跑 i18n:check',
+                signal: '某轮被 max_tokens 截断',
+                content: '改 src/locales 后必须 npm run i18n:check'
+              }
+            ]
+          }
+        },
+        root
+      )
+
+      expect(written.harnessSummary).toBeDefined()
+      expect(written.harnessSummary!.overview).toBe('可沉淀 2 条护栏方向')
+      expect(written.harnessSummary!.suggestions).toHaveLength(2)
+
+      const back = loadRetrospective('PROJ-H1', root)
+      expect(back!.harnessSummary!.suggestions[0].category).toBe('guardrail-rule')
+      expect(back!.harnessSummary!.suggestions[0].targetFile).toBe(
+        'docs/ai/harness/technical-harness-guardrails.md'
+      )
+      expect(back!.harnessSummary!.suggestions[0].anchorSeqs).toEqual([2, 3])
+      expect(back!.harnessSummary!.suggestions[1].category).toBe('checklist')
+      expect(back!.harnessSummary!.suggestions[1].targetFile).toBeUndefined()
+    })
+
+    it('过滤非法 category / 缺 title 或 content 的条目', () => {
+      seedRequirementWithIterations('PROJ-H2')
+      const written = writeRetrospective(
+        'PROJ-H2',
+        {
+          narrative: makeNarrative(),
+          harnessSummary: {
+            suggestions: [
+              // 非法 category → 丢弃
+              {
+                category: 'not-a-category',
+                title: 'x',
+                signal: '',
+                content: 'y'
+              } as never,
+              // 缺 content → 丢弃
+              { category: 'baseline', title: '只有标题', signal: '', content: '' },
+              // 合法
+              { category: 'manifest', title: '保留', signal: '', content: '保留内容' }
+            ]
+          }
+        },
+        root
+      )
+      expect(written.harnessSummary!.suggestions).toHaveLength(1)
+      expect(written.harnessSummary!.suggestions[0].title).toBe('保留')
+    })
+
+    it('anchorSeqs 越界会被过滤', () => {
+      seedRequirementWithIterations('PROJ-H3')
+      const written = writeRetrospective(
+        'PROJ-H3',
+        {
+          narrative: makeNarrative(),
+          harnessSummary: {
+            suggestions: [
+              {
+                category: 'guardrail-rule',
+                title: 't',
+                signal: 's',
+                content: 'c',
+                anchorSeqs: [2, 999]
+              }
+            ]
+          }
+        },
+        root
+      )
+      expect(written.harnessSummary!.suggestions[0].anchorSeqs).toEqual([2])
+    })
+
+    it('空 suggestions 时整体省略 harnessSummary', () => {
+      seedRequirementWithIterations('PROJ-H4')
+      const written = writeRetrospective(
+        'PROJ-H4',
+        { narrative: makeNarrative(), harnessSummary: { suggestions: [] } },
+        root
+      )
+      expect(written.harnessSummary).toBeUndefined()
+      // 盘上不应出现 harnessSummary 键
+      const onDisk = JSON.parse(readFileSync(retrospectivePath('PROJ-H4', root), 'utf-8'))
+      expect(onDisk.harnessSummary).toBeUndefined()
+    })
+
+    it('clip 超长 content / title', () => {
+      seedRequirementWithIterations('PROJ-H5')
+      const longContent = 'A'.repeat(RETROSPECTIVE_LIMITS.harnessContentMaxChars + 50)
+      const longTitle = 'B'.repeat(RETROSPECTIVE_LIMITS.harnessTitleMaxChars + 20)
+      const written = writeRetrospective(
+        'PROJ-H5',
+        {
+          narrative: makeNarrative(),
+          harnessSummary: {
+            suggestions: [
+              { category: 'check-script', title: longTitle, signal: '', content: longContent }
+            ]
+          }
+        },
+        root
+      )
+      expect(written.harnessSummary!.suggestions[0].content.length).toBe(
+        RETROSPECTIVE_LIMITS.harnessContentMaxChars
+      )
+      expect(written.harnessSummary!.suggestions[0].title.length).toBe(
+        RETROSPECTIVE_LIMITS.harnessTitleMaxChars
+      )
+    })
+
+    it('向后兼容:老报告(无 harnessSummary)读取不报错', () => {
+      seedRequirementWithIterations('PROJ-H6')
+      writeRetrospective('PROJ-H6', { narrative: makeNarrative() }, root)
+      const back = loadRetrospective('PROJ-H6', root)
+      expect(back).not.toBeNull()
+      expect(back!.harnessSummary).toBeUndefined()
+    })
+  })
 })
 
 describe('buildRetrospectiveBundle', () => {

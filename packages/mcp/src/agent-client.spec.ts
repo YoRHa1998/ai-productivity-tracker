@@ -364,7 +364,13 @@ describe('AgentClient', () => {
         },
         source: 'cursor',
         referencedLessonIds: ['lsn-X-1'],
-        anchorIterationSeqs: [2]
+        anchorIterationSeqs: [2],
+        harnessSummary: {
+          overview: 'h-ov',
+          suggestions: [
+            { category: 'guardrail-rule', title: 't', signal: 's', content: 'c', anchorSeqs: [2] }
+          ]
+        }
       })
       const call = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
       expect(call[0]).toBe(
@@ -376,6 +382,8 @@ describe('AgentClient', () => {
       expect(body.source).toBe('cursor')
       expect(body.referencedLessonIds).toEqual(['lsn-X-1'])
       expect(body.anchorIterationSeqs).toEqual([2])
+      expect(body.harnessSummary.overview).toBe('h-ov')
+      expect(body.harnessSummary.suggestions[0].category).toBe('guardrail-rule')
     })
   })
 })

@@ -354,6 +354,40 @@ const retroNarrativeSchema = z.object({
   splitSuggestions: z.array(z.string()).max(8).optional().describe('对话拆分建议(可选,最多 8 条)')
 })
 
+const harnessSuggestionSchema = z.object({
+  category: z
+    .enum(['guardrail-rule', 'check-script', 'checklist', 'baseline', 'manifest', 'self-evolution'])
+    .describe(
+      '护栏类别:guardrail-rule=写进 guardrails.md 的硬护栏 / check-script=可脚本化的静态检查 / checklist=人工自检项 / baseline=存量债登记 / manifest=治理边界调整 / self-evolution=触发时机或入口约定'
+    ),
+  title: z.string().describe('一句话标题(≤80 字)'),
+  signal: z
+    .string()
+    .describe('触发该建议的本需求失败信号(≤200 字),例如反复改某文件 / 踩的工具坑 / 卡点'),
+  content: z
+    .string()
+    .describe('可落地内容(≤600 字):规则文字 / 脚本片段 / checklist 条目,直接可贴进 harness'),
+  targetFile: z
+    .string()
+    .optional()
+    .describe(
+      '建议落到的 harness 目标文件(可选),例如 docs/ai/harness/technical-harness-guardrails.md'
+    ),
+  anchorSeqs: z
+    .array(z.number().int().positive())
+    .max(8)
+    .optional()
+    .describe('关联 iteration seq(可选,≤8 个)。超出实际范围的会被静默过滤')
+})
+
+const retroHarnessSchema = z.object({
+  overview: z.string().optional().describe('一句话总览本需求可沉淀的 harness 方向(可选,≤400 字)'),
+  suggestions: z
+    .array(harnessSuggestionSchema)
+    .max(12)
+    .describe('结构化护栏建议(最多 12 条)。无可沉淀的 harness 约束时传空数组,禁止凑数')
+})
+
 const saveRetrospectiveInputShape = {
   jiraKey: z.string().min(1).describe('需求 Jira Key,与 extract_retro_bundle 入参一致'),
   narrative: retroNarrativeSchema.describe('LLM 推理产物的结构化叙事'),
@@ -376,6 +410,11 @@ const saveRetrospectiveInputShape = {
     .optional()
     .describe(
       '报告引用的关键 iteration seq(高 think / 高 churn / 异常 stop 的轮次)。**超出实际 iteration 范围的 seq 会被静默过滤**'
+    ),
+  harnessSummary: retroHarnessSchema
+    .optional()
+    .describe(
+      '【Harness 总结】可落地的工程护栏建议:把本需求暴露的失败信号(反复改的文件 / 踩的工具坑 / 卡点 / 异常中断)转译成可直接配置进项目 harness 的结构化建议。无可沉淀约束时省略或传空 suggestions,禁止凑数'
     )
 }
 
@@ -616,7 +655,7 @@ export function registerAiProductivityTools(server: McpServer, client: AgentClie
     'ai_productivity_extract_retro_bundle',
     {
       description:
-        '【需求复盘】skill 专用:拉取指定需求的复盘报告生成数据包(requirement + 全部 iterations + computedSignals + relatedLessons + existingRetrospective)。返回 RETRO_BUNDLE_JSON_BEGIN/END 包裹的 JSON。LLM 解析后按结构化叙事维度推理(overview / phases / highlights / issues / improvements / pitfallsObserved / nextSteps / splitSuggestions),再调 ai_productivity_save_retrospective 落盘。**复盘报告与 lessons 是弱引用关系**,LLM 通过 referencedLessonIds 关联本需求已沉淀的经验,不在复盘里直接落新 lesson(用户想沉淀经验仍走 lessons-extract skill)。',
+        '【需求复盘】skill 专用:拉取指定需求的复盘报告生成数据包(requirement + 全部 iterations + computedSignals + relatedLessons + existingRetrospective)。返回 RETRO_BUNDLE_JSON_BEGIN/END 包裹的 JSON。LLM 解析后按结构化叙事维度推理(overview / phases / highlights / issues / improvements / pitfallsObserved / nextSteps / splitSuggestions),并把本需求暴露的失败信号转译成可落地的 Harness 护栏建议(harnessSummary),再调 ai_productivity_save_retrospective 落盘。**复盘报告与 lessons 是弱引用关系**,LLM 通过 referencedLessonIds 关联本需求已沉淀的经验,不在复盘里直接落新 lesson(用户想沉淀经验仍走 lessons-extract skill)。',
       inputSchema: extractRetroBundleInputShape
     },
     async (
@@ -638,7 +677,7 @@ export function registerAiProductivityTools(server: McpServer, client: AgentClie
     'ai_productivity_save_retrospective',
     {
       description:
-        '【需求复盘】skill 专用:把 LLM 推理出的结构化复盘叙事落盘到本机 ~/.ai-productivity-tracker/data/<jiraKey>/retrospective.json。**单文件覆盖**:同 jiraKey 重复落盘视为更新,snapshot / generatedAt / generatedAtIterationSeq 由 agent 端基于当前 iterations + requirement 自动注入,LLM 即便传相关字段也会被忽略。referencedLessonIds 不属于本 jiraKey 的 id 会被静默过滤;anchorIterationSeqs 超出范围的 seq 会被静默过滤。narrative.overview 为空时 agent 端会拒收(返回错误)。',
+        '【需求复盘】skill 专用:把 LLM 推理出的结构化复盘叙事 + Harness 总结落盘到本机 ~/.ai-productivity-tracker/data/<jiraKey>/retrospective.json。**单文件覆盖**:同 jiraKey 重复落盘视为更新,snapshot / generatedAt / generatedAtIterationSeq 由 agent 端基于当前 iterations + requirement 自动注入,LLM 即便传相关字段也会被忽略。referencedLessonIds 不属于本 jiraKey 的 id 会被静默过滤;anchorIterationSeqs 与 harnessSummary.suggestions[].anchorSeqs 超出范围的 seq 会被静默过滤;harnessSummary 缺非法 category/空 title-content 的条目会被丢弃,空 suggestions 整体省略。narrative.overview 为空时 agent 端会拒收(返回错误)。',
       inputSchema: saveRetrospectiveInputShape
     },
     async (args: z.infer<z.ZodObject<typeof saveRetrospectiveInputShape>>): Promise<ToolResult> => {
@@ -658,7 +697,8 @@ export function registerAiProductivityTools(server: McpServer, client: AgentClie
           narrative,
           source: args.source,
           referencedLessonIds: args.referencedLessonIds,
-          anchorIterationSeqs: args.anchorIterationSeqs
+          anchorIterationSeqs: args.anchorIterationSeqs,
+          harnessSummary: args.harnessSummary
         })
         return { content: [{ type: 'text', text: formatSaveRetrospective(result) }] }
       } catch (err) {

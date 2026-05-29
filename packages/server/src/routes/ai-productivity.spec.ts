@@ -3041,6 +3041,40 @@ describe('retrospective handlers (v1.0.0-rc.23)', () => {
     expect(back!.narrative.overview).toContain('需求 X')
   })
 
+  it('handleAiProductivitySaveRetrospective 透传 harnessSummary 并落盘回读', () => {
+    saveRequirement({ jiraKey: 'RTRO-H', title: 'Harness', manualEstimateMinutes: 120 }, {})
+    appendIteration('RTRO-H', { kind: 'init' }) // seq 1
+    appendIteration('RTRO-H', { kind: 'coding', cumulativeToken: 1000 }) // seq 2
+
+    const body = {
+      ...makeNarrativeBody(),
+      harnessSummary: {
+        overview: '可沉淀 1 条护栏',
+        suggestions: [
+          {
+            category: 'guardrail-rule' as const,
+            title: 'API 收口',
+            signal: '反复直引 axios',
+            content: '禁止业务代码 import axios',
+            targetFile: 'docs/ai/harness/technical-harness-guardrails.md',
+            anchorSeqs: [2, 999]
+          }
+        ]
+      }
+    }
+    const mock = makeMockRes()
+    handleAiProductivitySaveRetrospective(mock.res, 'RTRO-H', body)
+    expect(mock.statusCode).toBe(200)
+    const data = JSON.parse(mock.body).data
+    expect(data.harnessSummary.suggestions).toHaveLength(1)
+    expect(data.harnessSummary.suggestions[0].category).toBe('guardrail-rule')
+    // 越界 seq 999 被过滤
+    expect(data.harnessSummary.suggestions[0].anchorSeqs).toEqual([2])
+
+    const back = loadRetrospective('RTRO-H')
+    expect(back!.harnessSummary!.suggestions[0].title).toBe('API 收口')
+  })
+
   it('handleAiProductivitySaveRetrospective 覆盖式更新:第二次落盘替换老内容', () => {
     saveRequirement({ jiraKey: 'RTRO-3', title: 'X' }, {})
     appendIteration('RTRO-3', { kind: 'init' })

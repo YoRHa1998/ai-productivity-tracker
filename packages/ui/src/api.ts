@@ -756,6 +756,28 @@ export type RetrospectiveNarrative = {
   splitSuggestions?: string[]
 }
 
+export type HarnessSuggestionCategory =
+  | 'guardrail-rule'
+  | 'check-script'
+  | 'checklist'
+  | 'baseline'
+  | 'manifest'
+  | 'self-evolution'
+
+export type RetrospectiveHarnessSuggestion = {
+  category: HarnessSuggestionCategory
+  title: string
+  signal: string
+  content: string
+  targetFile?: string
+  anchorSeqs?: number[]
+}
+
+export type RetrospectiveHarnessSummary = {
+  overview?: string
+  suggestions: RetrospectiveHarnessSuggestion[]
+}
+
 export type RetrospectiveSnapshot = {
   title: string
   status: 'in_progress' | 'finished' | 'abandoned'
@@ -786,6 +808,8 @@ export type StoredRetrospective = {
   referencedLessonIds: string[]
   /** 报告锚点 iteration seq(高 think / 高 churn / 异常 stop) */
   anchorIterationSeqs: number[]
+  /** Harness 总结:可落地的工程护栏建议(可选) */
+  harnessSummary?: RetrospectiveHarnessSummary
 }
 
 /**
