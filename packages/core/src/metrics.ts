@@ -126,6 +126,12 @@ export interface RequirementSummaryView {
   iterationCount: number
   latestIterationAt: string | null
   /**
+   * 需求进入终态(`finished` / `abandoned`)的定格时刻,原样回传(`null` = 进行中或老数据未记录)。
+   * 非空时表示 `metrics` 已按「只算 `reportedAt <= finishedAt` 的 iteration」定格,墙钟 / boost
+   * 不再随后续自动上报膨胀;前端可据此渲染「已定格」标记。
+   */
+  finishedAt: string | null
+  /**
    * 需求级 wThink 覆盖值原样回传(null = 未覆盖,跟随全局)。前端用来在「提效公式(本需求)」
    * 卡片渲染当前 snapshot 值;rc.27 之前的老需求 load 后即为 null,首次编辑后才会固化。
    */
@@ -138,12 +144,33 @@ export interface RequirementSummaryView {
   effectiveFormula: FormulaSettings
 }
 
+/**
+ * 需求终态(finished/abandoned)且已记录 finishedAt 时,把指标计算用的 iteration 集合
+ * 定格到「reportedAt <= finishedAt」那部分,屏蔽完成之后由 retrospective / attach_summary
+ * 等自动上报追加的 iteration(它们会把墙钟 elapsedMinutes 重新算成 now - startedAt 而膨胀)。
+ *
+ * 边界:finishedAt 为空(进行中 / 老数据)直接原样返回;reportedAt 为空串的老 iteration
+ * 因 `'' <= finishedAt` 恒为真而保留,不会被误删。
+ */
+function freezeIterationsAtFinish(
+  requirement: StoredRequirement,
+  iterations: StoredIteration[]
+): StoredIteration[] {
+  const finishedAt = requirement.finishedAt
+  const terminal = requirement.status === 'finished' || requirement.status === 'abandoned'
+  if (!terminal || !finishedAt) return iterations
+  return iterations.filter((it) => !it.reportedAt || it.reportedAt <= finishedAt)
+}
+
 export function buildSummaryView(
   requirement: StoredRequirement,
   iterations: StoredIteration[],
   globalFormula: FormulaSettings
 ): RequirementSummaryView {
   const subtasks = Array.isArray(requirement.subtasks) ? requirement.subtasks : []
+  // 指标定格:终态需求只用完成时刻及之前的 iteration 算 boost / 墙钟 / token / 思考时长。
+  // iterationCount / latestIterationAt 仍反映真实全量(完成后的自动上报照旧入库,只是不计指标)。
+  const metricsIterations = freezeIterationsAtFinish(requirement, iterations)
   // wThink 走 snapshot-on-init 语义:需求级 override 优先,缺失(老数据)回退到全局。
   // tokenPenaltyEnabled / tokenSoftCapK 不进入需求级,始终读全局。
   const effectiveFormula: FormulaSettings = {
@@ -156,7 +183,7 @@ export function buildSummaryView(
   }
   const metrics = computeMetrics({
     manualEstimateMinutes: requirement.manualEstimateMinutes,
-    iterations,
+    iterations: metricsIterations,
     subtasks,
     linkedBugCount: requirement.linkedBugCount,
     formula: effectiveFormula
@@ -188,6 +215,7 @@ export function buildSummaryView(
     metrics,
     iterationCount: iterations.length,
     latestIterationAt: iterations.length ? iterations[iterations.length - 1].reportedAt : null,
+    finishedAt: requirement.finishedAt ?? null,
     formulaWThinkOverride:
       typeof requirement.formulaWThinkOverride === 'number' &&
       Number.isFinite(requirement.formulaWThinkOverride)

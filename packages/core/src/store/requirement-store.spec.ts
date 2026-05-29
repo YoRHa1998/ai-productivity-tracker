@@ -82,6 +82,45 @@ describe('requirement-store', () => {
     expect(cleared.formulaWThinkOverride).toBeNull()
   })
 
+  it('finishedAt 默认 null;切到 finished 自动戳记,回到 in_progress 清空', async () => {
+    const created = saveRequirement({ jiraKey: 'PROJ-F', title: 't' }, { root })
+    expect(created.finishedAt).toBeNull()
+
+    const finished = updateRequirement('PROJ-F', { status: 'finished' }, root)
+    expect(finished.status).toBe('finished')
+    expect(typeof finished.finishedAt).toBe('string')
+    expect(finished.finishedAt).not.toBeNull()
+
+    // 重复点「已完成」不刷新定格点
+    await new Promise((r) => setTimeout(r, 5))
+    const stillFinished = updateRequirement('PROJ-F', { status: 'finished' }, root)
+    expect(stillFinished.finishedAt).toBe(finished.finishedAt)
+
+    // 回到进行中清空定格点
+    const reopened = updateRequirement('PROJ-F', { status: 'in_progress' }, root)
+    expect(reopened.finishedAt).toBeNull()
+  })
+
+  it('finishedAt:abandoned 同样戳记;不带 status 的 patch 不动 finishedAt', () => {
+    saveRequirement({ jiraKey: 'PROJ-AB', title: 't' }, { root })
+    const abandoned = updateRequirement('PROJ-AB', { status: 'abandoned' }, root)
+    expect(abandoned.finishedAt).not.toBeNull()
+
+    const stamp = abandoned.finishedAt
+    const titleOnly = updateRequirement('PROJ-AB', { title: 'x' }, root)
+    expect(titleOnly.finishedAt).toBe(stamp)
+  })
+
+  it('finishedAt:显式传入 patch.finishedAt 时尊重其值(历史数据回填)', () => {
+    saveRequirement({ jiraKey: 'PROJ-BF', title: 't' }, { root })
+    const backfilled = updateRequirement(
+      'PROJ-BF',
+      { status: 'finished', finishedAt: '2026-05-01T00:00:00.000Z' },
+      root
+    )
+    expect(backfilled.finishedAt).toBe('2026-05-01T00:00:00.000Z')
+  })
+
   it('loadRequirement 老 requirement.json(缺 formulaWThinkOverride)兜底为 null', () => {
     // 模拟 rc.27 之前的 requirement.json:不包含 formulaWThinkOverride 字段
     const jiraKey = 'LEGACY-1'

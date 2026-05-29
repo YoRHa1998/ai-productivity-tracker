@@ -52,6 +52,7 @@ function req(partial: Partial<StoredRequirement>): StoredRequirement {
     owner: '',
     projectSlug: '',
     status: 'in_progress',
+    finishedAt: null,
     linkedBugCount: 0,
     linkedBugJql: '',
     bugsRefreshedAt: null,
@@ -245,6 +246,95 @@ describe('metrics', () => {
     expect(view.iterationCount).toBe(2)
     expect(view.latestIterationAt).toBe('2026-05-01T02:00:00.000Z')
     expect(view.metrics.latestCumulativeToken).toBe(500)
+  })
+
+  it('buildSummaryView 终态需求按 finishedAt 定格指标:屏蔽完成后膨胀的墙钟', () => {
+    // 完成前最后一条 iteration:墙钟 60min;完成后自动上报又追加一条墙钟膨胀到 6000min。
+    // finishedAt 介于两者之间 → 指标应定格在 60min,而非 6000min。
+    const view = buildSummaryView(
+      req({
+        jiraKey: 'PROJ-FROZEN',
+        manualEstimateMinutes: 480,
+        status: 'finished',
+        finishedAt: '2026-05-01T03:00:00.000Z'
+      }),
+      [
+        iter({ seq: 1, kind: 'init', reportedAt: '2026-05-01T00:00:00.000Z' }),
+        iter({
+          seq: 2,
+          kind: 'coding',
+          cumulativeToken: 1000,
+          elapsedMinutes: 60,
+          thinkSeconds: 600,
+          reportedAt: '2026-05-01T02:00:00.000Z'
+        }),
+        // 完成后的 retrospective / attach_summary 触发,墙钟被重新算成 now - startedAt
+        iter({
+          seq: 3,
+          kind: 'coding',
+          cumulativeToken: 9999,
+          elapsedMinutes: 6000,
+          thinkSeconds: 300,
+          reportedAt: '2026-05-01T10:00:00.000Z'
+        })
+      ],
+      DEFAULT_FORMULA
+    )
+    expect(view.finishedAt).toBe('2026-05-01T03:00:00.000Z')
+    // 墙钟定格在 60(seq=2),不取 seq=3 的 6000
+    expect(view.metrics.latestElapsedMinutes).toBe(60)
+    // token 同样定格在完成时刻
+    expect(view.metrics.latestCumulativeToken).toBe(1000)
+    // 思考时长只累计完成前的 600s(不含 seq=3 的 300s)
+    expect(view.metrics.totalThinkSeconds).toBe(600)
+    // iterationCount / latestIterationAt 仍反映真实全量
+    expect(view.iterationCount).toBe(3)
+    expect(view.latestIterationAt).toBe('2026-05-01T10:00:00.000Z')
+  })
+
+  it('buildSummaryView 进行中需求不定格(finishedAt=null 时全量计算)', () => {
+    const view = buildSummaryView(
+      req({ jiraKey: 'PROJ-ONGOING', status: 'in_progress', finishedAt: null }),
+      [
+        iter({
+          seq: 1,
+          kind: 'coding',
+          elapsedMinutes: 60,
+          reportedAt: '2026-05-01T02:00:00.000Z'
+        }),
+        iter({
+          seq: 2,
+          kind: 'coding',
+          elapsedMinutes: 6000,
+          reportedAt: '2026-05-01T10:00:00.000Z'
+        })
+      ],
+      DEFAULT_FORMULA
+    )
+    expect(view.finishedAt).toBeNull()
+    expect(view.metrics.latestElapsedMinutes).toBe(6000)
+  })
+
+  it('buildSummaryView 终态但 finishedAt 缺失(老数据)时不定格,行为同历史', () => {
+    const view = buildSummaryView(
+      req({ jiraKey: 'PROJ-LEGACY', status: 'finished', finishedAt: null }),
+      [
+        iter({
+          seq: 1,
+          kind: 'coding',
+          elapsedMinutes: 60,
+          reportedAt: '2026-05-01T02:00:00.000Z'
+        }),
+        iter({
+          seq: 2,
+          kind: 'coding',
+          elapsedMinutes: 6000,
+          reportedAt: '2026-05-01T10:00:00.000Z'
+        })
+      ],
+      DEFAULT_FORMULA
+    )
+    expect(view.metrics.latestElapsedMinutes).toBe(6000)
   })
 
   it('normalizeIterationSource 把合法值原样返回、非法值归一化为 unknown', () => {

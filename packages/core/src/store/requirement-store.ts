@@ -35,6 +35,19 @@ export interface StoredRequirement {
   owner: string
   projectSlug: string
   status: RequirementStatus
+  /**
+   * 进入终态(`finished` / `abandoned`)的定格时刻 ISO。`null` = 仍在进行中(`in_progress`)
+   * 或老数据未记录。
+   *
+   * 语义:需求一旦标记完成 / 放弃,墙钟耗时与 boost 等指标应**定格**在这一刻,不再随后续
+   * 自动上报(retrospective / attach_summary 触发的新 iteration)继续膨胀。`buildSummaryView`
+   * 在 status 终态且本字段存在时,只用 `reportedAt <= finishedAt` 的 iteration 计算指标。
+   *
+   * 由 `updateRequirement` 在状态切换时自动戳记:进入终态记 now、回到 `in_progress` 清空;
+   * 重复点「已完成」不会刷新已有定格点。老数据缺该字段时 load 后为 `null`,行为与历史一致
+   * (不定格),用户重新切一次状态即可补戳。
+   */
+  finishedAt: string | null
   linkedBugCount: number
   linkedBugJql: string
   bugsRefreshedAt: string | null
@@ -83,6 +96,7 @@ function defaultRequirement(jiraKey: string, title: string, now: string): Stored
     owner: '',
     projectSlug: '',
     status: 'in_progress',
+    finishedAt: null,
     linkedBugCount: 0,
     linkedBugJql: '',
     bugsRefreshedAt: null,
@@ -162,6 +176,10 @@ export function saveRequirement(
   return next
 }
 
+function isTerminalStatus(status: RequirementStatus): boolean {
+  return status === 'finished' || status === 'abandoned'
+}
+
 export function updateRequirement(
   jiraKey: string,
   patch: UpdateRequirementPatch,
@@ -177,6 +195,20 @@ export function updateRequirement(
     createdAt: existing.createdAt,
     updatedAt: now
   }
+
+  // finishedAt 自动戳记:状态切换时定格 / 清空墙钟。调用方显式传 patch.finishedAt 时尊重其值
+  // (用于历史数据修复回填),否则按状态机推导:
+  //   - 进入终态(finished/abandoned)且此前不是「已带定格点的终态」→ 记 now
+  //   - 回到 in_progress → 清空(重新开始计时)
+  if (!('finishedAt' in patch) && 'status' in patch && patch.status) {
+    if (isTerminalStatus(patch.status)) {
+      const alreadyFrozen = isTerminalStatus(existing.status) && Boolean(existing.finishedAt)
+      if (!alreadyFrozen) next.finishedAt = now
+    } else {
+      next.finishedAt = null
+    }
+  }
+
   const file = requirementFilePath(jiraKey, root)
   writeAtomic(file, next)
   upsertIndexEntry(
