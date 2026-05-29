@@ -9,9 +9,10 @@ export interface RequirementMetrics {
   latestCumulativeToken: number
   latestElapsedMinutes: number
   /**
-   * 各 iteration `thinkSeconds`(本轮 wall time:用户提交 → AI 答完)的累加值。
-   * 与 `latestElapsedMinutes`(任务从开始到现在的墙钟耗时,含用户离开/阅读的空闲)区分:
-   * 这个值只累计 AI 实际参与的 turn 时长,反映「AI 纯思考时间」。
+   * 各 iteration `thinkSeconds`(本轮 wall time:用户提交 prompt → AI 输出结束,含同轮内
+   * 给方案 / 改代码 / review 审批时间)的累加值。
+   * 与 `latestElapsedMinutes`(任务从开始到现在的墙钟耗时,含跨轮离开/阅读空闲)区分:
+   * 这个值只累计 AI 实际参与的单轮 wall time 之和。
    */
   totalThinkSeconds: number
   /**

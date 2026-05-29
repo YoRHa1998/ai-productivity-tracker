@@ -573,7 +573,7 @@ describe('handleAiProductivityHook', () => {
     expect(last.modelName).toBe('claude-opus-4-7')
   })
 
-  it('v2.12.0 Cursor hook 两次间隔 120s 时 thinkSeconds cap 到 60s(避免用户阅读/输入时间被算成 AI 思考)', async () => {
+  it('Cursor hook fallback(无 turn-start)两次间隔 120s 时 thinkSeconds 按真实差值 120s 记录,不再截断', async () => {
     // beforeEach 起的 repo 分支已经是 feature/INSTANT-501-hook,init 同 jiraKey 即可绑定
     await handleAiProductivityInit(makeMockRes().res, baseConfig, {
       jiraInput: 'INSTANT-501',
@@ -607,7 +607,7 @@ describe('handleAiProductivityHook', () => {
       }
     )
 
-    // 第二次 Cursor hook,间隔 120s。旧逻辑会算 120s,新逻辑应被 cap 到 60s
+    // 第二次 Cursor hook,间隔 120s。旧逻辑会被 60s cap 截断,现在按真实差值 120s 如实记录
     await handleAiProductivityHook(
       makeMockRes().res,
       baseConfig,
@@ -635,7 +635,7 @@ describe('handleAiProductivityHook', () => {
 
     const iters = listIterations('INSTANT-501').filter((it) => it.kind === 'coding')
     const last = iters[iters.length - 1]
-    expect(last.thinkSeconds).toBe(60)
+    expect(last.thinkSeconds).toBe(120)
     // mapHookSource: 'cursor-hook' → 'cursor'
     expect(last.source).toBe('cursor')
   })
@@ -702,8 +702,8 @@ describe('handleAiProductivityHook', () => {
       }
     )
 
-    // 此时再让 Cursor 在 1 分钟后上报 → 应该相对于 Cursor 桶 00:00:00 算,即 60s,
-    // cap 后还是 60s;若没有分桶会从 Claude 的 00:00:30 算成 30s,数字明显错位。
+    // 此时再让 Cursor 在 1 分钟后上报 → 应该相对于 Cursor 桶 00:00:00 算,即 60s 真实差值;
+    // 若没有分桶会从 Claude 的 00:00:30 算成 30s,数字明显错位。
     await handleAiProductivityHook(
       makeMockRes().res,
       baseConfig,
@@ -735,7 +735,7 @@ describe('handleAiProductivityHook', () => {
     expect(codingIters[0].source).toBe('cursor')
     expect(codingIters[1].source).toBe('claude-code')
     expect(codingIters[2].source).toBe('cursor')
-    // 第三轮(Cursor)thinkSeconds 取 cursor 桶 → 60s 真实差值 → cap 后还是 60s
+    // 第三轮(Cursor)thinkSeconds 取 cursor 桶 → 60s 真实差值
     expect(codingIters[2].thinkSeconds).toBe(60)
   })
 })
@@ -2871,7 +2871,7 @@ describe('handleAiProductivityHook + cursorTurnStarts 联动 (v1.0.0-rc.18)', ()
       { nowFn: () => new Date(t0.getTime() + 1_000) }
     )
 
-    // t0 + 180s:远超 cursor 60s fallback cap,旧逻辑会被截到 60
+    // t0 + 180s:turn-start 命中,thinkSeconds 按真实 wall time 180s 记录
     const t1 = new Date(t0.getTime() + 180_000)
     const mock = makeMockRes()
     await handleAiProductivityHook(
@@ -2903,7 +2903,7 @@ describe('handleAiProductivityHook + cursorTurnStarts 联动 (v1.0.0-rc.18)', ()
     expect(__snapshotCursorTurnStarts().length).toBe(0)
   })
 
-  it('无 turn-start(老 hook / daemon 重启)→ 退回 60s cap', async () => {
+  it('无 turn-start(老 hook / daemon 重启)→ 退回相邻差值口径,不再截断', async () => {
     const jiraKey = 'TURN-2'
     const repoPath = mkdtempSync(join(tmpdir(), 'aip-turn-repo-fb-'))
     const branch = setupGitRepoBoundTo(repoPath, jiraKey)
@@ -2929,7 +2929,7 @@ describe('handleAiProductivityHook + cursorTurnStarts 联动 (v1.0.0-rc.18)', ()
       { nowFn: () => t0 }
     )
 
-    // 本轮 t0 + 200s 触发 afterAgentResponse:无 turn-start 命中,thinkSeconds 应被 cap=60
+    // 本轮 t0 + 200s 触发 afterAgentResponse:无 turn-start 命中,退回相邻差值口径,thinkSeconds=200(不截断)
     const t1 = new Date(t0.getTime() + 200_000)
     const mock = makeMockRes()
     await handleAiProductivityHook(
@@ -2947,10 +2947,10 @@ describe('handleAiProductivityHook + cursorTurnStarts 联动 (v1.0.0-rc.18)', ()
       },
       { nowFn: () => t1 }
     )
-    // 应当 cap 到 60s,避免 200s 异常思考时长污染 metrics
+    // 按真实相邻差值 200s 如实记录(去 cap 后不再截断)
     const iterations = listIterations(jiraKey)
     expect(iterations.length).toBe(2)
-    expect(iterations[1].thinkSeconds).toBe(60)
+    expect(iterations[1].thinkSeconds).toBe(200)
     expect(iterations[1].pureThinkSeconds).toBeUndefined()
   })
 })

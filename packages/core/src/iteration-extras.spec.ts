@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  ACTIVE_GAP_SECONDS,
-  ACTIVE_GAP_SECONDS_CURSOR,
-  buildIterationExtras
-} from './iteration-extras.js'
+import { buildIterationExtras } from './iteration-extras.js'
 import type { BindingEntry } from './bindings.js'
 import type { GitDiffSummary, NumstatMap } from './git-diff.js'
 import type { NumstatPerFile } from './store/numstat-snapshot.js'
@@ -61,7 +57,7 @@ describe('buildIterationExtras (耗时/think_seconds 不变)', () => {
     expect(extras.elapsedMinutes).toBe(45)
   })
 
-  it('thinkSeconds 在 ≤300s 间隔内累积,>300 截断到 300', () => {
+  it('thinkSeconds 按 previousReportedAt 真实差值记录,不再截断', () => {
     const within = buildIterationExtras({
       gitRoot: '/tmp/repo',
       binding: makeBinding(),
@@ -72,6 +68,7 @@ describe('buildIterationExtras (耗时/think_seconds 不变)', () => {
     })
     expect(within.thinkSeconds).toBe(30)
 
+    // 旧逻辑会被 300s cap 截断,现在按真实差值 30min = 1800s 如实记录
     const beyond = buildIterationExtras({
       gitRoot: '/tmp/repo',
       binding: makeBinding(),
@@ -80,7 +77,7 @@ describe('buildIterationExtras (耗时/think_seconds 不变)', () => {
       collectDiff: () => fakeCumulativeDiff,
       collectNumstatFn: () => fakeNumstat([])
     })
-    expect(beyond.thinkSeconds).toBe(ACTIVE_GAP_SECONDS)
+    expect(beyond.thinkSeconds).toBe(1800)
   })
 
   it('previousReportedAt 缺省时 thinkSeconds=0', () => {
@@ -124,21 +121,21 @@ describe('buildIterationExtras (耗时/think_seconds 不变)', () => {
     expect(extras.thinkSeconds).toBe(30)
   })
 
-  it("v2.12.0 source='cursor-hook' 时 cap 收紧到 60s (避免用户阅读/输入时间被算成 AI 思考)", () => {
+  it("fallback 路径(无 turnStartedAt)source='cursor-hook' 也不再截断,按真实差值记录", () => {
     const extras = buildIterationExtras({
       gitRoot: '/tmp/repo',
       binding: makeBinding(),
-      // 两次 hook 间隔 120s,Cursor 链路应被 cap 到 60s
+      // 两次 hook 间隔 120s,旧逻辑会被 Cursor 60s cap 砍到 60,现在如实记录 120
       now: new Date('2026-05-15T00:02:00.000Z'),
       previousReportedAt: '2026-05-15T00:00:00.000Z',
       source: 'cursor-hook',
       collectDiff: () => fakeCumulativeDiff,
       collectNumstatFn: () => fakeNumstat([])
     })
-    expect(extras.thinkSeconds).toBe(ACTIVE_GAP_SECONDS_CURSOR)
+    expect(extras.thinkSeconds).toBe(120)
   })
 
-  it("v2.12.0 source 非 'cursor-hook' 时 cap 保持 300s (兼容历史行为)", () => {
+  it('fallback 路径 source 非 cursor-hook 同样不截断,按真实差值记录', () => {
     const extras = buildIterationExtras({
       gitRoot: '/tmp/repo',
       binding: makeBinding(),
@@ -148,7 +145,7 @@ describe('buildIterationExtras (耗时/think_seconds 不变)', () => {
       collectDiff: () => fakeCumulativeDiff,
       collectNumstatFn: () => fakeNumstat([])
     })
-    expect(extras.thinkSeconds).toBe(ACTIVE_GAP_SECONDS)
+    expect(extras.thinkSeconds).toBe(600)
   })
 
   it('v1.0.0-rc.18 pureThinkSeconds 透传:有传则原样落,缺省 undefined,不影响 thinkSeconds', () => {
@@ -163,7 +160,7 @@ describe('buildIterationExtras (耗时/think_seconds 不变)', () => {
       collectDiff: () => fakeCumulativeDiff,
       collectNumstatFn: () => fakeNumstat([])
     })
-    // turnStartedAt 命中走 300s cap,180s 不截
+    // turnStartedAt 命中,180s 按真实 wall time 记录
     expect(withPure.thinkSeconds).toBe(180)
     expect(withPure.pureThinkSeconds).toBe(12)
 
@@ -179,8 +176,8 @@ describe('buildIterationExtras (耗时/think_seconds 不变)', () => {
   })
 
   it('v1.0.0-rc.20 pureThinkSeconds > thinkSeconds 时钳到 thinkSeconds(修反逻辑,复现 seq 121)', () => {
-    // Cursor 链路 cap=60s:两次 hook 间隔 120s,thinkSeconds 被钳到 60。
-    // afterAgentThought 累加出 396s 纯思考(无上限),逻辑上不可能 > 总思考,应被钳到 60。
+    // fallback 路径无 turnStartedAt,两次 hook 间隔 120s → thinkSeconds=120(不再截断)。
+    // afterAgentThought 累加出 396s 纯思考(无上限),逻辑上不可能 > 总思考,应被钳到 120。
     const extras = buildIterationExtras({
       gitRoot: '/tmp/repo',
       binding: makeBinding(),
@@ -191,8 +188,8 @@ describe('buildIterationExtras (耗时/think_seconds 不变)', () => {
       collectDiff: () => fakeCumulativeDiff,
       collectNumstatFn: () => fakeNumstat([])
     })
-    expect(extras.thinkSeconds).toBe(ACTIVE_GAP_SECONDS_CURSOR)
-    expect(extras.pureThinkSeconds).toBe(ACTIVE_GAP_SECONDS_CURSOR)
+    expect(extras.thinkSeconds).toBe(120)
+    expect(extras.pureThinkSeconds).toBe(120)
   })
 
   it('v1.0.0-rc.20 负数 pureThinkSeconds 钳到 0', () => {

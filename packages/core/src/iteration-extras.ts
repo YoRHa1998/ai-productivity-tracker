@@ -13,20 +13,6 @@ import {
   type NumstatPerFile
 } from './store/numstat-snapshot.js'
 
-/** 两次 hook / 两条 transcript 行之间间隔 ≤ 此值时,视为「连续 AI 对话」并计入 think_seconds;超过则视为跨会话记 0 */
-export const ACTIVE_GAP_SECONDS = 300
-
-/**
- * v2.12.0 Cursor 链路专用 cap。
- *
- * Cursor hook 是 afterAgentResponse,只能拿到「本次 hook 触发时间」,没有本轮起点信号,
- * 只能用「上一次 hook → 本次 hook」近似 thinkSeconds。这个差值包含用户阅读/输入时间,
- * 实测一个简单问题答完几十秒、但下一条 prompt 隔几分钟才提是常态,旧的 300s cap 会把
- * 这种间隔误算成「AI 思考 5m」。把 cap 收紧到 60s,把明显不合理的虚高值砍掉,
- * 用户读 + 输入超过 60s 的场景默认视为「跨任务」,不再算入 AI 思考时间。
- */
-export const ACTIVE_GAP_SECONDS_CURSOR = 60
-
 const ITER_FILES_LIMIT = 50
 
 export interface IterationExtras {
@@ -58,18 +44,17 @@ export interface BuildExtrasInput {
   /** appendTokenUsage 之前 binding.lastReportedAt;首次为 null 时 think_seconds 记 0 */
   previousReportedAt: string | null
   /**
-   * v2.12.0 本轮真实起点(Claude Code 链路从 transcript user 行 timestamp 取)。
+   * v2.12.0 本轮真实起点(Claude Code 链路从 transcript user 行 timestamp 取;
+   * Cursor 链路 rc.18 起从 beforeSubmitPrompt 起点信号取)。
    *
-   * 提供时优先使用,thinkSeconds = clamp(now - turnStartedAt, 0, ACTIVE_GAP_SECONDS),
-   * 数字真正反映「用户提交 prompt → AI 完成响应」的 turn 时长。
+   * 提供时优先使用,thinkSeconds = max(0, now - turnStartedAt),如实记录「用户提交 prompt →
+   * AI 完成响应」的整段 wall time,不再截断(中间 AI 给方案 / 改代码 / 同轮 review 都计入)。
    *
-   * 缺省时退化到 previousReportedAt 口径(Cursor hook 链路无法获取 turn 起点)。
+   * 缺省时退化到 previousReportedAt 口径(起点信号缺失:daemon 重启 / hook 未装全等)。
    */
   turnStartedAt?: string
   /**
-   * v2.12.0 数据来源,用于在 fallback 路径里选 cap:
-   * - 'cursor-hook' → ACTIVE_GAP_SECONDS_CURSOR (60s)
-   * - 其它 → ACTIVE_GAP_SECONDS (300s)
+   * v2.12.0 数据来源(保留字段,供调用方标记链路;不再用于 cap 选择,thinkSeconds 已全程不截断)。
    */
   source?: string
   /**
@@ -179,7 +164,7 @@ function computeIterDelta(
 /**
  * 组装一次 iteration 上报需要的「耗时类 + diff 类 + 模型」字段。
  * - elapsedMinutes: 任务总耗时 = now - requirementStartedAt(缺省回退 binding.startedAt)
- * - thinkSeconds: 本轮 AI 思考时间近似 = clamp(now - previousReportedAt, 0, ACTIVE_GAP_SECONDS)
+ * - thinkSeconds: 本轮 wall time = now - turnStartedAt(缺省回退 now - previousReportedAt),如实记录不截断
  * - cumulativeDiff*: 当前工作区相对 initBaseCommit 的累计统计 + 文件清单(截断 50)
  * - diff*: 自上一轮 numstat-snapshot 以来的本次对话变更
  *
@@ -192,22 +177,20 @@ export function buildIterationExtras(input: BuildExtrasInput): IterationExtras {
   const elapsedMinutes =
     startMs && nowMs > startMs ? Math.max(0, Math.round((nowMs - startMs) / 60000)) : 0
 
-  // v2.12.0 优先用 turnStartedAt(Claude Code 真实 turn 起点)算 thinkSeconds;
-  // 缺省时按 source 选 cap(Cursor 60s / 其它 300s)退化到「上一轮上报 → 本轮上报」口径。
+  // 优先用 turnStartedAt(本轮真实起点:Claude Code 取 transcript user 行 ts,Cursor rc.18 起取
+  // beforeSubmitPrompt)算 thinkSeconds,如实记录「用户提交 prompt → AI 完成响应」整段 wall time,
+  // 不截断。缺省(起点信号缺失:daemon 重启 / hook 未装全)退化到「上一轮上报 → 本轮上报」差值口径。
+  //
+  // 历史上这里有 cap(理想 300s / Cursor fallback 60s),是早期无起点信号、只能用相邻 hook 差值
+  // 近似时为砍掉跨轮空闲虚高而加的补丁;rc.18 有了真实起点后口径已精确,故全程去掉 cap。
   const turnStartedMs = parseTime(input.turnStartedAt)
   let thinkSeconds: number
   if (turnStartedMs && nowMs > turnStartedMs) {
-    thinkSeconds = Math.min(
-      ACTIVE_GAP_SECONDS,
-      Math.max(0, Math.round((nowMs - turnStartedMs) / 1000))
-    )
+    thinkSeconds = Math.max(0, Math.round((nowMs - turnStartedMs) / 1000))
   } else {
     const previousMs = parseTime(input.previousReportedAt)
-    const cap = input.source === 'cursor-hook' ? ACTIVE_GAP_SECONDS_CURSOR : ACTIVE_GAP_SECONDS
     thinkSeconds =
-      previousMs && nowMs > previousMs
-        ? Math.min(cap, Math.max(0, Math.round((nowMs - previousMs) / 1000)))
-        : 0
+      previousMs && nowMs > previousMs ? Math.max(0, Math.round((nowMs - previousMs) / 1000)) : 0
   }
 
   const baseRef = (input.initBaseCommit && input.initBaseCommit.trim()) || 'HEAD'
@@ -249,10 +232,9 @@ export function buildIterationExtras(input: BuildExtrasInput): IterationExtras {
     }
   }
 
-  // v1.0.0-rc.20 钳制:纯思考(afterAgentThought 累加)逻辑上是总思考的子集,
-  // 不可能 > thinkSeconds。但二者来源不同 cap(纯思考无上限 / 总思考 Cursor 60s),
-  // 历史上出现过 pure=396 > think=300 的反逻辑(seq 121),这里统一钳到 ≤ thinkSeconds。
-  // 保持「未传 → undefined」语义不变,UI 据缺省隐藏第二行。
+  // v1.0.0-rc.20 钳制:纯思考(afterAgentThought 累加)逻辑上是总思考的子集,不可能 > thinkSeconds。
+  // 历史上 thinkSeconds 受 cap、pure 无上限,出现过 pure > think 的反逻辑(seq 121);如今 thinkSeconds
+  // 已是真实 wall time,pure 仍统一钳到 ≤ thinkSeconds 作防御。保持「未传 → undefined」语义,UI 据缺省隐藏第二行。
   const pureThinkSeconds =
     typeof input.pureThinkSeconds === 'number'
       ? Math.min(Math.max(0, input.pureThinkSeconds), thinkSeconds)
