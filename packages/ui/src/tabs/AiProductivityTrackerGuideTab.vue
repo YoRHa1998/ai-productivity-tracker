@@ -19,7 +19,6 @@ const aiptInstallCommand = 'aipt install'
 const aiptDoctorCommand = 'aipt doctor'
 const aiptDaemonCommand = 'aipt daemon'
 const aiptUiCommand = 'aipt ui open'
-const aiptMigrateCommand = 'aipt migrate'
 
 const branchSample = 'git checkout -b feature/INSTANT-1234-add-oauth'
 const aiPromptSample =
@@ -174,9 +173,9 @@ function copy(text: string) {
             </p>
             <p class="aip-guide__tip">
               想验证 daemon 是否正常工作,跑
-              <code class="aip-inline-code">{{ aiptDoctorCommand }}</code> 看 10 项体检(Node 版本 /
-              home 目录 / runtime.json / daemon /status / cursor mcp.json / claude.json / hooks.json
-              / skill / rule / 老数据)。
+              <code class="aip-inline-code">{{ aiptDoctorCommand }}</code> 看体检报告(Node 版本 /
+              home 目录 / 用户配置 / runtime.json + daemon /status / data 根 / cursor mcp.json /
+              claude.json / hooks.json / skill / rule),逐项 ✓/⚠/✗ 三态彩色输出。
             </p>
           </div>
         </li>
@@ -534,39 +533,6 @@ function copy(text: string) {
           </div>
         </li>
       </ol>
-    </article>
-
-    <!-- 迁移 -->
-    <article class="aip-card">
-      <header class="aip-card__header">
-        <h3 class="aip-card__title">
-          <span class="aip-card__title-icon"><i class="i-lucide-refresh-cw"></i></span>
-          从老版本 truesight-agent 迁移
-        </h3>
-        <span class="aip-chip aip-chip--muted">仅老用户</span>
-      </header>
-      <p class="aip-card__caption">
-        如果你之前用过老的 <code class="aip-inline-code">truesight-agent</code>(数据在
-        <code class="aip-inline-code">~/.truesight-local-agent/ai-productivity/</code>),
-        本工具提供一个自动迁移命令:
-      </p>
-      <pre class="aip-code" @click="copy(aiptMigrateCommand)">{{ aiptMigrateCommand }}</pre>
-      <ul class="aip-guide__bullet-list">
-        <li>
-          自动平迁 requirements / iterations / formula / jira-config / lessons 到
-          <code class="aip-inline-code">~/.ai-productivity-tracker/data/</code
-          >,不破坏老目录(可手动删除)。
-        </li>
-        <li>
-          冲突场景(新根已有数据)需要加 <code class="aip-inline-code">--force</code> 让 cli 合并; 老
-          launchd plist 与 <code class="aip-inline-code">~/Downloads/ai-productivity-mcp.mjs</code>
-          建议手动清理,新架构不再使用。
-        </li>
-        <li>
-          看板 Tab 的「老 truesight-agent」相关引用属于历史背景说明,新用户可忽略;
-          <code class="aip-inline-code">aipt doctor</code> 会显式提示是否还有老目录待迁移。
-        </li>
-      </ul>
     </article>
 
     <!-- 排错 -->

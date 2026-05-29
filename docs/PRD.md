@@ -293,19 +293,18 @@ POST  /ai-productivity/attach-summary
 
 入口文件 `dist/cli.mjs` 第一个 arg 决定角色（沿用当前 mcp.mjs 的 argv-router 思路，扩展子命令空间）：
 
-| 命令                                  | 行为                                                                                         |
-| ------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `mcp` _(主入口)_                      | 启 stdio MCP server，启动时**确保** daemon 在线（不在则 spawn-detached），随后只做协议转换   |
-| `daemon` _(别名 `serve`)_             | 前台启 daemon（HTTP + watcher），打印面板 URL；用户手动用，或 launchd/systemd 拉起           |
-| `hook`                                | Cursor `afterAgentResponse` 入口；读 stdin → 解析 → POST daemon `/ai-productivity/hook`      |
-| `stop-check`                          | Cursor `stop` + Claude Code `Stop` 入口；防伪造校验                                          |
-| `ui open`                             | 检测 daemon 状态，必要时 spawn，再 `open ${url}` 唤起默认浏览器                              |
-| `install [--ide=cursor\|claude\|all]` | 一键安装：注入 hook/skill/rule 到对应 IDE 配置                                               |
-| `install-mcp [--ide=cursor]`          | 把 `npx … mcp` 这条 JSON 项写入 `~/.cursor/mcp.json`（覆盖式）                               |
-| `migrate`                             | 把 `~/.truesight-local-agent/ai-productivity/` 旧数据搬到 `~/.ai-productivity-tracker/data/` |
-| `doctor`                              | 体检：daemon 健康 / runtime.json 完整 / hook 安装 / skill 安装 / 老数据是否需要迁移          |
-| `version`                             | 打印当前 cli 版本                                                                            |
-| `--help` / 无 arg                     | 打印用法                                                                                     |
+| 命令                                  | 行为                                                                                       |
+| ------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `mcp` _(主入口)_                      | 启 stdio MCP server，启动时**确保** daemon 在线（不在则 spawn-detached），随后只做协议转换 |
+| `daemon` _(别名 `serve`)_             | 前台启 daemon（HTTP + watcher），打印面板 URL；用户手动用，或 launchd/systemd 拉起         |
+| `hook`                                | Cursor `afterAgentResponse` 入口；读 stdin → 解析 → POST daemon `/ai-productivity/hook`    |
+| `stop-check`                          | Cursor `stop` + Claude Code `Stop` 入口；防伪造校验                                        |
+| `ui open`                             | 检测 daemon 状态，必要时 spawn，再 `open ${url}` 唤起默认浏览器                            |
+| `install [--ide=cursor\|claude\|all]` | 一键安装：注入 hook/skill/rule 到对应 IDE 配置                                             |
+| `install-mcp [--ide=cursor]`          | 把 `npx … mcp` 这条 JSON 项写入 `~/.cursor/mcp.json`（覆盖式）                             |
+| `doctor`                              | 体检：daemon 健康 / runtime.json 完整 / hook 安装 / skill 安装                             |
+| `version`                             | 打印当前 cli 版本                                                                          |
+| `--help` / 无 arg                     | 打印用法                                                                                   |
 
 兼容旧 argv：`hook` / `stop-check` / `mark-tool-called` 保持现行语义，方便用户从老 `mcp.mjs` 平滑切换。
 
@@ -403,7 +402,6 @@ ai-productivity-tracker/                       (本仓库根)
 ├── docs/
 │   ├── PRD.md                                 # 本文档
 │   ├── ARCHITECTURE.md                        # 详细架构与时序图
-│   ├── MIGRATION.md                           # 老用户迁移手册
 │   ├── HOOK-PROTOCOL.md                       # Cursor/Claude hook 协议描述
 │   ├── DATA-MODEL.md                          # 文件 schema 详细字段
 │   └── CHANGELOG.md
@@ -421,7 +419,6 @@ ai-productivity-tracker/                       (本仓库根)
 │   │   │   │   ├── stop-check.ts              # 子命令 stop-check
 │   │   │   │   ├── install.ts                 # 一键安装 hook + skill
 │   │   │   │   ├── install-mcp.ts             # 写入 ~/.cursor/mcp.json
-│   │   │   │   ├── migrate.ts                 # 老数据迁移
 │   │   │   │   ├── doctor.ts                  # 体检
 │   │   │   │   ├── ui.ts                      # 唤起浏览器
 │   │   │   │   └── version.ts
@@ -814,12 +811,10 @@ ai-productivity-tracker/                       (本仓库根)
 - 端口冲突 / 端口被占用 e2e 测试。
 - daemon crash 重启 case。
 - 多 IDE 并发跑 mcp 案例（用 child_process 模拟 2 个 IDE 同时连同一个 daemon）。
-- migrate 命令 idempotent 测试。
 
 ### Phase 5：文档 + Release（0.5 天）
 
 - `README.md`：用户视角 quickstart。
-- `docs/MIGRATION.md`：老用户从 `truesight-agent` 切到 npm 版的 4 步流程。
 - `docs/CHANGELOG.md`：v1.0.0 first release notes。
 - `scripts/release.mjs`：bump version、build cli + ui、`npm publish --access public`。
 - 发 `@ai-productivity-tracker/cli@1.0.0-rc.1` 到 npm registry，回归测试 5 个核心场景（见 §8）。
@@ -933,8 +928,6 @@ ai-productivity-tracker/                       (本仓库根)
 | `AIPT_TOKEN`                                                           | 覆盖 token（CI 注入）                                | 自动生成                          |
 | `AIPT_DAEMON_URL`                                                      | mcp / hook 显式指定 daemon 地址（测试 / 自定义部署） | 读 runtime.json                   |
 | `AIPT_DAEMON_TOKEN`                                                    | 同上                                                 | 读 runtime.json                   |
-| `TRUESIGHT_AIP_ROOT`                                                   | **向后兼容**老 env                                   | 优先级最低                        |
-| `TRUESIGHT_AGENT_URL` / `TRUESIGHT_AGENT_TOKEN`                        | **向后兼容**老 mcp 启动方式                          | 优先级最低                        |
 | `CLAUDE_PROJECT_DIR` / `CURSOR_PROJECT_DIR` / `WORKSPACE_FOLDER_PATHS` | MCP 客户端 cwd 解析（不变）                          | —                                 |
 
 ---
@@ -955,8 +948,7 @@ Commands:
     --debug                   注入 debug 前缀
   install-mcp        将本 cli 写到 ~/.cursor/mcp.json
   ui open            在浏览器打开看板
-  migrate            把 ~/.truesight-local-agent 老数据搬到新根
-  doctor             体检:daemon / hook / skill / 数据迁移 / 端口冲突
+  doctor             体检:daemon / hook / skill / 端口冲突
   version            打印版本
   --help
 
@@ -966,7 +958,6 @@ Examples:
   ai-productivity-tracker daemon                     # 前台跑(可被 systemd 拉起)
   ai-productivity-tracker ui open                     # 打开浏览器
   ai-productivity-tracker doctor
-  ai-productivity-tracker migrate                     # 从 truesight-agent 平迁
 ```
 
 ---

@@ -176,7 +176,6 @@ ai-productivity-tracker/                  # pnpm workspace 根
 ├── docs/
 │   ├── PRD.md                             # 完整设计文档(必读)
 │   ├── CHANGELOG.md                       # 版本历史 + 8 条发布工程经验
-│   ├── MIGRATION.md                       # 老 truesight-agent 用户迁移手册
 │   ├── ARCHITECTURE.md                    # 详细架构 / 时序图 / 状态机
 │   ├── HOOK-PROTOCOL.md                   # Cursor / Claude hook 双方言协议
 │   └── DATA-MODEL.md                      # 14 个本地文件 schema 详细字段

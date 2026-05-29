@@ -80,8 +80,7 @@ aipt ui open
 | `aipt install --ide=claude` | 仅装 Claude Code(~/.claude.json + skill)                              |
 | `aipt daemon`               | 前台启动 HTTP daemon(看 daemon 日志时用)                              |
 | `aipt ui open`              | 浏览器打开看板                                                        |
-| `aipt doctor`               | 体检:Node 版本 / runtime / hook / skill / mcp.json / 老数据迁移 10 项 |
-| `aipt migrate`              | 从 `truesight-agent` 平迁老数据                                       |
+| `aipt doctor`               | 体检:Node / daemon / mcp.json / hooks / skill / rule 等,逐项 ✓⚠✗ 输出 |
 | `aipt version`              | 打印版本                                                              |
 | `aipt --help`               | 完整帮助                                                              |
 
@@ -143,30 +142,14 @@ aipt ui open
 
 ---
 
-## 从 `truesight-agent` 迁移
-
-如果你之前在使用旧版 `instant-web-tools / truesight-agent + Web 平台 AI 提效面板`,
-按 [`docs/MIGRATION.md`](./docs/MIGRATION.md) 完整指引迁移,几分钟即可切到独立版本。
-
-简版:
-
-```bash
-npm i -g @ai-productivity-tracker/cli
-aipt migrate                # 把 ~/.truesight-local-agent 老数据搬到新目录
-aipt install                # 覆盖式更新 hooks.json / mcp.json / skill / rule
-launchctl unload ~/Library/LaunchAgents/com.truesight.local-agent.plist
-```
-
----
-
 ## 故障排查
 
-- **`aipt doctor`**:9 项体检,逐项 ✓⚠✗ 输出。是排错第一步。
+- **`aipt doctor`**:逐项 ✓⚠✗ 输出体检报告(Node / daemon / mcp.json / hooks / skill / rule 等)。是排错第一步。
 - **看板打不开 / Daemon 不可达**:`aipt daemon` 前台跑,查日志输出
 - **MCP / Hook 报 401**:`~/.ai-productivity-tracker/runtime.json` token 已变,关掉 IDE 后重启即可
 - **端口被占**:`AIPT_PORT=17888 aipt daemon` 用其它端口
 
-更多见 [`docs/MIGRATION.md`](./docs/MIGRATION.md) 与 [`docs/PRD.md` §9](./docs/PRD.md)。
+更多见 [`docs/PRD.md` §9](./docs/PRD.md)。
 
 ---
 
@@ -174,7 +157,7 @@ launchctl unload ~/Library/LaunchAgents/com.truesight.local-agent.plist
 
 ```
 ai-productivity-tracker/
-├── docs/                        # 设计文档(PRD/ARCHITECTURE/MIGRATION/...)
+├── docs/                        # 设计文档(PRD/ARCHITECTURE/CHANGELOG/...)
 ├── packages/
 │   ├── core/                    # 数据模型 / store / watcher / metrics
 │   ├── hook-core/               # Cursor/Claude hook 入口逻辑
@@ -190,7 +173,7 @@ ai-productivity-tracker/
 ```bash
 pnpm install                                       # 安装全部 workspace 依赖
 pnpm typecheck                                     # 全包 tsc 检查
-pnpm test                                          # 全包 vitest(当前 590 例)
+pnpm test                                          # 全包 vitest(当前 612 例)
 pnpm lint                                          # ESLint 9 flat config
 pnpm format                                        # Prettier 3
 pnpm --filter @ai-productivity-tracker/cli build   # 链式 ui build + esbuild bundle
