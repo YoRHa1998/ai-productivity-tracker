@@ -32,7 +32,6 @@ import {
   type RequirementSummary,
   type SummaryMetrics
 } from '../api'
-import { fetchCurrentSession } from '../lib/session'
 import { useNumberFlow } from '../composables/useNumberFlow'
 import SparkLine from '../charts/SparkLine.vue'
 import RetrospectiveReportPanel from './RetrospectiveReportPanel.vue'
@@ -129,16 +128,8 @@ const wElapsedDraftPercent = computed(() => 100 - wThinkDraftPercent.value)
 /** 已经为当前 jiraKey 触发过一次自动兜底,避免每次 openDetail 都打一次接口 */
 const titleAutoSyncedKeys = ref<Set<string>>(new Set())
 
-/**
- * 当前工具平台登录用户的 name, 用于覆盖 Owner 列显示。
- * v2.1 起所有需求数据都在用户本机, 所以可视化时 owner 就是当前登录账号。
- * 加载失败保持空串, UI 兜底显示 '—'。
- */
-const currentOwnerName = ref('')
-
 const filteredRequirements = computed(() => {
   const keyword = search.value.trim().toLowerCase()
-  const ownerKeyword = currentOwnerName.value.toLowerCase()
   return requirements.value.filter((item) => {
     const matchesStatus = !statusFilter.value || item.status === statusFilter.value
     if (!matchesStatus) return false
@@ -146,7 +137,6 @@ const filteredRequirements = computed(() => {
     return (
       item.jiraKey.toLowerCase().includes(keyword) ||
       item.title.toLowerCase().includes(keyword) ||
-      ownerKeyword.includes(keyword) ||
       item.projectSlug.toLowerCase().includes(keyword)
     )
   })
@@ -630,18 +620,8 @@ const avgBoostFlow = useNumberFlow(
   { duration: 900 }
 )
 
-async function loadCurrentOwner() {
-  try {
-    const session = await fetchCurrentSession()
-    currentOwnerName.value = session.name ?? ''
-  } catch {
-    currentOwnerName.value = ''
-  }
-}
-
 onMounted(() => {
   loadList()
-  loadCurrentOwner()
 })
 </script>
 
@@ -740,7 +720,7 @@ onMounted(() => {
     <div class="aip-toolbar">
       <ElInput
         v-model="search"
-        placeholder="搜索 Jira Key / 标题 / owner / 项目"
+        placeholder="搜索 Jira Key / 标题 / 项目"
         clearable
         style="width: 320px"
       />
@@ -812,9 +792,6 @@ onMounted(() => {
         </ElTableColumn>
         <ElTableColumn label="项目" width="140">
           <template #default="{ row }">{{ row.projectSlug || '—' }}</template>
-        </ElTableColumn>
-        <ElTableColumn label="Owner" width="140">
-          <template #default>{{ currentOwnerName || '—' }}</template>
         </ElTableColumn>
       </ElTable>
     </div>
@@ -1080,10 +1057,22 @@ onMounted(() => {
                 </svg>
               </div>
               <div class="aip-drawer__boost-side aip-drawer__boost-side--right">
-                <span class="aip-drawer__boost-label">墙钟耗时</span>
+                <span class="aip-drawer__boost-label">
+                  墙钟耗时
+                  <span
+                    v-if="currentDetail.finishedAt"
+                    class="aip-drawer__frozen-chip"
+                    :title="`需求已于 ${new Date(currentDetail.finishedAt).toLocaleString()} 定格,墙钟与 boost 不再随完成后的自动上报变动`"
+                    >已定格</span
+                  >
+                </span>
                 <span
                   class="aip-drawer__boost-value"
-                  title="任务从开始到现在的墙钟耗时(含用户离开 / 阅读 / 并行其它任务的空闲);并行多任务时墙钟会膨胀,新公式通过权重削减它的影响"
+                  :title="
+                    currentDetail.finishedAt
+                      ? '需求已完成,墙钟耗时定格在完成时刻,不再随后续自动上报膨胀'
+                      : '任务从开始到现在的墙钟耗时(含用户离开 / 阅读 / 并行其它任务的空闲);并行多任务时墙钟会膨胀,新公式通过权重削减它的影响'
+                  "
                 >
                   {{ formatMinutes(currentDetail.metrics.latestElapsedMinutes) }}
                 </span>
@@ -1925,6 +1914,21 @@ onMounted(() => {
 
 .aip-drawer__boost-label--center {
   text-align: center;
+}
+
+.aip-drawer__frozen-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--aipt-fill-muted, rgba(100, 116, 139, 0.14));
+  color: var(--aipt-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  vertical-align: middle;
+  cursor: help;
 }
 
 .aip-drawer__boost-value-row {
