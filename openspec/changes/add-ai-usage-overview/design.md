@@ -44,7 +44,7 @@
 ```jsonc
 {
   "version": 1,
-  "config": { "enabled": false },                 // 监控开关
+  "config": { "enabled": false }, // 监控开关
   "daily": {
     "claude-code": {
       "2026-06-23": {
@@ -53,15 +53,19 @@
         "outputTokens": 1000,
         "cacheReadTokens": 8000,
         "cacheCreationTokens": 2000,
-        "turns": 5,                                 // = 对话次数(flush 一次 +1)
-        "sessions": 2,                              // 去重 sessionId 计数
-        "toolCalls": 0,                             // 可得则记,缺则 0(best-effort)
+        "turns": 5, // = 对话次数(flush 一次 +1)
+        "sessions": 2, // 去重 sessionId 计数
+        "toolCalls": 0, // 可得则记,缺则 0(best-effort)
         "models": { "claude-opus-4-8": { "totalTokens": 12000, "turns": 5 } },
         "providers": { "anthropic": { "totalTokens": 12000 } }
       }
     },
-    "codex":  { /* 同构 */ },
-    "cursor": { /* 同构 */ }
+    "codex": {
+      /* 同构 */
+    },
+    "cursor": {
+      /* 同构 */
+    }
   }
 }
 ```
@@ -77,7 +81,7 @@
 
 定义内部 `AiUsageEvent`(OTel GenAI 子集):`{ source, sessionId, turnId?, model?, provider?, tokens:{input,output,cacheRead,cacheCreation,total}, toolCalls?, at }`。三条链路各自把原生数据归一化成它,再调 `recordUsage(event)`:
 
-- **Claude**(`TranscriptWatcher` flushTurn):已有的 `ParsedTokens` 含 input/output/cache_* 细分,直接映射;model 取 assistant message。
+- **Claude**(`TranscriptWatcher` flushTurn):已有的 `ParsedTokens` 含 input/output/cache\_\* 细分,直接映射;model 取 assistant message。
 - **Codex**(`CodexWatcher` flush):token 增量 = `currentTotalEffective - flushedTotal`;细分按 `parseCodexTokenCount` 已解析字段映射;model 取 turn_context。
 - **Cursor**(daemon `handleAiProductivityHook`):用 `parseHookTokens` + 透传的 `cache_read/creation_tokens` 映射;model 取 body.model。
 
