@@ -867,3 +867,56 @@ export function listHarnessSuggestions() {
     '/ai-productivity/harness-suggestions'
   )
 }
+
+// ===== AI 整体用量(ai-usage)看板 API =====
+
+/** AI 用量维度键(可采集子集)。 */
+export type AiUsageSource = 'cursor' | 'claude-code' | 'codex'
+
+/** 单日单 AI 的用量视图(携带全部已采集维度,UI 先取子集)。 */
+export type AiUsageDailyView = {
+  totalTokens: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  turns: number
+  sessions: number
+  toolCalls: number
+  models: Record<string, { totalTokens: number; turns: number }>
+  providers: Record<string, { totalTokens: number }>
+}
+
+/** 近 N 天序列的单个数据点:date + 各 source 的视图(无数据的 source 缺省)。 */
+export type AiUsageSeriesPoint = {
+  date: string
+} & Partial<Record<AiUsageSource, AiUsageDailyView>>
+
+export type AiUsageResponse = {
+  enabled: boolean
+  today: Record<AiUsageSource, AiUsageDailyView>
+  series: AiUsageSeriesPoint[]
+}
+
+/** 看板侧 AI 工具展示顺序与文案(与 IterationSource chip 体系一致)。 */
+export const AI_USAGE_SOURCES: { key: AiUsageSource; label: string }[] = [
+  { key: 'cursor', label: 'Cursor' },
+  { key: 'claude-code', label: 'Claude Code' },
+  { key: 'codex', label: 'Codex' }
+]
+
+/** 读取按 AI、按日聚合的整体用量 + 开关状态。days 默认 14。 */
+export function fetchAiUsage(days = 14) {
+  return agentRequest<AiUsageResponse>(
+    `/ai-productivity/ai-usage${buildQuery({ days: String(days) })}`
+  )
+}
+
+/** 切换采集开关,返回最新 config。 */
+export function patchAiUsageConfig(input: { enabled: boolean }) {
+  return agentRequest<{ enabled: boolean }>('/ai-productivity/ai-usage/config', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input)
+  })
+}

@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
 
 import AiProductivityTrackerWorkspaceTab from './tabs/AiProductivityTrackerWorkspaceTab.vue'
 import AiProductivityTrackerLessonsTab from './tabs/AiProductivityTrackerLessonsTab.vue'
+import AiUsageTab from './tabs/AiUsageTab.vue'
 import AiProductivityTrackerSettingsTab from './tabs/AiProductivityTrackerSettingsTab.vue'
 import AiProductivityTrackerMcpConfigTab from './tabs/AiProductivityTrackerMcpConfigTab.vue'
 import AiProductivityTrackerGuideTab from './tabs/AiProductivityTrackerGuideTab.vue'
@@ -33,6 +34,7 @@ export const primaryNav: NavItem[] = [
     routeName: 'workspace'
   },
   { key: 'lessons', label: '复盘经验', icon: 'i-lucide-sparkles', routeName: 'lessons' },
+  { key: 'ai-usage', label: 'AI 用量', icon: 'i-lucide-activity', routeName: 'ai-usage' },
   { key: 'settings', label: '设置', icon: 'i-lucide-settings-2', routeName: 'settings-basic' }
 ]
 
@@ -65,6 +67,12 @@ const routes: RouteRecordRaw[] = [
     name: 'lessons',
     component: AiProductivityTrackerLessonsTab,
     meta: { label: '复盘经验', navKey: 'lessons' }
+  },
+  {
+    path: '/ai-usage',
+    name: 'ai-usage',
+    component: AiUsageTab,
+    meta: { label: 'AI 用量', navKey: 'ai-usage' }
   },
   {
     path: '/settings',
