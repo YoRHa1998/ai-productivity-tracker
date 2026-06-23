@@ -48,7 +48,7 @@ export const LESSON_TYPES: readonly LessonType[] = [
 
 export type LessonTrust = 'high' | 'medium' | 'low'
 
-export type LessonExtractedBy = 'cursor' | 'claude-code' | 'manual'
+export type LessonExtractedBy = 'cursor' | 'claude-code' | 'codex' | 'manual'
 
 /**
  * v2.17.0 经验作用域:

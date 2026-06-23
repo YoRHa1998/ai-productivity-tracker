@@ -11,7 +11,7 @@ import type { ConversationSummary, IterationSource } from './iteration-store.js'
 const ONE_LINE_MAX = 120
 const CHANGE_SCOPE_MAX = 120
 const DISCUSSION_MAX = 300
-const VALID_SOURCES: readonly IterationSource[] = ['cursor', 'claude-code', 'unknown']
+const VALID_SOURCES: readonly IterationSource[] = ['cursor', 'claude-code', 'codex', 'unknown']
 
 function truncate(value: string, max: number): string {
   const trimmed = value.trim()

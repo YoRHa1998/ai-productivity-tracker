@@ -26,13 +26,14 @@ export type ConversationType = 'coding' | 'communication'
  *
  * - 'cursor': Hook 路径 body.source='cursor-hook',或 skill 模板硬编码
  * - 'claude-code': Watcher 监听 ~/.claude/projects,或 Hook 路径 body.source='claude-hook'
+ * - 'codex': CodexWatcher 监听 ~/.codex/sessions,或 attach_summary 传入 source='codex'
  * - 'unknown': 老数据缺失字段、来源无法识别
  *
  * 前端约定:'unknown' 不渲染 chip,避免视觉冗余。
  */
-export type IterationSource = 'cursor' | 'claude-code' | 'unknown'
+export type IterationSource = 'cursor' | 'claude-code' | 'codex' | 'unknown'
 
-const VALID_SOURCES: readonly IterationSource[] = ['cursor', 'claude-code', 'unknown']
+const VALID_SOURCES: readonly IterationSource[] = ['cursor', 'claude-code', 'codex', 'unknown']
 
 export function normalizeIterationSource(raw: unknown): IterationSource {
   if (typeof raw !== 'string') return 'unknown'

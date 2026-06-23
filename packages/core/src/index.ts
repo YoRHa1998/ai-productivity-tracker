@@ -9,6 +9,8 @@ export * as store from './store/index.js'
 
 export * from './bindings.js'
 export * from './claude-message.js'
+export * from './codex-message.js'
+export * from './codex-watcher.js'
 export * from './git.js'
 export * from './git-diff.js'
 export * from './hook-dedupe.js'

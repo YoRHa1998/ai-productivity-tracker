@@ -38,7 +38,7 @@ import { ensureRequirementDir, retrospectivePath } from './paths.js'
 
 export const CURRENT_RETROSPECTIVE_SCHEMA_VERSION = 1
 
-export type RetrospectiveSource = 'cursor' | 'claude-code' | 'manual'
+export type RetrospectiveSource = 'cursor' | 'claude-code' | 'codex' | 'manual'
 
 /** 单需求复盘报告里 LLM 推理产物的硬约束(超长会被 store 端静默截断) */
 export const RETROSPECTIVE_LIMITS = {
@@ -421,7 +421,8 @@ function normalizeSeqArray(input: unknown, limit: number): number[] {
 }
 
 function normalizeSource(input: unknown): RetrospectiveSource {
-  if (input === 'cursor' || input === 'claude-code' || input === 'manual') return input
+  if (input === 'cursor' || input === 'claude-code' || input === 'codex' || input === 'manual')
+    return input
   return 'manual'
 }
 
