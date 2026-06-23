@@ -441,6 +441,56 @@ describe('runStopCheck — per-turn 经验沉淀兜底(v2.15.0 inject_lesson_hin
   })
 })
 
+describe('runStopCheck — Codex 方言(claude-code 输出,cwd 解析)', () => {
+  let env: Env
+  beforeEach(() => {
+    env = setupGitRepo('feature/INSTANT-400-codex')
+    seedRequirement(env.agentRoot, 'INSTANT-400')
+  })
+  afterEach(() => {
+    rmSync(env.workspace, { recursive: true, force: true })
+    rmSync(env.agentRoot, { recursive: true, force: true })
+  })
+
+  // Codex Stop hook payload:无 cursor_version,带 cwd + session_id,无 workspace_roots
+  function codexPayload(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      session_id: 'codex-sess-1',
+      cwd: env.workspace,
+      hook_event_name: 'Stop',
+      ...overrides
+    })
+  }
+
+  it('Codex Stop(无 cursor_version,带 cwd)→ 识别为 claude-code 方言,sentinel 缺失时 decision:block', async () => {
+    const outcome = await runStopCheck({
+      stdin: codexPayload(),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true
+    })
+    expect(outcome.dialect).toBe('claude-code')
+    expect(outcome.kind).toBe('inject_followup')
+    const parsed = JSON.parse(outcome.output!) as { decision: string; reason: string }
+    expect(parsed.decision).toBe('block')
+    expect(parsed.reason).toBe(FOLLOWUP_REASON)
+  })
+
+  it('Codex payload 用 cwd 解析 jiraKey(无 workspace_roots 仍能命中需求)', async () => {
+    const at = new Date('2026-06-16T03:00:00.000Z')
+    writeRecentAttachSentinel('INSTANT-400', at, env.agentRoot)
+    const outcome = await runStopCheck({
+      stdin: codexPayload(),
+      agentRootOverride: env.agentRoot,
+      skipAgentReachability: true,
+      agentEndpoint: STUB_ENDPOINT,
+      fetchImpl: makeFetch(),
+      now: () => at.getTime() + 5_000
+    })
+    // sentinel 命中 + 无强候选 → 放行(证明 cwd 成功解析到 INSTANT-400 需求)
+    expect(outcome.kind).toBe('allowed_no_candidate')
+  })
+})
+
 describe('runStopCheck — 异常输入', () => {
   it('空 stdin → 静默放行', async () => {
     const outcome = await runStopCheck({ stdin: '', skipAgentReachability: true })

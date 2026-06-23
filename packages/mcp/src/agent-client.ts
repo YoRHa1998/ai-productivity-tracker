@@ -52,7 +52,7 @@ export interface StatusResult {
 
 export type AttachSummaryConversationType = 'coding' | 'communication'
 
-export type AttachSummarySource = 'cursor' | 'claude-code'
+export type AttachSummarySource = 'cursor' | 'claude-code' | 'codex'
 
 export interface AttachSummaryInput {
   /** 一句话总结,≤120 字 */
@@ -246,8 +246,8 @@ export interface LessonInputForSave {
 export interface SaveLessonsInput {
   jiraKey: string
   lessons: LessonInputForSave[]
-  /** 'cursor' / 'claude-code',由 SKILL/Rule 模板硬编码,缺省 manual */
-  source?: 'cursor' | 'claude-code'
+  /** 'cursor' / 'claude-code' / 'codex',由 SKILL/Rule 模板硬编码,缺省 manual */
+  source?: 'cursor' | 'claude-code' | 'codex'
   /** v2.17.0 批次维度 projectSlug 兜底(优先级低于 lesson 自身字段) */
   projectSlug?: string
 }
@@ -296,7 +296,7 @@ export interface ExtractRetrospectiveBundleInput {
   cwd?: string
 }
 
-export type RetrospectiveSource = 'cursor' | 'claude-code' | 'manual'
+export type RetrospectiveSource = 'cursor' | 'claude-code' | 'codex' | 'manual'
 
 export interface RetrospectivePhaseInput {
   title: string
@@ -396,14 +396,17 @@ export interface SaveRetrospectiveResult {
 
 /**
  * v2.7.3 MCP 客户端 cwd 解析,按优先级:
- *   1) CLAUDE_PROJECT_DIR / CURSOR_PROJECT_DIR(老约定,Claude Code 与自定义集成保留)
+ *   1) CLAUDE_PROJECT_DIR / CURSOR_PROJECT_DIR / CODEX_PROJECT_DIR(老约定 + 自定义集成保留)
  *   2) WORKSPACE_FOLDER_PATHS(Cursor IDE 实测注入,单/多工作区可能 ':' 或 ';' 分隔,取首项)
  *      —— 这是 Cursor 启动 MCP server 时唯一传工作区路径的环境变量;
  *         没有这条 fallback 时 process.cwd() 落在用户 home,后端 4 级 fallback 全失败 → 400
- *   3) process.cwd()(Claude Code 路径会落在项目根)
+ *   3) process.cwd()(Claude Code / Codex CLI 路径会落在项目根)
  */
 function resolveClientCwd(): string | undefined {
-  const explicit = process.env.CLAUDE_PROJECT_DIR ?? process.env.CURSOR_PROJECT_DIR
+  const explicit =
+    process.env.CLAUDE_PROJECT_DIR ??
+    process.env.CURSOR_PROJECT_DIR ??
+    process.env.CODEX_PROJECT_DIR
   if (explicit && explicit.trim()) return explicit.trim()
 
   const workspaces = process.env.WORKSPACE_FOLDER_PATHS

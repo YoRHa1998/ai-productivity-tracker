@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
-import { TranscriptWatcher } from '@ai-productivity-tracker/core'
+import { CodexWatcher, TranscriptWatcher } from '@ai-productivity-tracker/core'
 
 import type { ServerConfig } from '../config.js'
 import { extractToken, verifyToken } from './auth.js'
@@ -108,6 +108,10 @@ export async function startDaemon(config: ServerConfig): Promise<DaemonHandle> {
     log: (msg) => console.log(msg)
   })
 
+  const codexWatcher = new CodexWatcher({
+    log: (msg) => console.log(msg)
+  })
+
   const server = createServer(async (req, res) => {
     try {
       if (applyCors(res, currentConfig, req)) return
@@ -126,6 +130,7 @@ export async function startDaemon(config: ServerConfig): Promise<DaemonHandle> {
     )
   } else {
     transcriptWatcher.start()
+    codexWatcher.start()
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -142,6 +147,7 @@ export async function startDaemon(config: ServerConfig): Promise<DaemonHandle> {
 
   const stop = async (): Promise<void> => {
     transcriptWatcher.stop()
+    codexWatcher.stop()
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 

@@ -9,6 +9,11 @@ import {
   CLAUDE_TRACK_HOOK_REMINDER_MARKER,
   CLAUDE_TRACK_SKILL_CONTENT,
   CLAUDE_TRACK_SKILL_FILENAME,
+  CODEX_TRACK_HOOK_REMINDER_COMMAND,
+  CODEX_TRACK_HOOK_REMINDER_MARKER,
+  CODEX_TRACK_SKILL_CONTENT,
+  CODEX_TRACK_SKILL_FILENAME,
+  CODEX_TRACK_SKILL_KEY,
   CURSOR_SESSION_REMINDER_COMMAND,
   CURSOR_SESSION_REMINDER_MARKER,
   CURSOR_TRACK_RULE_CONTENT,
@@ -16,12 +21,14 @@ import {
   TRACK_SKILL_VERSION,
   LESSONS_EXTRACT_CLAUDE_CONTENT,
   LESSONS_EXTRACT_CLAUDE_FILENAME,
+  LESSONS_EXTRACT_CODEX_CONTENT,
   LESSONS_EXTRACT_CURSOR_CONTENT,
   LESSONS_EXTRACT_CURSOR_FILENAME,
   LESSONS_EXTRACT_SKILL_KEY,
   LESSONS_EXTRACT_SKILL_VERSION,
   RETROSPECTIVE_CLAUDE_CONTENT,
   RETROSPECTIVE_CLAUDE_FILENAME,
+  RETROSPECTIVE_CODEX_CONTENT,
   RETROSPECTIVE_CURSOR_CONTENT,
   RETROSPECTIVE_CURSOR_FILENAME,
   RETROSPECTIVE_SKILL_KEY,
@@ -438,6 +445,32 @@ function defaultRetrospectiveCursorFile(): string {
   return path.join(defaultCursorTrackRuleDir(), RETROSPECTIVE_CURSOR_FILENAME)
 }
 
+// v1.0.0 Codex 集成:Codex 用 ~/.codex/skills/<name>/SKILL.md 体系(与 Claude 同构),
+// hooks 写 ~/.codex/hooks.json(与 Claude settings.json 同构)。
+function defaultCodexSkillRoot(): string {
+  return path.join(homedir(), '.codex', 'skills')
+}
+
+function defaultCodexTrackSkillFile(): string {
+  return path.join(defaultCodexSkillRoot(), CODEX_TRACK_SKILL_KEY, CODEX_TRACK_SKILL_FILENAME)
+}
+
+function defaultCodexLessonsExtractFile(): string {
+  return path.join(
+    defaultCodexSkillRoot(),
+    LESSONS_EXTRACT_SKILL_KEY,
+    LESSONS_EXTRACT_CLAUDE_FILENAME
+  )
+}
+
+function defaultCodexRetrospectiveFile(): string {
+  return path.join(defaultCodexSkillRoot(), RETROSPECTIVE_SKILL_KEY, RETROSPECTIVE_CLAUDE_FILENAME)
+}
+
+function defaultCodexHooksFile(): string {
+  return path.join(homedir(), '.codex', 'hooks.json')
+}
+
 async function readFileSafe(absPath: string): Promise<string | null> {
   try {
     return await fs.readFile(absPath, 'utf-8')
@@ -504,6 +537,16 @@ export interface TrackSkillBundleStatus {
     version: string
     claude: TrackSkillTargetStatus
     cursor: TrackSkillTargetStatus
+  }
+  /**
+   * v1.0.0 Codex 集成状态:ai-productivity-track / lessons-extract / retrospective-report
+   * 三个 skill 写到 ~/.codex/skills/,外加 ~/.codex/hooks.json 的 reminder + stop-check。
+   */
+  codex: {
+    track: TrackSkillTargetStatus
+    lessonsExtract: TrackSkillTargetStatus
+    retrospective: TrackSkillTargetStatus
+    hook: CodexTrackHookStatus
   }
 }
 
@@ -577,6 +620,16 @@ export interface TrackSkillBundleInstallResult {
     claude: { path: string; written: boolean; replaced: boolean }
     cursor: { path: string; written: boolean; replaced: boolean }
   }
+  /**
+   * v1.0.0 Codex 集成:三个 skill 写到 ~/.codex/skills/,外加 ~/.codex/hooks.json
+   * 的 reminder + stop-check 注入结果。
+   */
+  codex: {
+    track: { path: string; written: boolean; replaced: boolean }
+    lessonsExtract: { path: string; written: boolean; replaced: boolean }
+    retrospective: { path: string; written: boolean; replaced: boolean }
+    hook: CodexTrackHookInstallResult
+  }
 }
 
 export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatus> {
@@ -586,6 +639,9 @@ export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatu
   const lessonsCursorPath = defaultLessonsExtractCursorFile()
   const retroClaudePath = defaultRetrospectiveClaudeFile()
   const retroCursorPath = defaultRetrospectiveCursorFile()
+  const codexTrackPath = defaultCodexTrackSkillFile()
+  const codexLessonsPath = defaultCodexLessonsExtractFile()
+  const codexRetroPath = defaultCodexRetrospectiveFile()
 
   const [
     claudeContent,
@@ -598,7 +654,11 @@ export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatu
     lessonsClaudeContent,
     lessonsCursorContent,
     retroClaudeContent,
-    retroCursorContent
+    retroCursorContent,
+    codexTrackContent,
+    codexLessonsContent,
+    codexRetroContent,
+    codexHookStatus
   ] = await Promise.all([
     readFileSafe(claudePath),
     readFileSafe(cursorPath),
@@ -610,7 +670,11 @@ export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatu
     readFileSafe(lessonsClaudePath),
     readFileSafe(lessonsCursorPath),
     readFileSafe(retroClaudePath),
-    readFileSafe(retroCursorPath)
+    readFileSafe(retroCursorPath),
+    readFileSafe(codexTrackPath),
+    readFileSafe(codexLessonsPath),
+    readFileSafe(codexRetroPath),
+    inspectAiTrackCodexHook()
   ])
 
   const claudeInstalled = claudeContent !== null
@@ -619,6 +683,9 @@ export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatu
   const lessonsCursorInstalled = lessonsCursorContent !== null
   const retroClaudeInstalled = retroClaudeContent !== null
   const retroCursorInstalled = retroCursorContent !== null
+  const codexTrackInstalled = codexTrackContent !== null
+  const codexLessonsInstalled = codexLessonsContent !== null
+  const codexRetroInstalled = codexRetroContent !== null
 
   return {
     version: TRACK_SKILL_VERSION,
@@ -668,6 +735,27 @@ export async function inspectAiTrackSkillBundle(): Promise<TrackSkillBundleStatu
         upToDate: retroCursorContent === RETROSPECTIVE_CURSOR_CONTENT,
         outdated: retroCursorInstalled && retroCursorContent !== RETROSPECTIVE_CURSOR_CONTENT
       }
+    },
+    codex: {
+      track: {
+        defaultPath: codexTrackPath,
+        installed: codexTrackInstalled,
+        upToDate: codexTrackContent === CODEX_TRACK_SKILL_CONTENT,
+        outdated: codexTrackInstalled && codexTrackContent !== CODEX_TRACK_SKILL_CONTENT
+      },
+      lessonsExtract: {
+        defaultPath: codexLessonsPath,
+        installed: codexLessonsInstalled,
+        upToDate: codexLessonsContent === LESSONS_EXTRACT_CODEX_CONTENT,
+        outdated: codexLessonsInstalled && codexLessonsContent !== LESSONS_EXTRACT_CODEX_CONTENT
+      },
+      retrospective: {
+        defaultPath: codexRetroPath,
+        installed: codexRetroInstalled,
+        upToDate: codexRetroContent === RETROSPECTIVE_CODEX_CONTENT,
+        outdated: codexRetroInstalled && codexRetroContent !== RETROSPECTIVE_CODEX_CONTENT
+      },
+      hook: codexHookStatus
     }
   }
 }
@@ -722,6 +810,15 @@ export async function installAiTrackSkillBundle(): Promise<TrackSkillBundleInsta
   const retroClaudeRes = await writeFileAtomic(retroClaudePath, RETROSPECTIVE_CLAUDE_CONTENT)
   const retroCursorRes = await writeFileAtomic(retroCursorPath, RETROSPECTIVE_CURSOR_CONTENT)
 
+  // v1.0.0 Codex:三个 skill 写到 ~/.codex/skills/,外加 hooks.json reminder + stop-check
+  const codexTrackPath = defaultCodexTrackSkillFile()
+  const codexLessonsPath = defaultCodexLessonsExtractFile()
+  const codexRetroPath = defaultCodexRetrospectiveFile()
+  const codexTrackRes = await writeFileAtomic(codexTrackPath, CODEX_TRACK_SKILL_CONTENT)
+  const codexLessonsRes = await writeFileAtomic(codexLessonsPath, LESSONS_EXTRACT_CODEX_CONTENT)
+  const codexRetroRes = await writeFileAtomic(codexRetroPath, RETROSPECTIVE_CODEX_CONTENT)
+  const codexHookRes = await installAiTrackCodexHook()
+
   return {
     version: TRACK_SKILL_VERSION,
     claude: {
@@ -750,6 +847,12 @@ export async function installAiTrackSkillBundle(): Promise<TrackSkillBundleInsta
       version: RETROSPECTIVE_SKILL_VERSION,
       claude: { path: retroClaudePath, written: true, replaced: retroClaudeRes.replaced },
       cursor: { path: retroCursorPath, written: true, replaced: retroCursorRes.replaced }
+    },
+    codex: {
+      track: { path: codexTrackPath, written: true, replaced: codexTrackRes.replaced },
+      lessonsExtract: { path: codexLessonsPath, written: true, replaced: codexLessonsRes.replaced },
+      retrospective: { path: codexRetroPath, written: true, replaced: codexRetroRes.replaced },
+      hook: codexHookRes
     }
   }
 }
@@ -1201,8 +1304,8 @@ export async function installAiTrackCursorHook(): Promise<CursorTrackHookInstall
 // ----- Claude Code Stop / PostToolUse -----
 
 interface ClaudeHookUpsertInput {
-  hookType: 'Stop' | 'PostToolUse'
-  /** Stop 用 null(无 matcher 概念);PostToolUse 必须传 matcher 字符串 */
+  hookType: 'Stop' | 'PostToolUse' | 'UserPromptSubmit'
+  /** Stop 用 null(无 matcher 概念);PostToolUse / UserPromptSubmit 传 matcher 字符串 */
   matcher: string | null
   marker: string
   finalCommand: string
@@ -1476,4 +1579,110 @@ async function detectLegacyClaudeMarkToolEntry(): Promise<boolean> {
     }
   }
   return false
+}
+
+// ===== v1.0.0 Codex hooks(~/.codex/hooks.json,Claude 同构 schema)=====
+//
+// Codex CLI 没有 afterAgentResponse 等价 hook(token/iteration 全走 CodexWatcher),
+// 这里只装两类软数据 nudge:
+//   - UserPromptSubmit:每轮 reminder(等价 Claude),提示 LLM 调 attach_summary(source=codex)
+//   - Stop:stop-check 兜底(漏调 attach_summary 时打回补一次,复用 claude-code 方言输出)
+// 两者均 marker 式覆盖 upsert,严格保留 hooks.json 里其它工具(codeisland / loongsuite 等)条目。
+
+export const CODEX_STOP_CHECK_MARKER = '# ai-productivity-stop-check'
+
+export function buildCodexStopCheckCommand(): string {
+  return `${process.execPath} ${defaultMcpBinPath()} stop-check ${CODEX_STOP_CHECK_MARKER}`
+}
+
+export interface CodexTrackHookStatus {
+  path: string
+  reminderInstalled: boolean
+  reminderUpToDate: boolean
+  reminderCurrentCommand: string | null
+  stopCheckInstalled: boolean
+  stopCheckUpToDate: boolean
+  stopCheckCurrentCommand: string | null
+}
+
+function codexHookGroups(
+  settings: ClaudeSettingsLike,
+  event: string
+): ClaudeHookMatcherGroup[] | null {
+  const hooks = settings.hooks as Record<string, unknown> | undefined
+  const groups = hooks?.[event]
+  return Array.isArray(groups) ? (groups as ClaudeHookMatcherGroup[]) : null
+}
+
+export async function inspectAiTrackCodexHook(): Promise<CodexTrackHookStatus> {
+  const file = defaultCodexHooksFile()
+  const settings = await readClaudeSettings(file)
+  const reminderCmd = CODEX_TRACK_HOOK_REMINDER_COMMAND
+  const stopCheckCmd = buildCodexStopCheckCommand()
+
+  const reminderGroups = codexHookGroups(settings, 'UserPromptSubmit')
+  const reminderFound = reminderGroups
+    ? findClaudeEntryByMarker(reminderGroups, CODEX_TRACK_HOOK_REMINDER_MARKER)
+    : null
+  const stopGroups = codexHookGroups(settings, 'Stop')
+  const stopFound = stopGroups ? findClaudeEntryByMarker(stopGroups, CODEX_STOP_CHECK_MARKER) : null
+
+  return {
+    path: file,
+    reminderInstalled: !!reminderFound,
+    reminderUpToDate: !!reminderFound && reminderFound.entry.command === reminderCmd,
+    reminderCurrentCommand: reminderFound?.entry.command ?? null,
+    stopCheckInstalled: !!stopFound,
+    stopCheckUpToDate: !!stopFound && stopFound.entry.command === stopCheckCmd,
+    stopCheckCurrentCommand: stopFound?.entry.command ?? null
+  }
+}
+
+export interface CodexTrackHookInstallResult {
+  path: string
+  reminder: { replaced: boolean; previousCommand: string | null; finalCommand: string }
+  stopCheck: { replaced: boolean; previousCommand: string | null; finalCommand: string }
+}
+
+/**
+ * 在 ~/.codex/hooks.json 注入 / 更新 UserPromptSubmit reminder + Stop stop-check。
+ *
+ * 复用 Claude settings 的 upsert 逻辑(同构 JSON schema),marker 命中覆盖、不命中追加,
+ * 绝不破坏其它事件 / 其它工具的 hook 条目。
+ */
+export async function installAiTrackCodexHook(): Promise<CodexTrackHookInstallResult> {
+  const file = defaultCodexHooksFile()
+  const settings = await readClaudeSettings(file)
+
+  const reminderCmd = CODEX_TRACK_HOOK_REMINDER_COMMAND
+  const stopCheckCmd = buildCodexStopCheckCommand()
+
+  const reminderRes = upsertClaudeHookEntry(settings, {
+    hookType: 'UserPromptSubmit',
+    matcher: '*',
+    marker: CODEX_TRACK_HOOK_REMINDER_MARKER,
+    finalCommand: reminderCmd
+  })
+  const stopRes = upsertClaudeHookEntry(settings, {
+    hookType: 'Stop',
+    matcher: null,
+    marker: CODEX_STOP_CHECK_MARKER,
+    finalCommand: stopCheckCmd
+  })
+
+  await writeClaudeSettings(file, settings)
+
+  return {
+    path: file,
+    reminder: {
+      replaced: reminderRes.replaced,
+      previousCommand: reminderRes.previousCommand,
+      finalCommand: reminderCmd
+    },
+    stopCheck: {
+      replaced: stopRes.replaced,
+      previousCommand: stopRes.previousCommand,
+      finalCommand: stopCheckCmd
+    }
+  }
 }

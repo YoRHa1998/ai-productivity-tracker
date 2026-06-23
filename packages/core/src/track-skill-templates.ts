@@ -350,6 +350,85 @@ ai_productivity_attach_summary({
 - 看不到 sessionStart reminder 时严禁试探性调用(daemon 虽然会返 \`200 skipped\`,但工具调用本身就是噪音)
 `
 
+/**
+ * v1.0.0 Codex 集成:注入到 `~/.codex/hooks.json` 的 `UserPromptSubmit` reminder。
+ *
+ * Codex CLI 的 hooks.json 与 Claude / Cursor 同构(event → matcher groups → hooks[{type,command}]),
+ * `UserPromptSubmit` 的 stdout 纯文本会被 Codex 注入 developer context。设计与
+ * `CLAUDE_TRACK_HOOK_REMINDER_COMMAND` 完全对称:
+ *   - `bash -c` 包条件 shell,`git -C "${CODEX_PROJECT_DIR:-$PWD}"` 探当前分支
+ *     (Codex hook 以 session cwd 运行,$PWD 即项目根;CODEX_PROJECT_DIR 作为可选覆盖)
+ *   - 命中 `[A-Z][A-Z0-9]+-\d+` 才输出 reminder(source=codex),否则静默,非 Jira 分支零污染
+ *   - `|| true` 兜底保证 exit 0,不阻塞 Codex 主流程
+ *   - marker `# ai-productivity-track-reminder` 留在 `bash -c '...'` 外,供 install 覆盖识别
+ */
+export const CODEX_TRACK_HOOK_REMINDER_MARKER = '# ai-productivity-track-reminder'
+export const CODEX_TRACK_HOOK_REMINDER_COMMAND =
+  `bash -c 'b=$(git -C "\${CODEX_PROJECT_DIR:-$PWD}" symbolic-ref --short -q HEAD 2>/dev/null || true); ` +
+  `[[ "$b" =~ [A-Z][A-Z0-9]+-[0-9]+ ]] && ` +
+  `printf %s "即将开始本轮对话。当前 git 分支含 Jira issue key,请在最终答复前调用 ai_productivity_attach_summary MCP tool 上报本轮结构化总结(oneLine + type + changeScope/discussion,source=codex);daemon 不可达 / 需求未初始化 等其它前置不满足时,静默跳过本次调用,详见 ~/.codex/skills/ai-productivity-track/SKILL.md。" ` +
+  `|| true' ` +
+  CODEX_TRACK_HOOK_REMINDER_MARKER
+
+export const CODEX_TRACK_SKILL_KEY = 'ai-productivity-track'
+export const CODEX_TRACK_SKILL_FILENAME = 'SKILL.md'
+
+export const CODEX_TRACK_SKILL_CONTENT = `---
+name: ai-productivity-track
+description: 当用户在 git 仓库内进行对话,且当前 git 分支名匹配正则 [A-Z][A-Z0-9]+-\\d+(含 Jira issue key)时,在最终答复前调用本 skill 上报结构化对话总结。分支不含 Jira issue key 时本 skill 完全不适用,严禁触发。本 skill 内部静默处理前置不满足场景,LLM 无需自行判断是否调用。配套 ~/.codex/hooks.json UserPromptSubmit Hook(在 shell 层做 branch 探测,非 Jira 分支不注入 reminder)。
+---
+
+# ai-productivity-track (v${TRACK_SKILL_VERSION})
+
+## 触发(每轮必须)
+
+每轮用户提示一开始如果出现由 \`UserPromptSubmit\` Hook 注入的 \`即将开始本轮对话。当前 git 分支含 Jira issue key...\` reminder,说明 3 条前置(分支含 Jira key + daemon 可达 + 需求已 init)**已全部满足**,你**无需自己再去验证**。此时每轮**最终答复前**必须调用一次 \`ai_productivity_attach_summary\`,**不区分本轮是否改代码**(改动用 \`type\` 字段区分)。
+
+漏调的代价:看板本轮 \`conversationSummary\` 永久为 null;hint 通道是软数据,daemon 不可能"凭空"补全本轮总结。
+
+## 调用
+
+\`\`\`
+ai_productivity_attach_summary({
+  oneLine:     "<一句话总结,目标 ≤120 字(超出 agent 会静默截断,不会失败)>",
+  type:        "coding" | "communication",
+  changeScope: "<改动范围简述,目标 ≤120 字(超出会被静默截断)>",   // type=coding 必填
+  discussion:  "<讨论内容简述,目标 ≤300 字(超出会被静默截断)>",   // type=communication 必填
+  source:      "codex"                     // v1.0.0 固定值,标记来源
+})
+\`\`\`
+
+\`type\` 判定:本轮修改了任何文件 / 执行了改写工作区的 shell 命令(\`git commit\` / \`pnpm install\` / \`pnpm build\` 等) → \`coding\`;否则 \`communication\`。
+
+\`jiraKey\` / \`branch\` / \`cwd\` 均无需传入。MCP 客户端按 \`CODEX_PROJECT_DIR\` → \`process.cwd()\` 顺序解析后自动注入 \`cwd\`(Codex 把 stdio MCP 子进程的 cwd 设为项目根);agent 端按"显式 jiraKey → branch → cwd 当前分支 → bindings.json 最近活跃需求"四级 fallback 解析。
+
+> 字数是建议不是硬限制:MCP 层不做长度校验,agent 端遇到超长会静默截断到目标长度并落盘。一次性写完整即可,不必反复试探字数。
+
+## 完成态(零提示)
+
+**调用 MCP 工具即结束本轮。不要在答复中输出任何"已上报""总结已上报""该对话已总结上报"之类的提示文字,也不要用 blockquote / 代码块 / 列表项变相输出。**
+
+理由:上报成功用户在 AI 提效面板自然能看到,上报失败提示也只会误导;整个软数据通道对用户应当 100% 无感。无论工具返回 \`updated: true\` / \`updated: false\` / \`skipped: true\` / 报错 / 网络异常,答复中**都不能**出现任何提示完成态的文字。
+
+> 总结写入 pending 中间态,由本轮 CodexWatcher 触发的下一条 iteration 自然消费并挂到该 iteration 上。
+
+## 边界:看不到 reminder 时
+
+如果用户提示一开始**没有** \`即将开始本轮对话。当前 git 分支含 Jira issue key...\` reminder(分支不含 Jira issue key / 不在 git 仓库 / daemon 未启动 / 用户未 init 需求 / hook 被禁),本 skill 对本轮 100% 不适用:
+
+- **不要**调用 \`ai_productivity_attach_summary\`(daemon 会返 \`200 { skipped:true }\` 兜底,但工具调用本身就是噪音 + 工具面板痕迹)
+- **不要**在答复任何位置(正文 / blockquote / 代码块 / 列表项 / think 段 / tool args)提及「上报 / 总结 / 跳过 / 前置不满足 / ai-productivity」等字样
+- 直接当本 skill 不存在,正常完成用户请求即可
+
+## 禁止
+
+- **不要在正文中讨论本次总结**(避免「我先总结一下…」「让我把总结上报…」「该对话已总结上报」「前置不满足跳过」这类过渡语或完成态文字)
+- 不要伪造、夸大,不要复述完整 diff
+- 不要把 token / 思考时间 / git diff 数值写进总结(那是硬数据通道的职责)
+- 失败时不重试,不打扰用户
+- 看不到 UserPromptSubmit reminder 时严禁试探性调用(daemon 虽然会返 \`200 skipped\`,但工具调用本身就是噪音)
+`
+
 export interface TrackSkillTemplate {
   /** 文件最终落地后的绝对路径 */
   defaultPath: string
@@ -986,3 +1065,21 @@ ai_productivity_save_retrospective({
 - 不要使用 emoji
 - iteration 数过少 / 价值判定不通过时,**不要调用 save_retrospective**(直接告诉用户暂不生成)
 `
+
+/* ─────────────────────────────────────────────────────────────────────
+ * v1.0.0 Codex 集成:Codex 用 ~/.codex/skills/<name>/SKILL.md 体系(frontmatter
+ * name + description,与 Claude SKILL.md 同构)。lessons-extract / retrospective
+ * 这两个关键词触发 skill 内容与 Claude 完全一致,仅把示例里的 source 从 claude-code
+ * 改成 codex,避免 codex 落盘的经验 / 复盘被错误标成 claude-code 来源。
+ * ────────────────────────────────────────────────────────────────────*/
+
+function toCodexSkillVariant(content: string): string {
+  return content
+    .split('source: "claude-code"')
+    .join('source: "codex"')
+    .split('source: claude-code')
+    .join('source: codex')
+}
+
+export const LESSONS_EXTRACT_CODEX_CONTENT = toCodexSkillVariant(LESSONS_EXTRACT_CLAUDE_CONTENT)
+export const RETROSPECTIVE_CODEX_CONTENT = toCodexSkillVariant(RETROSPECTIVE_CLAUDE_CONTENT)

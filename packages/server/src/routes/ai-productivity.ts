@@ -573,11 +573,13 @@ export interface HookRequestBody {
  *
  * - 'cursor-hook'  → 'cursor'(Cursor IDE 通过 hooks.json 触发 mcp.mjs hook)
  * - 'claude-hook'  → 'claude-code'(Claude Code 的 Stop hook 触发 mcp.mjs hook)
+ * - 'codex-hook'   → 'codex'(Codex CLI 的 hook 触发,实际硬数据走 CodexWatcher)
  * - 其它/缺失      → 'unknown'
  */
 function mapHookSource(raw: string): IterationSource {
   if (raw === 'cursor-hook') return 'cursor'
   if (raw === 'claude-hook') return 'claude-code'
+  if (raw === 'codex-hook') return 'codex'
   return 'unknown'
 }
 
@@ -1530,9 +1532,10 @@ export interface AttachSummaryRequestBody {
   discussion?: string
   /**
    * v2.5.0 调用方 AI 工具来源;由 skill 模板硬编码(SKILL.md 传 'claude-code',
-   * CURSOR_RULE.md 传 'cursor')。仅在 target iteration.source 为 'unknown' 时补写。
+   * CURSOR_RULE.md 传 'cursor',Codex skill 传 'codex')。仅在 target iteration.source
+   * 为 'unknown' 时补写。
    */
-  source?: 'cursor' | 'claude-code'
+  source?: 'cursor' | 'claude-code' | 'codex'
   /**
    * v2.5.1 当前工作目录;jiraKey/branch 都缺时,agent 用 cwd 取当前分支或
    * 该 git 仓库 bindings.json 里最近活跃的需求兜底。
@@ -1745,7 +1748,10 @@ export async function handleAiProductivityAttachSummary(
 
   const { writePendingSummary } = await import('@ai-productivity-tracker/core/store')
   const rawSource = typeof body?.source === 'string' ? body.source.trim() : ''
-  const source = rawSource === 'cursor' || rawSource === 'claude-code' ? rawSource : undefined
+  const source =
+    rawSource === 'cursor' || rawSource === 'claude-code' || rawSource === 'codex'
+      ? rawSource
+      : undefined
 
   // v2.7.0 attach-summary 改写为 pending consume 模型:
   // 把总结写入 <jiraKey>/pending-summary.json,等下一条 hook/watcher 触发的 iteration
@@ -2051,7 +2057,9 @@ export function handleAiProductivitySaveLessons(
         : bodyProjectSlug || undefined
   }))
   const source: LessonExtractedBy =
-    body.source === 'cursor' || body.source === 'claude-code' ? body.source : 'manual'
+    body.source === 'cursor' || body.source === 'claude-code' || body.source === 'codex'
+      ? body.source
+      : 'manual'
   const result = writeLessons(inputs, { extractedBy: source })
   // v2.15.0 per-turn:落盘成功后,对每条 lesson 的 iterationSeqs 写 lesson-handled sentinel,
   // 让 stop-check 兜底不再就同一 (jiraKey, seq) 候选重复打扰(用户已主动「记录」过)。

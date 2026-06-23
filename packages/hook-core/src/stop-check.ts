@@ -120,9 +120,15 @@ function tryParse(raw: string): Record<string, unknown> | null {
 function detectDialect(parsed: Record<string, unknown>): StopDialect {
   if (typeof parsed.cursor_version === 'string' && parsed.cursor_version) return 'cursor'
   if (typeof parsed.stop_hook_active === 'boolean') return 'claude-code'
-  // Claude Code Stop hook payload 可能没有 cursor_version 但有 session_id / transcript_path;
-  // 兜底按 session_id 字段断定
-  if (typeof parsed.session_id === 'string' && !('cursor_version' in parsed)) return 'claude-code'
+  // Claude Code / Codex CLI 的 Stop hook payload 都没有 cursor_version,但带 session_id;
+  // 两者都用 `{decision:'block', reason}` 续跑语义,统一归为 claude-code 方言(输出一致)。
+  // Codex 额外带 cwd 字段,这里一并兜底识别。
+  if (
+    (typeof parsed.session_id === 'string' || typeof parsed.cwd === 'string') &&
+    !('cursor_version' in parsed)
+  ) {
+    return 'claude-code'
+  }
   // 默认按 cursor(loop_count 字段也是 cursor 独有的)
   return 'cursor'
 }

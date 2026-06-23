@@ -63,10 +63,10 @@ const attachSummaryInputShape = {
   jiraKey: z.string().optional().describe('需求 jiraKey,缺省时从 branch 解析'),
   branch: z.string().optional().describe('当前分支名;agent 会从分支名解析 issueKey'),
   source: z
-    .enum(['cursor', 'claude-code'])
+    .enum(['cursor', 'claude-code', 'codex'])
     .optional()
     .describe(
-      '调用方 AI 工具来源,由 skill 模板硬编码:CURSOR_RULE.md 传 cursor,SKILL.md 传 claude-code。仅在 target iteration 缺失 source 时被回填,不覆盖 Hook/Watcher 已写入的值'
+      '调用方 AI 工具来源,由 skill 模板硬编码:CURSOR_RULE.md 传 cursor,SKILL.md 传 claude-code,Codex skill 传 codex。仅在 target iteration 缺失 source 时被回填,不覆盖 Hook/Watcher 已写入的值'
     ),
   cwd: z
     .string()
@@ -404,10 +404,10 @@ const saveRetrospectiveInputShape = {
   jiraKey: z.string().min(1).describe('需求 Jira Key,与 extract_retro_bundle 入参一致'),
   narrative: retroNarrativeSchema.describe('LLM 推理产物的结构化叙事'),
   source: z
-    .enum(['cursor', 'claude-code'])
+    .enum(['cursor', 'claude-code', 'codex'])
     .optional()
     .describe(
-      '调用方 AI 工具来源,由 SKILL/Rule 模板硬编码:CURSOR_RULE.md 传 cursor,SKILL.md 传 claude-code,缺省 manual'
+      '调用方 AI 工具来源,由 SKILL/Rule 模板硬编码:CURSOR_RULE.md 传 cursor,SKILL.md 传 claude-code,Codex skill 传 codex,缺省 manual'
     ),
   referencedLessonIds: z
     .array(z.string())

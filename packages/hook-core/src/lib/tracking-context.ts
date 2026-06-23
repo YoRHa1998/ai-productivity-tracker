@@ -42,6 +42,12 @@ function listCandidateRoots(parsed: Record<string, unknown> | null): string[] {
     }
   }
 
+  // Codex Stop hook payload 带 `cwd`(= session 工作目录),Cursor/Claude 无此字段。
+  if (parsed && typeof (parsed as { cwd?: unknown }).cwd === 'string') {
+    const cwd = (parsed as { cwd: string }).cwd.trim()
+    if (cwd) out.push(cwd)
+  }
+
   try {
     out.push(process.cwd())
   } catch {
