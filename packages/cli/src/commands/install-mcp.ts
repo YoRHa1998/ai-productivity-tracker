@@ -24,11 +24,13 @@
  * 默认 all)。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-export type InstallMcpTarget = 'cursor' | 'claude'
+import { upsertCodexMcpConfig } from '../lib/codex-mcp-config.js'
+
+export type InstallMcpTarget = 'cursor' | 'claude' | 'codex'
 
 export interface InstallMcpArgs {
   /**
@@ -51,8 +53,8 @@ export interface InstallMcpArgs {
  * 任一文件写失败不阻断另一个,聚合返回最严重的 exit code。
  */
 export interface InstallMcpAllArgs {
-  /** 'cursor' | 'claude' | 'all'(默认 'all') */
-  ide?: 'cursor' | 'claude' | 'all'
+  /** 'cursor' | 'claude' | 'codex' | 'all'(默认 'all') */
+  ide?: 'cursor' | 'claude' | 'codex' | 'all'
   command?: string
   args?: string[]
 }
@@ -98,6 +100,14 @@ export async function runInstallMcpAll(args: InstallMcpAllArgs = {}): Promise<nu
     })
     if (code > worst) worst = code
   }
+  if (ide === 'all' || ide === 'codex') {
+    const code = await runInstallMcp({
+      target: 'codex',
+      command: args.command,
+      args: args.args
+    })
+    if (code > worst) worst = code
+  }
   return worst
 }
 
@@ -106,6 +116,11 @@ export async function runInstallMcp(args: InstallMcpArgs = {}): Promise<number> 
   const file = args.configPath ?? defaultMcpJsonForTarget(target)
   const dir = dirname(file)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+
+  // Codex 的 MCP 配置是 TOML,走外科式文本 upsert,不与 JSON 路径共用逻辑。
+  if (target === 'codex') {
+    return runInstallMcpCodex(file, args)
+  }
 
   let data: McpJson = {}
   if (existsSync(file)) {
@@ -166,11 +181,55 @@ export async function runInstallMcp(args: InstallMcpArgs = {}): Promise<number> 
   return 0
 }
 
+/**
+ * Codex 专用:把我们的 mcp_servers 块 upsert 进 ~/.codex/config.toml(TOML)。
+ *
+ * - 写前备份 `${file}.bak`(config.toml 是用户手维护的敏感文件)
+ * - 只动我们这一个 `[mcp_servers."ai-productivity-tracker"]` 块,其余字节原样保留
+ * - 与 Cursor/Claude 一样零 env:`aipt mcp` 自读 runtime.json 拿 token
+ */
+function runInstallMcpCodex(file: string, args: InstallMcpArgs): number {
+  const command = args.command ?? process.execPath
+  const cmdArgs = args.args ?? [resolveCliEntry(), 'mcp']
+
+  let original = ''
+  if (existsSync(file)) {
+    try {
+      original = readFileSync(file, 'utf-8')
+    } catch {
+      console.error(`无法读取 ${file},终止以免破坏配置。请手动修复后重试。`)
+      return 1
+    }
+    // 写前备份,误改可手动还原
+    try {
+      copyFileSync(file, `${file}.bak`)
+    } catch {
+      // 备份失败不阻断(目录权限等),但提示用户
+      console.warn(`  (备份 ${file}.bak 失败,继续写入)`)
+    }
+  }
+
+  const { text, hadEntry, replacedLegacy } = upsertCodexMcpConfig(original, command, cmdArgs)
+  // config.toml 默认 0600(可能含 provider token 等敏感信息)
+  writeFileSync(file, text, { mode: 0o600 })
+
+  const verb = hadEntry ? '已更新' : '已新增'
+  console.log(`${verb} Codex MCP 配置: ${file}`)
+  console.log(`  ${MCP_SERVER_KEY}: ${command} ${cmdArgs.join(' ')}`)
+  if (replacedLegacy) {
+    console.log(`  (顺手清除了老 key: ${LEGACY_MCP_SERVER_KEYS.join(', ')})`)
+  }
+  return 0
+}
+
 export function defaultMcpJsonForTarget(target: InstallMcpTarget): string {
   if (target === 'claude') {
     // Claude Code(claude-code CLI)统一把 mcpServers 放在 ~/.claude.json 顶层。
     // 注意不是 ~/.claude/ 目录里(那个目录管 skills / settings / sessions 等)。
     return join(homedir(), '.claude.json')
+  }
+  if (target === 'codex') {
+    return join(homedir(), '.codex', 'config.toml')
   }
   return join(homedir(), '.cursor', 'mcp.json')
 }

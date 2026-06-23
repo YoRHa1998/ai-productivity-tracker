@@ -22,7 +22,7 @@ import { inspectRunningDaemon, stopRunningDaemon } from '../lib/restart-daemon.j
 import { VERSION } from '../version.js'
 import { runInstallMcpAll } from './install-mcp.js'
 
-export type InstallTargetIde = 'cursor' | 'claude' | 'all'
+export type InstallTargetIde = 'cursor' | 'claude' | 'codex' | 'all'
 
 export interface InstallArgs {
   ide?: InstallTargetIde
@@ -52,10 +52,12 @@ export async function runInstall(args: InstallArgs = {}): Promise<number> {
   const installMcpIde = ide
   console.log(
     installMcpIde === 'all'
-      ? 'Step 1/3: 注入 ~/.cursor/mcp.json + ~/.claude.json'
+      ? 'Step 1/3: 注入 ~/.cursor/mcp.json + ~/.claude.json + ~/.codex/config.toml'
       : installMcpIde === 'cursor'
         ? 'Step 1/3: 注入 ~/.cursor/mcp.json'
-        : 'Step 1/3: 注入 ~/.claude.json'
+        : installMcpIde === 'claude'
+          ? 'Step 1/3: 注入 ~/.claude.json'
+          : 'Step 1/3: 注入 ~/.codex/config.toml'
   )
   const mcpCode = await runInstallMcpAll({ ide: installMcpIde })
   if (mcpCode !== 0) return mcpCode
@@ -96,7 +98,7 @@ export async function runInstall(args: InstallArgs = {}): Promise<number> {
     console.warn('  skill 注入失败,请到看板 → MCP 配置 Tab 点击「一键注入 Skill」按钮重试')
   } else {
     console.log(
-      '  ✓ ai-productivity-track + lessons-extract + retrospective-report skill 已注入到 ~/.claude/skills 与 ~/.cursor/rules'
+      '  ✓ ai-productivity-track + lessons-extract + retrospective-report skill 已注入到 ~/.claude/skills、~/.cursor/rules 与 ~/.codex/skills(含 ~/.codex/hooks.json reminder + stop-check)'
     )
   }
 

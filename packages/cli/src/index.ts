@@ -107,10 +107,10 @@ function parseInstallArgs(rest: string[]): InstallArgs {
     const a = rest[i]!
     if (a.startsWith('--ide=')) {
       const v = a.slice('--ide='.length) as InstallTargetIde
-      if (v === 'cursor' || v === 'claude' || v === 'all') args.ide = v
+      if (v === 'cursor' || v === 'claude' || v === 'codex' || v === 'all') args.ide = v
     } else if (a === '--ide') {
       const v = rest[++i] as InstallTargetIde | undefined
-      if (v === 'cursor' || v === 'claude' || v === 'all') args.ide = v
+      if (v === 'cursor' || v === 'claude' || v === 'codex' || v === 'all') args.ide = v
     } else if (a === '--debug') {
       args.debug = true
     } else if (a === '--hook-entry') {
@@ -128,10 +128,10 @@ function parseInstallMcpArgs(rest: string[]): InstallMcpAllArgs {
     const a = rest[i]!
     if (a.startsWith('--ide=')) {
       const v = a.slice('--ide='.length) as InstallMcpAllArgs['ide']
-      if (v === 'cursor' || v === 'claude' || v === 'all') args.ide = v
+      if (v === 'cursor' || v === 'claude' || v === 'codex' || v === 'all') args.ide = v
     } else if (a === '--ide') {
       const v = rest[++i] as InstallMcpAllArgs['ide'] | undefined
-      if (v === 'cursor' || v === 'claude' || v === 'all') args.ide = v
+      if (v === 'cursor' || v === 'claude' || v === 'codex' || v === 'all') args.ide = v
     }
   }
   return args
