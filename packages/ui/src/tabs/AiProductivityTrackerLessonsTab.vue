@@ -91,6 +91,7 @@ const TRUST_CHIP: Record<string, string> = {
 const SOURCE_LABEL: Record<string, string> = {
   cursor: 'Cursor',
   'claude-code': 'Claude Code',
+  codex: 'Codex',
   manual: '手动'
 }
 

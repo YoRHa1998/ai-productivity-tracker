@@ -531,6 +531,21 @@ function iterationChipClass(kind: string) {
   return 'aip-chip--primary'
 }
 
+/** iteration 来源标签文案;'unknown' 不展示(模板已用 v-if 过滤) */
+function sourceLabel(source: string) {
+  if (source === 'cursor') return 'Cursor'
+  if (source === 'claude-code') return 'Claude Code'
+  if (source === 'codex') return 'Codex'
+  return source
+}
+
+/** iteration 来源 chip 配色 class */
+function sourceChipClass(source: string) {
+  if (source === 'cursor') return 'aip-chip--source-cursor'
+  if (source === 'codex') return 'aip-chip--source-codex'
+  return 'aip-chip--source-claude'
+}
+
 /**
  * 14 天 metric 趋势:基于 requirements 数组按 `latestIterationAt` 分桶。
  *
@@ -1302,12 +1317,8 @@ onMounted(() => {
                       <span
                         v-if="iter.source && iter.source !== 'unknown'"
                         class="aip-chip"
-                        :class="
-                          iter.source === 'cursor'
-                            ? 'aip-chip--source-cursor'
-                            : 'aip-chip--source-claude'
-                        "
-                        >{{ iter.source === 'cursor' ? 'Cursor' : 'Claude Code' }}</span
+                        :class="sourceChipClass(iter.source)"
+                        >{{ sourceLabel(iter.source) }}</span
                       >
                       <span
                         v-if="iter.modelName"

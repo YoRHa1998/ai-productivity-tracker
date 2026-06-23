@@ -66,9 +66,10 @@ export type ChangedFile = {
  * v2.5.0 iteration 来源 AI 工具标识。
  * - cursor: Hook 路径 body.source='cursor-hook',或 skill 模板硬编码
  * - claude-code: Watcher 监听 ~/.claude/projects,或 Hook 路径 body.source='claude-hook'
+ * - codex: CodexWatcher 监听 ~/.codex/sessions,或 attach_summary 传入 source='codex'
  * - unknown: 老数据缺字段或来源无法识别;前端不渲染 chip
  */
-export type IterationSource = 'cursor' | 'claude-code' | 'unknown'
+export type IterationSource = 'cursor' | 'claude-code' | 'codex' | 'unknown'
 
 export type IterationDetail = {
   seq: number
@@ -674,7 +675,7 @@ export type LessonType = 'pitfall' | 'rule' | 'best-practice' | 'split-suggestio
 
 export type LessonTrust = 'high' | 'medium' | 'low'
 
-export type LessonExtractedBy = 'cursor' | 'claude-code' | 'manual'
+export type LessonExtractedBy = 'cursor' | 'claude-code' | 'codex' | 'manual'
 
 /**
  * v2.17.0 经验作用域:
@@ -739,7 +740,7 @@ export function deleteLesson(id: string) {
 
 // ===== v1.0.0-rc.23 单需求复盘报告(retrospective) 看板 API =====
 
-export type RetrospectiveSource = 'cursor' | 'claude-code' | 'manual'
+export type RetrospectiveSource = 'cursor' | 'claude-code' | 'codex' | 'manual'
 
 export type RetrospectivePhase = {
   /** 阶段标题(≤80 字),例如「设计与拆分」「调试与修复」 */

@@ -364,6 +364,13 @@
   font-weight: 600;
 }
 
+.aip-chip--source-codex {
+  background: linear-gradient(135deg, #34d399, #0f8a6a);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+
 /* ===== Metric ===== */
 .aip-metric {
   display: flex;
