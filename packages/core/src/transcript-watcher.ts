@@ -26,6 +26,7 @@ import { appendTokenUsage } from './bindings.js'
 import { buildIterationExtras } from './iteration-extras.js'
 import { appendIteration } from './store/iteration-store.js'
 import { loadRequirement } from './store/requirement-store.js'
+import { isAiUsageEnabled, recordUsage } from './store/ai-usage-store.js'
 
 const DEFAULT_CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects')
 const DEFAULT_STATE_PATH = join(
@@ -130,6 +131,14 @@ interface PendingTurn {
   lastSeenAt: string
   /** v2.6.0 算法:仅累加 input + output + cache_creation,排除 cache_read */
   tokenSum: number
+  /**
+   * AI 整体用量旁路:本轮 token 细分累加(input/output/cacheRead/cacheCreation 原始分量)。
+   * 与 tokenSum 解耦,仅供 flushTurn 归一化为 AiUsageEvent;`input+output+cacheCreation === tokenSum`。
+   */
+  usageInput: number
+  usageOutput: number
+  usageCacheRead: number
+  usageCacheCreation: number
   modelName: string
   messageUuids: string[]
 }
@@ -387,8 +396,10 @@ export class TranscriptWatcher {
     const branch = msg.gitBranch ?? getCurrentBranch(gitRoot)
     if (!branch) return
 
-    const issueKey = extractIssueKey(branch)
-    if (!issueKey) return
+    // AI 整体用量旁路(D2):issueKey 闸门**之前**不再 early-return —— 非 Jira 分支(main 等)
+    // 也要建 turnBuffer 并在 flushTurn 记录整体用量。issueKey 为空串时,flushTurn 只记用量、
+    // 不写需求 iteration / binding(需求维度行为完全不变)。
+    const issueKey = extractIssueKey(branch) ?? ''
 
     // requirement 是否 init 留到 flushTurn 里判断 — 即使没 init,也要让 binding/pending
     // 维持旧行为(累加到 pending,等待 init 时 mergePendingTokens 回填)。
@@ -427,6 +438,10 @@ export class TranscriptWatcher {
         lastMessageTs: msg.timestamp,
         lastSeenAt: msg.timestamp,
         tokenSum: existing.tokenSum + delta,
+        usageInput: existing.usageInput + msg.tokens.input,
+        usageOutput: existing.usageOutput + msg.tokens.output,
+        usageCacheRead: existing.usageCacheRead + msg.tokens.cacheRead,
+        usageCacheCreation: existing.usageCacheCreation + msg.tokens.cacheCreation,
         modelName: msg.model || existing.modelName,
         messageUuids: [...existing.messageUuids, msg.uuid]
       }
@@ -446,6 +461,10 @@ export class TranscriptWatcher {
         lastMessageTs: msg.timestamp,
         lastSeenAt: msg.timestamp,
         tokenSum: delta,
+        usageInput: msg.tokens.input,
+        usageOutput: msg.tokens.output,
+        usageCacheRead: msg.tokens.cacheRead,
+        usageCacheCreation: msg.tokens.cacheCreation,
         modelName: msg.model,
         messageUuids: [msg.uuid]
       }
@@ -566,6 +585,31 @@ export class TranscriptWatcher {
     if (trigger.kind === 'assistant_terminal') {
       this.lastFlushedFingerprint.set(turnKey, fingerprintTokens(trigger.msg.tokens))
     }
+
+    // AI 整体用量旁路(D2):在 issueKey 闸门之前记录,覆盖非 Jira 分支(main 等)。
+    // recordUsage 内部读进程内 enabled 缓存,关闭时零盘 I/O 短路;容错静默,不影响需求链路。
+    if (buf.tokenSum > 0 && isAiUsageEnabled()) {
+      try {
+        recordUsage({
+          source: 'claude-code',
+          sessionId: buf.sessionId,
+          model: buf.modelName,
+          tokens: {
+            input: buf.usageInput,
+            output: buf.usageOutput,
+            cacheRead: buf.usageCacheRead,
+            cacheCreation: buf.usageCacheCreation,
+            total: buf.tokenSum
+          },
+          at: buf.lastMessageTs
+        })
+      } catch {
+        /* 整体用量采集失败绝不影响需求维度采集 */
+      }
+    }
+
+    // issueKey 为空(非 Jira 分支)→ 仅记整体用量,不写需求 binding / iteration。
+    if (!buf.issueKey) return
 
     const result = appendTokenUsage(
       buf.gitRoot,

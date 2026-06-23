@@ -22,13 +22,15 @@ import {
   parseCodexSessionMeta,
   parseCodexTokenCount,
   parseCodexTurnBoundary,
-  parseCodexTurnContext
+  parseCodexTurnContext,
+  type CodexTokenUsage
 } from './codex-message.js'
 import { extractIssueKey, findGitRoot, getCurrentBranch } from './git.js'
 import { appendTokenUsage } from './bindings.js'
 import { buildIterationExtras } from './iteration-extras.js'
 import { appendIteration } from './store/iteration-store.js'
 import { loadRequirement } from './store/requirement-store.js'
+import { isAiUsageEnabled, recordUsage } from './store/ai-usage-store.js'
 
 const DEFAULT_CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
 /**
@@ -59,6 +61,11 @@ interface CodexFileState {
 interface CodexSessionState {
   /** 该 session 已 flush 的累计有效 token,跨重启保持,避免把整段累计算成单轮增量 */
   flushedTotal: number
+  /**
+   * AI 整体用量旁路:该 session 已记入整体用量的累计 token 细分基线(跨重启保持)。
+   * flush 时按 `current - flushedUsage` 得本轮 token 细分增量;旧 state 缺失为 undefined(视为 0)。
+   */
+  flushedUsage?: CodexTokenUsage
 }
 
 interface CodexWatcherState {
@@ -86,6 +93,11 @@ interface CodexPendingTurn {
   model: string
   /** 截至目前观察到的累计有效 token(取最新 token_count;初值为 flushedTotal 基线) */
   currentTotalEffective: number
+  /**
+   * AI 整体用量旁路:截至目前观察到的累计 token 细分(取最新 token_count;初值为 flushedUsage 基线)。
+   * flush 时与 session 基线作差得本轮 token 细分。
+   */
+  currentTotalUsage: CodexTokenUsage
 }
 
 export interface CodexWatcherDeps {
@@ -99,6 +111,35 @@ export interface CodexWatcherStatus {
   codexSessionsDir: string
   trackedFiles: number
   startedAt: string | null
+}
+
+const ZERO_CODEX_USAGE: CodexTokenUsage = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  outputTokens: 0,
+  totalTokens: 0
+}
+
+/** 归一化(可能缺失的)累计 token 细分基线,缺字段补 0。 */
+function normalizeCodexUsage(u: CodexTokenUsage | undefined): CodexTokenUsage {
+  if (!u || typeof u !== 'object') return { ...ZERO_CODEX_USAGE }
+  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0)
+  return {
+    inputTokens: n(u.inputTokens),
+    cachedInputTokens: n(u.cachedInputTokens),
+    outputTokens: n(u.outputTokens),
+    totalTokens: n(u.totalTokens)
+  }
+}
+
+/** 逐字段取较大者(token_count 单调递增,基线推进时防回退)。 */
+function maxCodexUsage(a: CodexTokenUsage, b: CodexTokenUsage): CodexTokenUsage {
+  return {
+    inputTokens: Math.max(a.inputTokens, b.inputTokens),
+    cachedInputTokens: Math.max(a.cachedInputTokens, b.cachedInputTokens),
+    outputTokens: Math.max(a.outputTokens, b.outputTokens),
+    totalTokens: Math.max(a.totalTokens, b.totalTokens)
+  }
 }
 
 function loadState(statePath: string): CodexWatcherState {
@@ -370,10 +411,12 @@ export class CodexWatcher {
     if (tokenCount) {
       const buf = this.ensurePendingTurn(fileSessionId, tokenCount.timestamp)
       if (buf) {
-        buf.currentTotalEffective = Math.max(
-          buf.currentTotalEffective,
-          effectiveCodexTokens(tokenCount.total)
-        )
+        const nextEffective = effectiveCodexTokens(tokenCount.total)
+        // token_count 单调递增,取较大者;同步更新整体用量细分基线(currentTotalUsage)
+        if (nextEffective >= buf.currentTotalEffective) {
+          buf.currentTotalEffective = nextEffective
+          buf.currentTotalUsage = tokenCount.total
+        }
         buf.lastEventTs = tokenCount.timestamp
       }
       return
@@ -405,8 +448,11 @@ export class CodexWatcher {
   /**
    * 确保指定 session 有一个 pending turn。
    *
-   * 已有 → 复用并刷新 lastEventTs;否则从 sessionMeta 解析 git 仓库 + issueKey 新建。
-   * 无 git 仓库 / 分支不含 Jira issue key 的 session 返回 null(不追踪,与 Claude 一致)。
+   * 已有 → 复用并刷新 lastEventTs;否则从 sessionMeta 解析 git 仓库新建。
+   * 无 git 仓库 / 分支(detached HEAD)的 session 返回 null(不追踪)。
+   *
+   * AI 整体用量旁路(D2):issueKey 闸门**之前**不再 early-return —— 非 Jira 分支(main 等)
+   * 也建 buffer 并在 flush 记录整体用量;issueKey 为空串时 flush 只记用量、不写需求 iteration。
    */
   private ensurePendingTurn(sessionId: string, timestamp: string): CodexPendingTurn | null {
     const existing = this.turnBuffer.get(sessionId)
@@ -421,10 +467,11 @@ export class CodexWatcher {
     if (!gitRoot) return null
     const branch = info.gitBranch ?? getCurrentBranch(gitRoot)
     if (!branch) return null
-    const issueKey = extractIssueKey(branch)
-    if (!issueKey) return null
+    const issueKey = extractIssueKey(branch) ?? ''
 
-    const baseline = this.state.sessions[sessionId]?.flushedTotal ?? 0
+    const sessionState = this.state.sessions[sessionId]
+    const baseline = sessionState?.flushedTotal ?? 0
+    const baselineUsage = normalizeCodexUsage(sessionState?.flushedUsage)
     const buf: CodexPendingTurn = {
       sessionId,
       issueKey,
@@ -433,7 +480,8 @@ export class CodexWatcher {
       userPromptTs: timestamp,
       lastEventTs: timestamp,
       model: 'unknown',
-      currentTotalEffective: baseline
+      currentTotalEffective: baseline,
+      currentTotalUsage: baselineUsage
     }
     this.turnBuffer.set(sessionId, buf)
     return buf
@@ -456,17 +504,52 @@ export class CodexWatcher {
   private flushTurn(sessionId: string, buf: CodexPendingTurn, reportedAt: string): void {
     this.turnBuffer.delete(sessionId)
 
-    const baseline = this.state.sessions[sessionId]?.flushedTotal ?? 0
+    const prevState = this.state.sessions[sessionId]
+    const baseline = prevState?.flushedTotal ?? 0
+    const baselineUsage = normalizeCodexUsage(prevState?.flushedUsage)
     const delta = Math.max(0, buf.currentTotalEffective - baseline)
 
-    // 推进 flushedTotal 基线(即使 delta=0 也推进,保证幂等),持久化跨重启
+    // 推进 flushedTotal / flushedUsage 基线(即使 delta=0 也推进,保证幂等),持久化跨重启
     this.state.sessions[sessionId] = {
-      flushedTotal: Math.max(baseline, buf.currentTotalEffective)
+      flushedTotal: Math.max(baseline, buf.currentTotalEffective),
+      flushedUsage: maxCodexUsage(baselineUsage, buf.currentTotalUsage)
     }
     saveState(this.statePath, this.state)
 
-    // 本轮无新增 token(纯无效轮 / 重复 task_complete)→ 不落 iteration
+    // 本轮无新增 token(纯无效轮 / 重复 task_complete)→ 不落 iteration / 不记用量
     if (delta <= 0) return
+
+    // AI 整体用量旁路(D2):在 issueKey 闸门之前记录,覆盖非 Jira 分支。
+    // 容错静默,关闭时零盘 I/O 短路;绝不影响需求维度采集。
+    if (isAiUsageEnabled()) {
+      try {
+        const dInput = Math.max(0, buf.currentTotalUsage.inputTokens - baselineUsage.inputTokens)
+        const dCached = Math.max(
+          0,
+          buf.currentTotalUsage.cachedInputTokens - baselineUsage.cachedInputTokens
+        )
+        const dOutput = Math.max(0, buf.currentTotalUsage.outputTokens - baselineUsage.outputTokens)
+        recordUsage({
+          source: 'codex',
+          sessionId: buf.sessionId,
+          model: buf.model && buf.model !== 'unknown' ? buf.model : undefined,
+          tokens: {
+            // 与 claude 同口径:input 取「非缓存有效输入」,cacheRead 单列,codex 无 cacheCreation
+            input: Math.max(0, dInput - dCached),
+            output: dOutput,
+            cacheRead: dCached,
+            cacheCreation: 0,
+            total: delta
+          },
+          at: reportedAt
+        })
+      } catch {
+        /* 整体用量采集失败绝不影响需求维度采集 */
+      }
+    }
+
+    // issueKey 为空(非 Jira 分支)→ 仅记整体用量,不写需求 binding / iteration。
+    if (!buf.issueKey) return
 
     const result = appendTokenUsage(
       buf.gitRoot,
