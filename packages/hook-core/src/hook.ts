@@ -352,8 +352,28 @@ export async function runHook() {
   // 无论后续走哪条路径,先写 sentinel 证明 hook 到达过
   writeSentinelIfDebug(rawStdin, parsedInput, projectRoot, tokens)
 
-  // 没找到项目根 → 该 IDE 当前会话不在被追踪仓库,静默退出(不调 agent,避免无效 RPC)
-  if (!projectRoot) return
+  // 没找到项目根 → 该 IDE 当前会话不在被追踪仓库。
+  //
+  // AI 整体用量旁路(D3):静默退出**之前**,若是带 token 的 iteration 事件(afterAgentResponse /
+  // Stop),仍向 daemon 上报一条「最小化用量信号」(usageOnly:true,只带 source/tokens/model/
+  // sessionId,**不带正文 / 需求上下文**),供整体用量采集覆盖非仓库会话。
+  // 上报容错静默:daemon 不可达 / 失败一律吞掉,绝不影响 hook 退出码与既有需求链路。
+  if (!projectRoot) {
+    if (eventRoute === 'iteration' && tokens > 0) {
+      try {
+        await postHookToAgent({
+          tokens,
+          source,
+          dedupeKey,
+          rawHookPayload: buildRawHookPayload(parsedInput),
+          usageOnly: true
+        })
+      } catch {
+        /* 整体用量上报失败不影响 hook 主流程 */
+      }
+    }
+    return
+  }
 
   const aipDir = findAipDir(projectRoot)
   if (!aipDir) return

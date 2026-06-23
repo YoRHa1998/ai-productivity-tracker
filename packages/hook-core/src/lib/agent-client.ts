@@ -66,6 +66,12 @@ export interface AgentHookPayload {
   source: string
   dedupeKey?: string
   rawHookPayload?: Record<string, unknown>
+  /**
+   * AI 整体用量旁路(D3):置 true 时该 hook 调用仅用于「整体用量」采集 ——
+   * daemon 在 issueKey 闸门之前 recordUsage 后立即返回,**不解析 git / 不写需求 binding/iteration**。
+   * 用于覆盖「无 project root(非仓库会话)」的 Cursor 用量,避免误用 daemon cwd 串入无关需求。
+   */
+  usageOnly?: boolean
 }
 
 /**

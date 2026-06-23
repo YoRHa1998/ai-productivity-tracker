@@ -85,6 +85,12 @@ import {
   listHarnessSuggestions,
   removeRetrospective,
   writeRetrospective,
+  recordUsage,
+  isAiUsageEnabled,
+  setAiUsageEnabled,
+  getAiUsageView,
+  type AiUsageEvent,
+  type AiUsageView,
   type StoredRequirement,
   type StoredSubtask,
   type UpdateRequirementPatch,
@@ -566,6 +572,52 @@ export interface HookRequestBody {
   source: string
   dedupeKey?: string
   rawHookPayload?: Record<string, unknown>
+  /**
+   * AI 整体用量旁路(D3):hook-core 在「无 project root(非仓库会话)」场景下置 true,
+   * daemon recordUsage 后立即返回,不解析 git / 不写需求。详见 hook-core agent-client。
+   */
+  usageOnly?: boolean
+}
+
+function rawNum(payload: Record<string, unknown> | undefined, key: string): number {
+  const v = payload?.[key]
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0
+}
+
+/**
+ * 由 Cursor hook payload 归一化出「AI 整体用量」事件(D2)。
+ *
+ * 仅 cursor 来源返回事件(claude/codex 整体用量由各自 watcher 覆盖,避免双算)。
+ * token 细分与 claude/codex 同口径:`total` 取有效用量(= body.tokens),
+ * `input` 取剔除 cache 后的纯新增输入,cacheRead/cacheCreation 透传 Cursor 的
+ * cache_read/cache_write。缺维度安全降级。仅结构化元数据,不含正文。
+ */
+function buildCursorUsageEvent(body: HookRequestBody, at: string): AiUsageEvent | null {
+  if (mapHookSource(body.source) !== 'cursor') return null
+  const total = Number(body.tokens)
+  if (!Number.isFinite(total) || total <= 0) return null
+
+  const raw = body.rawHookPayload
+  const inputTokens = rawNum(raw, 'input_tokens')
+  const output = rawNum(raw, 'output_tokens')
+  const cacheRead = rawNum(raw, 'cache_read_tokens')
+  const cacheCreation = rawNum(raw, 'cache_write_tokens')
+  // 纯新增输入 = 总输入 - cache_read - cache_write(input_tokens 含 cache 细分,见 hook parseHookTokens)
+  const input = Math.max(0, inputTokens - cacheRead - cacheCreation)
+
+  const model = typeof raw?.model === 'string' && raw.model ? raw.model : undefined
+  const sessionId =
+    (typeof raw?.conversation_id === 'string' && raw.conversation_id) ||
+    (typeof body.dedupeKey === 'string' && body.dedupeKey) ||
+    ''
+
+  return {
+    source: 'cursor',
+    sessionId,
+    model,
+    tokens: { input, output, cacheRead, cacheCreation, total },
+    at
+  }
 }
 
 /**
@@ -644,6 +696,47 @@ export async function handleAiProductivityHook(
       bound: false,
       accumulated: 0,
       reason: 'tokens=0,无累加'
+    } satisfies HookResponse)
+    return
+  }
+
+  // AI 整体用量旁路(D2/4.2):在 issueKey 解析之前记录 Cursor 整体用量,独立于 Jira 绑定。
+  // 放在 dedupe 闸门之后(去重事件不重复累加),enabled===false 时短路;容错静默。
+  const usageAt = (deps.nowFn ?? (() => new Date()))().toISOString()
+  let cursorUsageRecorded = false
+  if (isAiUsageEnabled()) {
+    try {
+      const ev = buildCursorUsageEvent(body, usageAt)
+      if (ev) {
+        recordUsage(ev)
+        cursorUsageRecorded = true
+      }
+    } catch {
+      /* 整体用量采集失败绝不影响既有需求链路 */
+    }
+  }
+
+  // 整体用量已记 → 立即持久化 dedupeKey(appendDedupeKey 幂等),避免「非 Jira 分支等
+  // issueKey 闸门提前 return、dedupeKey 未落盘」导致同一事件重复累加整体用量。
+  if (cursorUsageRecorded && dedupeKey) {
+    try {
+      saveDedupeState(
+        dedupePath,
+        appendDedupeKey(dedupeState ?? loadDedupeState(dedupePath), dedupeKey, usageAt)
+      )
+    } catch (err) {
+      console.warn(`[ai-productivity hook] 持久化用量 dedupe 失败: ${(err as Error).message}`)
+    }
+  }
+
+  // 仅用量信号(无仓库会话):记完即返回,不解析 git / 不写需求 binding/iteration。
+  if (body.usageOnly) {
+    ok(res, {
+      ok: true,
+      deduped: false,
+      bound: false,
+      accumulated: 0,
+      reason: '仅整体用量信号(usageOnly)'
     } satisfies HookResponse)
     return
   }
@@ -2217,6 +2310,51 @@ export function handleAiProductivityDeleteRetrospective(
 export function handleAiProductivityListHarnessSuggestions(res: ServerResponse): void {
   const suggestions = listHarnessSuggestions()
   ok(res, { suggestions })
+}
+
+// ────────────────────────────────────────────────────────────────────
+// AI 整体用量(panel-origin 放行)
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * 看板侧 GET /ai-productivity/ai-usage?days=N (panel-origin 放行)
+ *
+ * 返回 `{ enabled, today, series }`,携带全部已采集维度(token 细分 / turns / sessions /
+ * models / providers),前端按需取子集。days 默认 14,clamp 到 [1,365]。
+ */
+export function handleAiProductivityGetAiUsage(
+  res: ServerResponse,
+  query: { days?: string | null }
+): void {
+  let days = 14
+  const raw = query.days
+  if (typeof raw === 'string' && raw.trim()) {
+    const parsed = Number(raw)
+    if (Number.isFinite(parsed) && parsed > 0) days = Math.floor(parsed)
+  }
+  const view: AiUsageView = getAiUsageView(days)
+  ok(res, view)
+}
+
+export interface PatchAiUsageConfigBody {
+  enabled?: unknown
+}
+
+/**
+ * 看板侧 PATCH /ai-productivity/ai-usage/config (panel-origin 放行)
+ *
+ * body `{ enabled: boolean }`:切换采集开关并刷新进程内缓存,返回最新 config。
+ */
+export function handleAiProductivityPatchAiUsageConfig(
+  res: ServerResponse,
+  body: PatchAiUsageConfigBody
+): void {
+  if (!body || typeof body.enabled !== 'boolean') {
+    fail(res, 400, 'enabled 必须为 boolean')
+    return
+  }
+  const config = setAiUsageEnabled(body.enabled)
+  ok(res, config)
 }
 
 // 缺省导出,提供给 server.ts 注册

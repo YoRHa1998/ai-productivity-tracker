@@ -46,8 +46,11 @@ import {
   handleAiProductivitySaveRetrospective,
   handleAiProductivityDeleteRetrospective,
   handleAiProductivityListHarnessSuggestions,
+  handleAiProductivityGetAiUsage,
+  handleAiProductivityPatchAiUsageConfig,
   type InitRequestBody,
   type HookRequestBody,
+  type PatchAiUsageConfigBody,
   type TurnStartRequestBody,
   type TurnThoughtRequestBody,
   type InstallCursorHookRequestBody,
@@ -305,6 +308,18 @@ async function routeAiProductivity(
 
   if (method === 'GET' && pathname === '/ai-productivity/summary') {
     handleAiProductivitySummary(res)
+    return true
+  }
+
+  // ── AI 整体用量(panel-origin 放行,见 isAiProductivityPanelPath 默认放行)──
+  if (method === 'GET' && pathname === '/ai-productivity/ai-usage') {
+    handleAiProductivityGetAiUsage(res, { days: url.searchParams.get('days') })
+    return true
+  }
+
+  if (method === 'PATCH' && pathname === '/ai-productivity/ai-usage/config') {
+    const body = parseJson(await readBody(req)) as Record<string, unknown> | null
+    handleAiProductivityPatchAiUsageConfig(res, (body ?? {}) as PatchAiUsageConfigBody)
     return true
   }
 

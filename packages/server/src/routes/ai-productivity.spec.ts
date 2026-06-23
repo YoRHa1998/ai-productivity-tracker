@@ -40,6 +40,8 @@ import {
   handleAiProductivitySaveRetrospective,
   handleAiProductivityListHarnessSuggestions,
   handleAiProductivityDeleteRetrospective,
+  handleAiProductivityGetAiUsage,
+  handleAiProductivityPatchAiUsageConfig,
   __resetCursorTurnStartsForTest,
   __snapshotCursorTurnStarts
 } from './ai-productivity.js'
@@ -60,7 +62,10 @@ import {
   readRecentAttachSentinel,
   recentAttachSentinelPath,
   readLessonHandledSentinel,
-  lessonHandledSentinelPath
+  lessonHandledSentinelPath,
+  setAiUsageEnabled,
+  readAiUsage,
+  __resetAiUsageCacheForTest
 } from '@ai-productivity-tracker/core/store'
 import type { ServerConfig as ServiceConfig } from '../config.js'
 
@@ -3252,5 +3257,183 @@ describe('retrospective handlers (v1.0.0-rc.23)', () => {
     handleAiProductivityListHarnessSuggestions(mock.res)
     expect(mock.statusCode).toBe(200)
     expect(JSON.parse(mock.body).data.suggestions).toEqual([])
+  })
+})
+
+describe('AI 整体用量端点 + Cursor 采集', () => {
+  let repo: string
+  let dedupePath: string
+  let aipCleanup: () => void
+
+  beforeEach(() => {
+    // 非 Jira 分支:停在 main(不 checkout 新分支),分支名不含 Jira issue key
+    repo = mkdtempSync(join(tmpdir(), 'aip-usage-repo-'))
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo })
+    execFileSync(
+      'git',
+      ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'],
+      { cwd: repo }
+    )
+    dedupePath = join(mkdtempSync(join(tmpdir(), 'aip-usage-dedupe-')), 'hook-dedupe.json')
+    const setup = setupAipRoot()
+    aipCleanup = setup.restore
+    __resetAiUsageCacheForTest()
+  })
+
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true })
+    aipCleanup()
+    __resetAiUsageCacheForTest()
+  })
+
+  it('GET ai-usage 返回 enabled + today + series 结构,默认 days=14', () => {
+    const mock = makeMockRes()
+    handleAiProductivityGetAiUsage(mock.res, { days: null })
+    expect(mock.statusCode).toBe(200)
+    const data = JSON.parse(mock.body).data
+    expect(data.enabled).toBe(false)
+    expect(data.today['cursor']).toBeDefined()
+    expect(data.today['claude-code']).toBeDefined()
+    expect(data.today['codex']).toBeDefined()
+    expect(data.series).toHaveLength(14)
+  })
+
+  it('GET ai-usage days 参数生效', () => {
+    const mock = makeMockRes()
+    handleAiProductivityGetAiUsage(mock.res, { days: '7' })
+    expect(JSON.parse(mock.body).data.series).toHaveLength(7)
+  })
+
+  it('PATCH config 切换开关即时生效,GET 反映最新状态', () => {
+    const patch = makeMockRes()
+    handleAiProductivityPatchAiUsageConfig(patch.res, { enabled: true })
+    expect(patch.statusCode).toBe(200)
+    expect(JSON.parse(patch.body).data.enabled).toBe(true)
+
+    const get = makeMockRes()
+    handleAiProductivityGetAiUsage(get.res, { days: null })
+    expect(JSON.parse(get.body).data.enabled).toBe(true)
+  })
+
+  it('PATCH config 非 boolean 报 400', () => {
+    const mock = makeMockRes()
+    handleAiProductivityPatchAiUsageConfig(mock.res, { enabled: 'yes' as unknown as boolean })
+    expect(mock.statusCode).toBe(400)
+  })
+
+  it('关闭时仍可查历史用量', async () => {
+    setAiUsageEnabled(true)
+    __resetAiUsageCacheForTest()
+    await handleAiProductivityHook(
+      makeMockRes().res,
+      baseConfig,
+      {
+        projectRoot: repo,
+        branch: 'main',
+        tokens: 200,
+        source: 'cursor-hook',
+        dedupeKey: 'c1#g1',
+        rawHookPayload: {
+          model: 'gpt-5',
+          conversation_id: 'c1',
+          input_tokens: 250,
+          output_tokens: 50,
+          cache_read_tokens: 100
+        }
+      },
+      { dedupePath, nowFn: () => new Date('2026-06-23T10:00:00.000Z') }
+    )
+    setAiUsageEnabled(false)
+
+    const mock = makeMockRes()
+    handleAiProductivityGetAiUsage(mock.res, { days: null })
+    const data = JSON.parse(mock.body).data
+    expect(data.enabled).toBe(false)
+    expect(data.today['cursor'].totalTokens).toBe(200)
+  })
+
+  it('Cursor 在非 Jira 分支(main)计入 cursor 整体用量', async () => {
+    setAiUsageEnabled(true)
+    __resetAiUsageCacheForTest()
+    await handleAiProductivityHook(
+      makeMockRes().res,
+      baseConfig,
+      {
+        projectRoot: repo,
+        branch: 'main',
+        tokens: 200,
+        source: 'cursor-hook',
+        dedupeKey: 'cv#g1',
+        rawHookPayload: {
+          model: 'gpt-5',
+          conversation_id: 'cv',
+          input_tokens: 250,
+          output_tokens: 50,
+          cache_read_tokens: 100
+        }
+      },
+      { dedupePath, nowFn: () => new Date('2026-06-23T10:00:00.000Z') }
+    )
+    const usage = readAiUsage()
+    const day = Object.keys(usage.daily['cursor'])[0]
+    const bucket = usage.daily['cursor'][day]
+    expect(bucket.total).toBe(200) // (250-100) + 50
+    expect(bucket.cacheRead).toBe(100)
+    expect(bucket.turns).toBe(1)
+    expect(bucket.sessionIds).toEqual(['cv'])
+  })
+
+  it('Cursor 非 git 目录会话(usageOnly)计入,且不写需求', async () => {
+    setAiUsageEnabled(true)
+    __resetAiUsageCacheForTest()
+    const mock = makeMockRes()
+    await handleAiProductivityHook(
+      mock.res,
+      baseConfig,
+      {
+        tokens: 120,
+        source: 'cursor-hook',
+        usageOnly: true,
+        dedupeKey: 'cvonly#g1',
+        rawHookPayload: {
+          model: 'gpt-5',
+          conversation_id: 'cvonly',
+          input_tokens: 100,
+          output_tokens: 20
+        }
+      },
+      { dedupePath, nowFn: () => new Date('2026-06-23T10:00:00.000Z') }
+    )
+    expect(mock.statusCode).toBe(200)
+    expect(JSON.parse(mock.body).data.bound).toBe(false)
+    const usage = readAiUsage()
+    const day = Object.keys(usage.daily['cursor'])[0]
+    expect(usage.daily['cursor'][day].total).toBe(120)
+  })
+
+  it('dedupeKey 去重:重复事件不重复累加', async () => {
+    setAiUsageEnabled(true)
+    __resetAiUsageCacheForTest()
+    const payload = {
+      projectRoot: repo,
+      branch: 'main',
+      tokens: 200,
+      source: 'cursor-hook',
+      dedupeKey: 'dup#g1',
+      rawHookPayload: {
+        model: 'gpt-5',
+        conversation_id: 'dup',
+        input_tokens: 250,
+        output_tokens: 50,
+        cache_read_tokens: 100
+      }
+    }
+    const deps = { dedupePath, nowFn: () => new Date('2026-06-23T10:00:00.000Z') }
+    await handleAiProductivityHook(makeMockRes().res, baseConfig, { ...payload }, deps)
+    await handleAiProductivityHook(makeMockRes().res, baseConfig, { ...payload }, deps)
+    const usage = readAiUsage()
+    const day = Object.keys(usage.daily['cursor'])[0]
+    expect(usage.daily['cursor'][day].total).toBe(200)
+    expect(usage.daily['cursor'][day].turns).toBe(1)
   })
 })
