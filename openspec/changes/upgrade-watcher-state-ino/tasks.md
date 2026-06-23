@@ -20,4 +20,4 @@
 - [x] 4.1 `pnpm --filter @ai-productivity-tracker/core test` 通过
 - [x] 4.2 `pnpm typecheck && pnpm lint && pnpm format:check` 全绿(本次改动文件全部通过;format:check 残留告警均为本变更外的未跟踪文档)
 - [x] 4.3 `pnpm --filter @ai-productivity-tracker/cli build` 产物可启动;本地 daemon 跑通既有 Claude/Codex 采集无回归(build 成功、`cli.mjs version`/`doctor` 全绿、mcp stdio 正常 boot 并连上 daemon)
-- [ ] 4.4 单独发一个 rc(`pnpm release prerelease --publish`),作为 `add-ai-usage-overview` 的前置依赖
+- [x] 4.4 单独发一个 rc(`pnpm release 1.3.0-rc.1 --publish`),作为 `add-ai-usage-overview` 的前置依赖(已发布到 npm,`latest` 指向 1.3.0-rc.1;本地 commit 1899f47 + tag v1.3.0-rc.1,未 push)
