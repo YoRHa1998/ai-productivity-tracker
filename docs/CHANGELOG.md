@@ -12,6 +12,22 @@
 
 ### Added
 
+**Codex CLI 完整集成(对话数据抓取 + 来源/模型标签 + 软数据通道)**
+
+新增对 OpenAI Codex CLI 的支持,从此跨 Cursor / Claude Code / Codex 三类客户端统一采集 AI 编码会话数据。
+
+- **硬数据抓取(CodexWatcher)**:新增 `packages/core/src/codex-message.ts`(逐行解析 `session_meta` / `turn_context` / `event_msg(token_count|task_started|user_message|task_complete)`)+ `packages/core/src/codex-watcher.ts`,监听 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`(日期三层嵌套,recursive watch + 30s 周期扫),按 `turn_id` 聚合、`task_complete` flush 出 `source: 'codex'` 的 iteration。token 口径用 `total_token_usage` 累计差(`input − cached_input + output`),与 Claude effectiveTokens 对齐且天然防重复计数;per-session 累计基线持久化到独立 `~/.ai-productivity-tracker/data/codex-state.json`,跨 daemon 重启不双算。daemon `startDaemon` 起停 CodexWatcher,受同一 `AIPT_DISABLE_TRANSCRIPT_WATCHER` 开关。
+- **source='codex' 全链路**:`IterationSource` / `pending-summary` VALID_SOURCES / server `attach_summary` 校验 / `mapHookSource('codex-hook')` / mcp `z.enum` / `LessonExtractedBy` / `RetrospectiveSource` / UI `api.ts` 三处 union 全部加 `codex`。`normalizeIterationSource` lazy 兼容,老数据不受影响。
+- **看板对话详情**:来源 chip 从「cursor vs 兜底 claude」二元改为三态映射(`cursor` / `claude-code` / `codex`),新增 `.aip-chip--source-codex` 配色;模型标签复用既有灰底 chip 直接显示 `gpt-5.5` 等 Codex 模型名。`LessonsTab` SOURCE_LABEL 加 `codex: 'Codex'`。
+- **软数据通道(aipt install 新增 codex target)**:
+  - MCP 注册:`~/.codex/config.toml`(TOML),新增 `codex-mcp-config.ts` 外科式文本 upsert,只替换 `[mcp_servers."ai-productivity-tracker"]` 一个表块、其余字节原样保留,写前备份 `.bak`;零 env(`aipt mcp` 自读 runtime.json)。
+  - Hook 注入:`~/.codex/hooks.json`(Claude 同构 schema)的 `UserPromptSubmit` reminder + `Stop` stop-check,marker 式覆盖、严格保留 codeisland / loongsuite 等其它工具条目。
+  - Skill 模板:`~/.codex/skills/{ai-productivity-track,lessons-extract,retrospective-report}/SKILL.md`(source=codex)。
+  - `aipt install --ide=codex`(及 `all`)与看板「一键注入」均覆盖 codex;stop-check `detectDialect()` 把 Codex Stop(无 cursor_version、带 cwd/session_id)归为 claude-code 方言输出 `{decision:'block'}`,`resolveTrackingContext` 用 payload `cwd` 兜底解析 jiraKey。
+- **测试**:新增 `codex-message.spec.ts` / `codex-watcher.spec.ts`(单轮 / 多轮累计 token / cached 排除 / 非 Jira 分支 / 非 git / 未 init / stale flush / 跨 processFile) + `codex-mcp-config.spec.ts`(TOML upsert 保留其它表)+ stop-check Codex 方言用例。全量 869 测试通过,lint / format / typecheck 全绿。
+
+> 用户侧一次性摩擦:Codex hooks 首次需 `/hooks` review & trust,MCP 需 trust。
+
 **v1.0.0-rc.26 需求级 wThink 时间权重配置(snapshot-on-init 语义)**
 
 老版本 `formula.json` 是**全局单值**:无论 5 条并行需求还是 1 条串行需求,boost 公式分母里 AI 工作时间 / 墙钟时间的权重比例只能取同一个 wThink。但实际开发情况各不相同 —— 有的需求长期单线程(墙钟 ≈ 真实成本),有的需求穿插在多任务里(墙钟严重膨胀,必须靠 AI 工作时间矫正)。一刀切的全局 wThink 让用户在「调高 = 多任务需求准 / 串行需求虚高」与「调低 = 串行需求准 / 多任务需求被低估」之间二选一。

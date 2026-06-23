@@ -23,6 +23,7 @@
     ├── jira.json                 # Jira 凭证
     ├── pending-summary.json      # attach_summary 等待消费的中间态
     ├── transcript-state.json     # Claude Code jsonl 监听 offset
+    ├── codex-state.json          # Codex jsonl 监听 offset + per-session 累计 token 基线
     ├── hook-dedupe.json          # hook dedupeKey LRU(防重复上报)
     ├── lessons/
     │   ├── INDEX.json            # 投影索引(供看板列表筛选)
@@ -137,7 +138,7 @@ interface StoredIteration {
   seq: number // 自增,从 1 开始(seq=1 通常是 init iteration)
   kind: 'init' | 'first_coding' | 'coding' | 'milestone'
   branch: string
-  source: 'cursor' | 'claude-code' | 'unknown'
+  source: 'cursor' | 'claude-code' | 'codex' | 'unknown' // codex: CodexWatcher 监听 ~/.codex/sessions
   cumulativeToken: number // 截至本 iteration 的累计
   tokenDelta?: number // 本 iteration 比上一条增加的 token
   thinkSeconds: number // 真实 turn 时长(v2.12.0 起从 user prompt 到 end_turn)
@@ -354,7 +355,7 @@ interface PendingSummaryFile {
     string,
     {
       summary: ConversationSummary
-      source?: 'cursor' | 'claude-code'
+      source?: 'cursor' | 'claude-code' | 'codex'
       writtenAt: string
     }
   >

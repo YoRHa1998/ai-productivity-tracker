@@ -193,6 +193,28 @@ marker `# ai-productivity-track-reminder` 用于识别。
 
 ---
 
+## 5.5 Codex CLI hooks(`~/.codex/hooks.json`)
+
+Codex CLI 的 hooks.json 与 Claude / Cursor 同构(event → matcher groups → `hooks[{type,command}]`)。
+Codex **没有 afterAgentResponse 等价 hook**:token / iteration 全部由 `CodexWatcher` 监听
+`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` 采集(详见 `docs/ARCHITECTURE.md`),hooks 仅承担软数据 nudge。
+
+`aipt install` 通过 daemon `/ai-productivity/install-track-skill` 端点(`installAiTrackSkillBundle`)
+一并注入两类 Codex hook,marker 式覆盖、严格保留其它工具(codeisland / loongsuite 等)条目:
+
+- `UserPromptSubmit`(marker `# ai-productivity-track-reminder`):每轮 reminder,shell 层探分支,
+  命中 Jira key 才输出提示文本,提醒 LLM 调用 `ai_productivity_attach_summary`(source=codex)。
+- `Stop`(marker `# ai-productivity-stop-check`):漏调 attach_summary 时 stop-check 兜底打回补一次。
+  Codex Stop payload 无 `cursor_version`、带 `cwd` / `session_id`,`detectDialect()` 归为 `claude-code`
+  方言,输出 `{decision:'block', reason}` 续跑(与 Claude 一致)。
+
+配套 skill 模板写到 `~/.codex/skills/{ai-productivity-track,lessons-extract,retrospective-report}/SKILL.md`。
+MCP 注册在 `~/.codex/config.toml`(TOML,外科式 upsert,详见 `install-mcp.ts` / `codex-mcp-config.ts`)。
+
+> 注意:Codex hooks 首次需 `/hooks` review & trust,MCP 需 trust,均为用户侧一次性摩擦点。
+
+---
+
 ## 6. agent HTTP 端点
 
 Hook → daemon 的 HTTP 请求统一走 `POST /ai-productivity/hook`,body:

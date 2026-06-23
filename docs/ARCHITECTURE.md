@@ -81,6 +81,9 @@ LLM (per turn)
 
 Claude Code transcript jsonl (background)
    └─ chokidar watch ~/.claude/projects/**/*.jsonl ─▶ transcript-watcher ─▶ appendIteration
+
+Codex CLI rollout jsonl (background)
+   └─ watch ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl ─▶ codex-watcher ─▶ appendIteration (source=codex)
 ```
 
 ---
@@ -127,6 +130,7 @@ Claude Code transcript jsonl (background)
 
 2. startDaemon(config)
    ├─ new TranscriptWatcher() → start()(扫 ~/.claude/projects)
+   ├─ new CodexWatcher() → start()(递归扫 ~/.codex/sessions,受同一 AIPT_DISABLE_TRANSCRIPT_WATCHER 开关)
    ├─ createServer(handleRequest)
    │  └─ listen(port, host)  ──▶ 失败回到 pickPort 重选
    └─ resolve DaemonHandle { port, host, server, stop }
@@ -217,6 +221,32 @@ chokidar.watch(...)
 
 - **msg.id 主去重**(`seenApiMessageIds` LRU 5000):同一 message.id 重复 jsonl 行直接丢
 - **fingerprintTokens 兜底**(`input|output|cacheCreation|cacheRead`):msg.id 缺失场景下用 usage 四元组兜底
+
+### 4.2 codex-watcher 内部时序(Codex CLI)
+
+独立类 `CodexWatcher`(`packages/core/src/codex-watcher.ts`),与 Claude watcher 隔离避免回归。
+监听 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`(**日期三层嵌套**,recursive watch + 30s 周期扫):
+
+```
+对每个 .jsonl 增量 read(复用 readJsonlIncremental,独立 codex-state.json offset)
+       │
+       ▼ 先读首行 session_meta → 缓存 sessionId→{cwd, gitBranch}(cwd/branch 仅首行出现)
+       │
+       ▼ 按所属文件 session 归属每行(token_count / turn_context 行内不带 sessionId)
+       PendingTurn buffer:
+       ├─ turn_context  → 记 model
+       ├─ user_message  → 记 userPromptTs(本轮真实起点)
+       ├─ token_count   → 取最新 total_token_usage 的累计有效值(input − cached_input + output)
+       └─ task_complete → flushTurn
+       │
+       ▼ 本轮增量 = 当前累计有效 − 该 session 上次 flush 的累计(codex-state.json 持久化基线,跨重启不双算)
+       │
+       ▼ flushTurn → appendTokenUsage(..., 'codex') + appendIteration({ source:'codex' })
+```
+
+- 轮边界:`event_msg/task_complete`(Codex 的 terminal 等价物);兜底 stale flush 阈值同 30min。
+- token 口径与 Claude effectiveTokens 对齐:`cached_input_tokens`(≈ cache_read)排除。
+- 非 Jira 分支 / 非 git 仓库 / 需求未 init 的 session 静默放行,不落 iteration(与 Claude 一致)。
 
 ---
 
