@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { appendFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import {
+  appendFileSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  statSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -315,5 +324,178 @@ describe('CodexWatcher.processFileForTest', () => {
     expect(iters.length).toBe(1)
     // 取最新累计 effective = 120 - 0 + 30 = 150
     expect(iters[0].cumulativeToken).toBe(150)
+  })
+
+  /**
+   * watcher-incremental-state:Codex 游标升级为 offset+size+ino,显式处理 inode 变化 /
+   * 截断 / 旧 state 兼容,并验证 per-session 累计基线(sessions)行为不变。
+   */
+  describe('offset+size+ino 游标:轮转/截断/兼容/未变 + sessions 基线不变', () => {
+    const statePath = (): string => join(stateDir, 'codex-state.json')
+    function readState(): {
+      files: Record<string, { offset: number; size?: number; ino?: number; mtimeMs: number }>
+      sessions: Record<string, { flushedTotal: number }>
+    } {
+      return JSON.parse(readFileSync(statePath(), 'utf-8'))
+    }
+
+    it('正常追加后:游标写回 offset/size/ino/mtimeMs', async () => {
+      setupBound()
+      const f = sessionFile()
+      writeFileSync(
+        f,
+        sessionMetaLine({ sessionId: 'sess-cur', cwd: repoRoot, gitBranch: BRANCH }) +
+          userMessageLine('2026-06-16T11:00:03.000Z') +
+          tokenCountLine({ input: 100, output: 20 }, '2026-06-16T11:00:30.000Z') +
+          taskCompleteLine('2026-06-16T11:00:33.000Z')
+      )
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+
+      const st = statSync(f)
+      const entry = readState().files[f]
+      expect(entry.offset).toBe(st.size)
+      expect(entry.size).toBe(st.size)
+      expect(entry.ino).toBe(st.ino)
+      expect(entry.mtimeMs).toBe(st.mtimeMs)
+    })
+
+    it('inode 变化(同名文件被替换)→ 从头重读;sessions 基线沿用', async () => {
+      setupBound()
+      const f = sessionFile()
+      writeFileSync(
+        f,
+        sessionMetaLine({ sessionId: 'sess-rot', cwd: repoRoot, gitBranch: BRANCH }) +
+          userMessageLine('2026-06-16T11:00:03.000Z') +
+          tokenCountLine({ input: 100, output: 20 }, '2026-06-16T11:00:30.000Z') +
+          taskCompleteLine('2026-06-16T11:00:33.000Z')
+      )
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+      expect(listIterations('ABC-1').length).toBe(1)
+      // effective = 100 - 0 + 20 = 120
+      expect(readState().sessions['sess-rot'].flushedTotal).toBe(120)
+      const firstIno = readState().files[f].ino
+
+      // 删除重建同名文件(新 inode),同 sessionId,累计 token 继续增长到 300
+      rmSync(f)
+      writeFileSync(
+        f,
+        sessionMetaLine({ sessionId: 'sess-rot', cwd: repoRoot, gitBranch: BRANCH }) +
+          userMessageLine('2026-06-16T11:05:03.000Z') +
+          tokenCountLine({ input: 280, output: 20 }, '2026-06-16T11:05:30.000Z') +
+          taskCompleteLine('2026-06-16T11:05:33.000Z')
+      )
+      expect(statSync(f).ino).not.toBe(firstIno)
+
+      await w.processFileForTest(f)
+      const iters = listIterations('ABC-1')
+      // 从头重读新文件,累计 effective=300,基线 120 → delta 180,cumulative=300
+      expect(iters.length).toBe(2)
+      expect(iters[1].cumulativeToken).toBe(300)
+      expect(readState().sessions['sess-rot'].flushedTotal).toBe(300)
+      expect(readState().files[f].ino).toBe(statSync(f).ino)
+    })
+
+    it('文件被截断(size < offset)→ 从头重读', async () => {
+      setupBound()
+      const f = sessionFile()
+      // 较长内容:meta + started + context + user + token + complete(6 行)
+      writeFileSync(
+        f,
+        sessionMetaLine({ sessionId: 'sess-trunc', cwd: repoRoot, gitBranch: BRANCH }) +
+          taskStartedLine('2026-06-16T11:00:01.000Z') +
+          turnContextLine('gpt-5.5', '2026-06-16T11:00:02.000Z') +
+          userMessageLine('2026-06-16T11:00:03.000Z') +
+          tokenCountLine({ input: 100, output: 20 }, '2026-06-16T11:00:30.000Z') +
+          taskCompleteLine('2026-06-16T11:00:33.000Z')
+      )
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+      expect(listIterations('ABC-1').length).toBe(1)
+      const prevOffset = readState().files[f].offset
+
+      // 原地截断为更短内容(inode 不变,size < 上次 offset),累计 token 继续增长到 300
+      writeFileSync(
+        f,
+        sessionMetaLine({ sessionId: 'sess-trunc', cwd: repoRoot, gitBranch: BRANCH }) +
+          userMessageLine('2026-06-16T11:05:03.000Z') +
+          tokenCountLine({ input: 280, output: 20 }, '2026-06-16T11:05:30.000Z') +
+          taskCompleteLine('2026-06-16T11:05:33.000Z')
+      )
+      expect(statSync(f).size).toBeLessThan(prevOffset)
+
+      await w.processFileForTest(f)
+      const iters = listIterations('ABC-1')
+      expect(iters.length).toBe(2)
+      expect(iters[1].cumulativeToken).toBe(300)
+    })
+
+    it('旧 state(仅 offset/mtimeMs)兼容:不丢 offset,补齐 size/ino,sessions 基线保留', async () => {
+      setupBound()
+      const f = sessionFile()
+      writeFileSync(
+        f,
+        sessionMetaLine({ sessionId: 'sess-compat', cwd: repoRoot, gitBranch: BRANCH }) +
+          userMessageLine('2026-06-16T11:00:03.000Z') +
+          tokenCountLine({ input: 100, output: 20 }, '2026-06-16T11:00:30.000Z') +
+          taskCompleteLine('2026-06-16T11:00:33.000Z')
+      )
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+      expect(listIterations('ABC-1').length).toBe(1)
+
+      // 手工降级 state 为旧格式:files[f] 去掉 size/ino,保留 sessions 基线
+      const st1 = statSync(f)
+      const baseline = readState().sessions['sess-compat'].flushedTotal
+      expect(baseline).toBe(120)
+      writeFileSync(
+        statePath(),
+        JSON.stringify({
+          version: 1,
+          files: { [f]: { offset: st1.size, mtimeMs: st1.mtimeMs } },
+          sessions: { 'sess-compat': { flushedTotal: baseline } }
+        }),
+        'utf-8'
+      )
+
+      // 追加第二轮(累计 token 增长到 300)
+      appendFileSync(
+        f,
+        userMessageLine('2026-06-16T11:05:03.000Z') +
+          tokenCountLine({ input: 280, output: 20 }, '2026-06-16T11:05:30.000Z') +
+          taskCompleteLine('2026-06-16T11:05:33.000Z')
+      )
+      await w.processFileForTest(f)
+
+      const iters = listIterations('ABC-1')
+      // 旧 offset 被保留 → 只读新增第二轮;基线 120 → cumulative=300
+      expect(iters.length).toBe(2)
+      expect(iters[1].cumulativeToken).toBe(300)
+      const entry = readState().files[f]
+      expect(entry.size).toBe(statSync(f).size)
+      expect(entry.ino).toBe(statSync(f).ino)
+      expect(readState().sessions['sess-compat'].flushedTotal).toBe(300)
+    })
+
+    it('文件未变化 → 第二次处理跳过,不重复落 iteration,sessions 基线不变', async () => {
+      setupBound()
+      const f = sessionFile()
+      writeFileSync(
+        f,
+        sessionMetaLine({ sessionId: 'sess-nochange', cwd: repoRoot, gitBranch: BRANCH }) +
+          userMessageLine('2026-06-16T11:00:03.000Z') +
+          tokenCountLine({ input: 100, output: 20 }, '2026-06-16T11:00:30.000Z') +
+          taskCompleteLine('2026-06-16T11:00:33.000Z')
+      )
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+      expect(listIterations('ABC-1').length).toBe(1)
+      const baselineAfter = readState().sessions['sess-nochange'].flushedTotal
+
+      await w.processFileForTest(f)
+      expect(listIterations('ABC-1').length).toBe(1)
+      expect(readState().sessions['sess-nochange'].flushedTotal).toBe(baselineAfter)
+    })
   })
 })

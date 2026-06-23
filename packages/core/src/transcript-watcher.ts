@@ -15,7 +15,12 @@ import {
   type ParsedUserMessage,
   type ParsedTokens
 } from './claude-message.js'
-import { loadWatcherState, saveWatcherState, type WatcherState } from './watcher-state.js'
+import {
+  decideIncrementalRead,
+  loadWatcherState,
+  saveWatcherState,
+  type WatcherState
+} from './watcher-state.js'
 import { extractIssueKey, findGitRoot, getCurrentBranch } from './git.js'
 import { appendTokenUsage } from './bindings.js'
 import { buildIterationExtras } from './iteration-extras.js'
@@ -315,11 +320,10 @@ export class TranscriptWatcher {
       return
     }
 
-    if (prev && prev.offset === stats.size && prev.mtimeMs === stats.mtimeMs) {
-      return
-    }
+    const decision = decideIncrementalRead(prev, stats)
+    if (decision.skip) return
 
-    const { lines, newOffset } = await readJsonlIncremental(filePath, prev?.offset ?? 0)
+    const { lines, newOffset } = await readJsonlIncremental(filePath, decision.startOffset)
 
     for (const raw of lines) {
       // v2.12.0 优先识别 user 行,把本轮起点 timestamp 缓存进 pendingUserPromptTs,
@@ -353,7 +357,12 @@ export class TranscriptWatcher {
       }
     }
 
-    this.state.files[filePath] = { offset: newOffset, mtimeMs: stats.mtimeMs }
+    this.state.files[filePath] = {
+      offset: newOffset,
+      size: stats.size,
+      ino: stats.ino,
+      mtimeMs: stats.mtimeMs
+    }
     saveWatcherState(this.statePath, this.state)
   }
 

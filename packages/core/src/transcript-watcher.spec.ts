@@ -6,7 +6,8 @@ import {
   rmSync,
   writeFileSync,
   existsSync,
-  readFileSync
+  readFileSync,
+  statSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1366,6 +1367,230 @@ describe('TranscriptWatcher.processFileForTest', () => {
       expect(iters[0].thinkSeconds).toBe(10)
       // 第 2 轮关键断言:thinkSeconds = 20s (新 user 行驱动),不被 3min 间隔污染、不被 cap
       expect(iters[1].thinkSeconds).toBe(20)
+    })
+  })
+
+  /**
+   * watcher-incremental-state:游标升级为 offset+size+ino,显式处理 inode 变化 / 截断 /
+   * 旧 state 兼容,正常追加场景行为不变。
+   */
+  describe('offset+size+ino 游标:轮转/截断/兼容/未变', () => {
+    function setupBound(): void {
+      saveRequirement({ jiraKey: 'ABC-1', title: 'Watcher demo' }, { repoPath: repoRoot })
+      upsertBinding(repoRoot, 'ABC-1', {
+        branch: 'feature/ABC-1-watcher',
+        startedAt: '2026-05-14T00:00:00.000Z',
+        requirementStartedAt: '2026-05-14T00:00:00.000Z'
+      })
+    }
+
+    const statePath = (): string => join(stateDir, 'state.json')
+    function readState(): {
+      files: Record<string, { offset: number; size?: number; ino?: number; mtimeMs: number }>
+    } {
+      return JSON.parse(readFileSync(statePath(), 'utf-8'))
+    }
+
+    it('正常追加后:游标写回 offset/size/ino/mtimeMs', async () => {
+      setupBound()
+      const projectDir = join(claudeRoot, '-x-fake')
+      mkdirSync(projectDir, { recursive: true })
+      const f = join(projectDir, 's1.jsonl')
+      writeFileSync(
+        f,
+        buildAssistantLine({
+          cwd: repoRoot,
+          gitBranch: 'feature/ABC-1-watcher',
+          sessionId: 'sess-cursor',
+          stopReason: 'end_turn',
+          totalInput: 5,
+          totalOutput: 5,
+          uuid: 'c-1'
+        })
+      )
+
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+
+      const st = statSync(f)
+      const entry = readState().files[f]
+      expect(entry.offset).toBe(st.size)
+      expect(entry.size).toBe(st.size)
+      expect(entry.ino).toBe(st.ino)
+      expect(entry.mtimeMs).toBe(st.mtimeMs)
+    })
+
+    it('inode 变化(同名文件被替换)→ 从头重读新内容', async () => {
+      setupBound()
+      const projectDir = join(claudeRoot, '-x-fake')
+      mkdirSync(projectDir, { recursive: true })
+      const f = join(projectDir, 's1.jsonl')
+      writeFileSync(
+        f,
+        buildAssistantLine({
+          cwd: repoRoot,
+          gitBranch: 'feature/ABC-1-watcher',
+          sessionId: 'sess-rot-1',
+          stopReason: 'end_turn',
+          totalInput: 5,
+          totalOutput: 5,
+          uuid: 'rot-a'
+        })
+      )
+
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+      expect(listIterations('ABC-1').length).toBe(1)
+      const firstIno = readState().files[f].ino
+
+      // 删除并重建同名文件 → 新 inode;内容是另一份完整 turn
+      rmSync(f)
+      writeFileSync(
+        f,
+        buildAssistantLine({
+          cwd: repoRoot,
+          gitBranch: 'feature/ABC-1-watcher',
+          sessionId: 'sess-rot-2',
+          stopReason: 'end_turn',
+          totalInput: 8,
+          totalOutput: 2,
+          uuid: 'rot-b'
+        })
+      )
+      // 确认 inode 确实变了(否则本用例无意义)
+      expect(statSync(f).ino).not.toBe(firstIno)
+
+      await w.processFileForTest(f)
+      const iters = listIterations('ABC-1')
+      // 轮转后从头读到新 turn → 第 2 行 iteration;cumulativeToken 是 binding 运行总额(10+10)
+      expect(iters.length).toBe(2)
+      expect(iters[1].cumulativeToken).toBe(20)
+      expect(readState().files[f].ino).toBe(statSync(f).ino)
+    })
+
+    it('文件被截断(size < offset)→ 从头重读', async () => {
+      setupBound()
+      const projectDir = join(claudeRoot, '-x-fake')
+      mkdirSync(projectDir, { recursive: true })
+      const f = join(projectDir, 's1.jsonl')
+      // 先写一段较长内容并处理(end_turn)
+      writeFileSync(
+        f,
+        buildAssistantLine({
+          cwd: repoRoot,
+          gitBranch: 'feature/ABC-1-watcher',
+          sessionId: 'sess-trunc-1',
+          stopReason: 'end_turn',
+          totalInput: 50,
+          totalOutput: 50,
+          cacheRead: 9999,
+          uuid: 'trunc-a'
+        })
+      )
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+      expect(listIterations('ABC-1').length).toBe(1)
+      const prevOffset = readState().files[f].offset
+
+      // 原地截断为更短内容(inode 不变,size < 上次 offset)
+      const shorter = buildAssistantLine({
+        cwd: repoRoot,
+        gitBranch: 'feature/ABC-1-watcher',
+        sessionId: 'sess-trunc-2',
+        stopReason: 'end_turn',
+        totalInput: 3,
+        totalOutput: 4,
+        uuid: 'trunc-b'
+      })
+      writeFileSync(f, shorter)
+      expect(statSync(f).size).toBeLessThan(prevOffset)
+
+      await w.processFileForTest(f)
+      const iters = listIterations('ABC-1')
+      // 截断后从 0 读到新 turn → 第 2 行;cumulativeToken 是 binding 运行总额(100+7)
+      expect(iters.length).toBe(2)
+      expect(iters[1].cumulativeToken).toBe(107)
+    })
+
+    it('旧 state(仅 offset/mtimeMs)兼容:不丢 offset,处理后补齐 size/ino', async () => {
+      setupBound()
+      const projectDir = join(claudeRoot, '-x-fake')
+      mkdirSync(projectDir, { recursive: true })
+      const f = join(projectDir, 's1.jsonl')
+      const firstTurn = buildAssistantLine({
+        cwd: repoRoot,
+        gitBranch: 'feature/ABC-1-watcher',
+        sessionId: 'sess-compat',
+        stopReason: 'end_turn',
+        totalInput: 5,
+        totalOutput: 5,
+        uuid: 'compat-a'
+      })
+      writeFileSync(f, firstTurn)
+
+      // 手工写入旧格式 state(offset 指到第一段末尾,无 size/ino)
+      const firstSt = statSync(f)
+      writeFileSync(
+        statePath(),
+        JSON.stringify({
+          version: 1,
+          files: { [f]: { offset: firstSt.size, mtimeMs: firstSt.mtimeMs } }
+        }),
+        'utf-8'
+      )
+
+      // 追加第二段 turn
+      appendFileSync(
+        f,
+        buildAssistantLine({
+          cwd: repoRoot,
+          gitBranch: 'feature/ABC-1-watcher',
+          sessionId: 'sess-compat',
+          stopReason: 'end_turn',
+          totalInput: 11,
+          totalOutput: 9,
+          uuid: 'compat-b'
+        })
+      )
+
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+
+      const iters = listIterations('ABC-1')
+      // 旧 offset 被保留 → 只读到新增第二段(不重复读第一段)
+      expect(iters.length).toBe(1)
+      expect(iters[0].cumulativeToken).toBe(20)
+      // 处理后补齐 size/ino
+      const entry = readState().files[f]
+      expect(entry.size).toBe(statSync(f).size)
+      expect(entry.ino).toBe(statSync(f).ino)
+    })
+
+    it('文件未变化 → 第二次处理跳过,不重复落 iteration', async () => {
+      setupBound()
+      const projectDir = join(claudeRoot, '-x-fake')
+      mkdirSync(projectDir, { recursive: true })
+      const f = join(projectDir, 's1.jsonl')
+      writeFileSync(
+        f,
+        buildAssistantLine({
+          cwd: repoRoot,
+          gitBranch: 'feature/ABC-1-watcher',
+          sessionId: 'sess-nochange',
+          stopReason: 'end_turn',
+          totalInput: 5,
+          totalOutput: 5,
+          uuid: 'nc-1'
+        })
+      )
+
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+      expect(listIterations('ABC-1').length).toBe(1)
+
+      // 不修改文件,再次处理 → skip,iteration 数不变
+      await w.processFileForTest(f)
+      expect(listIterations('ABC-1').length).toBe(1)
     })
   })
 })

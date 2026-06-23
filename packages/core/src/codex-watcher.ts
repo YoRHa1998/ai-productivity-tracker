@@ -16,6 +16,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { readJsonlIncremental } from './jsonl-incremental.js'
+import { decideIncrementalRead } from './watcher-state.js'
 import {
   effectiveCodexTokens,
   parseCodexSessionMeta,
@@ -49,6 +50,10 @@ const FIRST_LINE_MAX_BYTES = 16 * 1024 * 1024
 interface CodexFileState {
   offset: number
   mtimeMs: number
+  /** 上次观察到的文件大小;旧 state 缺失为 undefined,首扫自动补齐 */
+  size?: number
+  /** 文件 inode;旧 state 缺失为 undefined。Windows 上可能为 0/不稳定,作兜底处理 */
+  ino?: number
 }
 
 interface CodexSessionState {
@@ -315,11 +320,10 @@ export class CodexWatcher {
     const fileSessionId = this.fileToSession.get(filePath) ?? null
 
     const prev = this.state.files[filePath]
-    if (prev && prev.offset === stats.size && prev.mtimeMs === stats.mtimeMs) {
-      return
-    }
+    const decision = decideIncrementalRead(prev, stats)
+    if (decision.skip) return
 
-    const { lines, newOffset } = await readJsonlIncremental(filePath, prev?.offset ?? 0)
+    const { lines, newOffset } = await readJsonlIncremental(filePath, decision.startOffset)
 
     for (const raw of lines) {
       try {
@@ -329,7 +333,12 @@ export class CodexWatcher {
       }
     }
 
-    this.state.files[filePath] = { offset: newOffset, mtimeMs: stats.mtimeMs }
+    this.state.files[filePath] = {
+      offset: newOffset,
+      size: stats.size,
+      ino: stats.ino,
+      mtimeMs: stats.mtimeMs
+    }
     saveState(this.statePath, this.state)
   }
 
