@@ -2488,7 +2488,9 @@ const SESSION_USAGE_SOURCES: readonly AiUsageSource[] = ['cursor', 'claude-code'
  *
  * query:`from?` / `to?`(ISO/日期)、`source?`(cursor|claude-code|codex)、
  * `project?`(按 projectName 精确过滤,空 / 缺省不过滤)、`limit?`(默认 50)、
- * `sort?`(total|lastAt,默认 total)、`dir?`(asc|desc,默认 desc)。
+ * `sort?`(total|lastAt,默认 total)、`dir?`(asc|desc,默认 desc)、
+ * `keys?`(按会话 key 集合 `${source}:${sessionId}` 精确过滤,逗号分隔或重复参数;
+ * 在排序 / 截断之前施加,缺省不过滤)。
  * 服务端完成过滤 / 排序 / 截断后返回 `{ sessions }`。
  */
 export function handleSessionUsageQuery(
@@ -2501,6 +2503,8 @@ export function handleSessionUsageQuery(
     limit?: string | null
     sort?: string | null
     dir?: string | null
+    /** 逗号分隔的单串、或重复参数收集成的数组;空 / 缺省不过滤 */
+    keys?: string | string[] | null
   }
 ): void {
   const from = typeof query.from === 'string' && query.from.trim() ? query.from.trim() : undefined
@@ -2519,6 +2523,13 @@ export function handleSessionUsageQuery(
   }
   const sort: SessionUsageSortKey = query.sort === 'lastAt' ? 'lastAt' : 'total'
   const dir: SessionUsageSortDir = query.dir === 'asc' ? 'asc' : 'desc'
+  // keys 支持两种形态:逗号分隔单串(?keys=a,b)或重复参数收集成的数组(?keys=a&keys=b)。
+  // 拆分 / 去空白 / 去空后,空数组等价缺省(querySessions 内部不施加过滤)。
+  const rawKeys = Array.isArray(query.keys) ? query.keys : query.keys ? [query.keys] : []
+  const keys = rawKeys
+    .flatMap((k) => (typeof k === 'string' ? k.split(',') : []))
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0)
 
   const sessions: SessionUsageView[] = querySessions({
     from,
@@ -2527,7 +2538,8 @@ export function handleSessionUsageQuery(
     project,
     limit,
     sort,
-    dir
+    dir,
+    keys: keys.length > 0 ? keys : undefined
   })
   ok(res, { sessions })
 }

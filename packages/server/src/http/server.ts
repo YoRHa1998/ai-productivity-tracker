@@ -340,7 +340,9 @@ async function routeAiProductivity(
       project: url.searchParams.get('project'),
       limit: url.searchParams.get('limit'),
       sort: url.searchParams.get('sort'),
-      dir: url.searchParams.get('dir')
+      dir: url.searchParams.get('dir'),
+      // 同时支持重复参数(?keys=a&keys=b)与逗号分隔单串(?keys=a,b),route 内统一拆分
+      keys: url.searchParams.getAll('keys')
     })
     return true
   }

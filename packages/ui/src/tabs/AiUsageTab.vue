@@ -29,7 +29,7 @@ import {
   type SessionUsageSortDir
 } from '../api'
 import AuroraLineCard from '../charts/AuroraLineCard.vue'
-import UsageBar from '../components/UsageBar.vue'
+import SessionUsageRow from '../components/SessionUsageRow.vue'
 
 const DAYS = 14
 
@@ -203,19 +203,6 @@ async function onToggle(next: boolean) {
 
 // ───────────────────────── 会话明细区(会话 Top N) ─────────────────────────
 
-const SOURCE_LABEL: Record<AiUsageSource, string> = {
-  cursor: 'Cursor',
-  'claude-code': 'Claude Code',
-  codex: 'Codex'
-}
-
-/** AI 工具 → 标签底色修饰类(与 SOURCE_COLOR 同源,不同工具不同底色)。 */
-const SOURCE_TAG_CLASS: Record<AiUsageSource, string> = {
-  cursor: 'aip-usage__tag--cursor',
-  'claude-code': 'aip-usage__tag--claude',
-  codex: 'aip-usage__tag--codex'
-}
-
 /**
  * 会话列表筛选 / 排序状态:
  * - sessionSource:AI 平台('all' 全部);
@@ -334,43 +321,6 @@ watch([sessionProject, sessionSortKey, sessionSortDir], () => {
 watch(pageSize, () => {
   currentPage.value = 1
 })
-
-/** 会话展示标识:title 优先;否则短会话 ID + 工具(回退在模板里附时间窗)。 */
-function sessionLabel(s: SessionUsageView): string {
-  if (s.title && s.title.trim()) return s.title
-  const shortId = s.sessionId ? s.sessionId.slice(0, 8) : '—'
-  return `${SOURCE_LABEL[s.source]} · ${shortId}`
-}
-
-/** 绝对时间窗「MM-DD HH:mm → MM-DD HH:mm」,作时长标签的 title 兜底悬浮。 */
-function formatTimeWindowAbsolute(s: SessionUsageView): string {
-  const fmt = (iso: string) => {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return ''
-    return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  }
-  const from = fmt(s.firstAt)
-  const to = fmt(s.lastAt)
-  return from && to ? `${from} → ${to}` : from || to
-}
-
-/**
- * 会话持续时长(firstAt → lastAt)紧凑展示,比绝对起止时间更直观:
- * 不足 1 分钟(含起止相同 / 时间无法解析)统一上调展示为 `1min`;
- * < 60 分钟 → `Nmin`;否则 `Xh` 或 `XhYmin`(不足 1h 余数)。
- */
-function formatDuration(s: SessionUsageView): string {
-  const from = Date.parse(s.firstAt)
-  const to = Date.parse(s.lastAt)
-  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return '1min'
-  const totalSec = Math.round((to - from) / 1000)
-  if (totalSec < 60) return '1min'
-  const totalMin = Math.round(totalSec / 60)
-  if (totalMin < 60) return `${totalMin}min`
-  const hours = Math.floor(totalMin / 60)
-  const min = totalMin % 60
-  return min === 0 ? `${hours}h` : `${hours}h${min}min`
-}
 
 function gotoRequirement(jiraKey: string) {
   void router.push({ path: '/workspace', query: { jira: jiraKey } })
@@ -547,61 +497,13 @@ onMounted(() => {
         </div>
 
         <div v-else class="aip-usage__session-list">
-          <article v-for="s in pagedSessions" :key="s.key" class="aip-usage__session-row">
-            <div class="aip-usage__session-main">
-              <div class="aip-usage__session-title-line">
-                <span class="aip-usage__session-title" :title="s.title || s.sessionId">{{
-                  sessionLabel(s)
-                }}</span>
-                <button
-                  v-if="s.jiraKey"
-                  type="button"
-                  class="aip-usage__session-jira"
-                  :title="`跳转到需求 ${s.jiraKey}`"
-                  @click="gotoRequirement(s.jiraKey)"
-                >
-                  {{ s.jiraKey }}
-                </button>
-              </div>
-              <div class="aip-usage__session-meta">
-                <span
-                  class="aip-usage__tag aip-usage__tag--source"
-                  :class="SOURCE_TAG_CLASS[s.source]"
-                  :title="
-                    s.model ? `${SOURCE_LABEL[s.source]} · ${s.model}` : SOURCE_LABEL[s.source]
-                  "
-                  >{{ SOURCE_LABEL[s.source]
-                  }}<span v-if="s.model" class="aip-usage__tag-model"> · {{ s.model }}</span></span
-                >
-                <span
-                  v-if="s.projectName || s.branch"
-                  class="aip-usage__tag aip-usage__tag--scope"
-                  :title="
-                    [
-                      s.projectName ? `项目 ${s.projectName}` : '',
-                      s.branch ? `分支 ${s.branch}` : ''
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')
-                  "
-                  ><template v-if="s.projectName">{{ s.projectName }}</template
-                  ><template v-if="s.projectName && s.branch"> · </template
-                  ><template v-if="s.branch">{{ s.branch }}</template></span
-                >
-                <span
-                  class="aip-usage__tag aip-usage__tag--duration"
-                  :title="formatTimeWindowAbsolute(s)"
-                  >{{ formatDuration(s) }}</span
-                >
-                <span class="aip-usage__tag aip-usage__tag--turns"
-                  >{{ formatNumber(s.turns) }} 轮</span
-                >
-              </div>
-            </div>
-            <div class="aip-usage__session-bar">
-              <UsageBar :value="s.totalTokens" :max="sessionMaxTotal" color-mode="absolute" />
-            </div>
-          </article>
+          <SessionUsageRow
+            v-for="s in pagedSessions"
+            :key="s.key"
+            :session="s"
+            :max-total="sessionMaxTotal"
+            @goto-requirement="gotoRequirement"
+          />
         </div>
 
         <div v-if="sessions.length > 0" class="aip-usage__sessions-pager">
@@ -837,146 +739,9 @@ onMounted(() => {
   flex-direction: column;
 }
 
-.aip-usage__session-row {
-  display: flex;
-  align-items: center;
-  gap: var(--aipt-space-4);
-  padding: var(--aipt-space-3) 0;
-  border-bottom: 1px solid var(--aipt-border-faint);
-}
-
-.aip-usage__session-row:last-child {
-  border-bottom: none;
-}
-
-.aip-usage__session-main {
-  flex: 1 1 60%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.aip-usage__session-title-line {
-  display: flex;
-  align-items: center;
-  gap: var(--aipt-space-2);
-  min-width: 0;
-}
-
-.aip-usage__session-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--aipt-text-strong);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.aip-usage__session-jira {
-  flex: 0 0 auto;
-  border: 1px solid var(--aipt-border-strong);
-  background: var(--aipt-surface);
-  color: var(--aipt-text-secondary);
-  border-radius: var(--aipt-radius-pill);
-  padding: 1px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    color var(--aipt-duration-fast),
-    border-color var(--aipt-duration-fast);
-}
-
-.aip-usage__session-jira:hover {
-  color: var(--aipt-text-on-accent);
-  background: var(--aipt-primary);
-  border-color: var(--aipt-primary);
-}
-
-.aip-usage__session-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--aipt-space-3);
-  font-size: 11px;
-  color: var(--aipt-text-muted);
-  flex-wrap: wrap;
-}
-
-.aip-usage__tag {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  max-width: 100%;
-  padding: 1px 8px;
-  border-radius: var(--aipt-radius-pill);
-  background: rgba(148, 163, 184, 0.16);
-  color: var(--aipt-text-secondary);
-  border: 1px solid transparent;
-  line-height: 1.5;
-}
-
-/* 平台·模型标签:平台名不裁剪,仅给模型部分一个较宽的省略兜底,避免超长模型名撑爆 */
-.aip-usage__tag-model {
-  display: inline-block;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  vertical-align: bottom;
-}
-
-/* 项目·分支标签:项目名完整展示(整体可随 meta 容器换行),不做单行省略截断 */
-.aip-usage__tag--scope {
-  white-space: normal;
-  word-break: break-word;
-  background: rgba(167, 139, 250, 0.16);
-  border-color: rgba(167, 139, 250, 0.34);
-  color: #a78bfa;
-}
-
-/* 时长标签:淡琥珀系 */
-.aip-usage__tag--duration {
-  background: rgba(245, 188, 110, 0.18);
-  border-color: rgba(245, 188, 110, 0.36);
-  color: #d99a3c;
-}
-
-/* 轮次标签:淡青系 */
-.aip-usage__tag--turns {
-  background: rgba(94, 200, 191, 0.18);
-  border-color: rgba(94, 200, 191, 0.36);
-  color: #3fa89d;
-}
-
-/* AI 工具标签按工具着色(半透明底 + 同色边/文字,与 SOURCE_COLOR 同源) */
-.aip-usage__tag--cursor {
-  background: rgba(110, 167, 245, 0.16);
-  border-color: rgba(110, 167, 245, 0.4);
-  color: #6ea7f5;
-}
-
-.aip-usage__tag--claude {
-  background: rgba(240, 166, 200, 0.16);
-  border-color: rgba(240, 166, 200, 0.4);
-  color: #f0a6c8;
-}
-
-.aip-usage__tag--codex {
-  background: rgba(159, 229, 212, 0.16);
-  border-color: rgba(159, 229, 212, 0.4);
-  color: #9fe5d4;
-}
-
 .aip-usage__sessions-pager {
   display: flex;
   justify-content: flex-end;
   padding-top: var(--aipt-space-2);
-}
-
-.aip-usage__session-bar {
-  flex: 1 1 40%;
-  min-width: 140px;
-  max-width: 320px;
 }
 </style>

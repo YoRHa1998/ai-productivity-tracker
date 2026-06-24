@@ -3594,6 +3594,75 @@ describe('会话维度用量端点(session-usage)', () => {
     const sessions = JSON.parse(mock.body).data.sessions
     expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(['web-cursor'])
   })
+
+  it('keys 重复参数(数组)精确反查,不被 top-N 挤掉', () => {
+    seedSession({
+      source: 'cursor',
+      sessionId: 'big',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 9000, output: 0, cacheRead: 0, cacheCreation: 0, total: 9000 }
+    })
+    seedSession({
+      source: 'codex',
+      sessionId: 'mid',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 50, output: 0, cacheRead: 0, cacheCreation: 0, total: 50 }
+    })
+    const mock = makeMockRes()
+    // 仅命中 codex:mid(最小用量),limit=1 仍返回它而非整库 top-1
+    handleSessionUsageQuery(mock.res, { keys: ['codex:mid'], limit: '1' })
+    const sessions = JSON.parse(mock.body).data.sessions
+    expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(['mid'])
+  })
+
+  it('keys 逗号分隔单串拆分,跨来源合并按 total 倒序', () => {
+    seedSession({
+      source: 'cursor',
+      sessionId: 'big',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 900, output: 0, cacheRead: 0, cacheCreation: 0, total: 900 }
+    })
+    seedSession({
+      source: 'codex',
+      sessionId: 'mid',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 300, output: 0, cacheRead: 0, cacheCreation: 0, total: 300 }
+    })
+    seedSession({
+      source: 'cursor',
+      sessionId: 'other',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 10, output: 0, cacheRead: 0, cacheCreation: 0, total: 10 }
+    })
+    const mock = makeMockRes()
+    handleSessionUsageQuery(mock.res, { keys: 'codex:mid,cursor:big,cursor:ghost' })
+    const sessions = JSON.parse(mock.body).data.sessions
+    // ghost 不存在被安全忽略;big(900) > mid(300)
+    expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(['big', 'mid'])
+  })
+
+  it('keys 缺省 / 空向后兼容(不过滤)', () => {
+    seedSession({
+      source: 'cursor',
+      sessionId: 'a',
+      tokens: { input: 10, output: 0, cacheRead: 0, cacheCreation: 0, total: 10 }
+    })
+    seedSession({
+      source: 'cursor',
+      sessionId: 'b',
+      tokens: { input: 20, output: 0, cacheRead: 0, cacheCreation: 0, total: 20 }
+    })
+    const emptyArr = makeMockRes()
+    handleSessionUsageQuery(emptyArr.res, { keys: [] })
+    expect(
+      JSON.parse(emptyArr.body)
+        .data.sessions.map((s: { sessionId: string }) => s.sessionId)
+        .sort()
+    ).toEqual(['a', 'b'])
+    const omitted = makeMockRes()
+    handleSessionUsageQuery(omitted.res, {})
+    expect(JSON.parse(omitted.body).data.sessions).toHaveLength(2)
+  })
 })
 
 describe('用量测算端点(usage-benchmark)', () => {

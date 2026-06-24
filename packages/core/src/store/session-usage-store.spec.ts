@@ -284,6 +284,45 @@ describe('session-usage-store: query', () => {
     seed()
     expect(querySessions({ limit: 1 }, root).map((r) => r.sessionId)).toEqual(['big'])
   })
+
+  it('keys 集合命中:仅返回 key 命中的会话', () => {
+    seed()
+    const rows = querySessions({ keys: ['cursor:small'] }, root)
+    expect(rows.map((r) => r.sessionId)).toEqual(['small'])
+  })
+
+  it('keys 混合来源:跨 source 合并按 total 倒序', () => {
+    seed()
+    const rows = querySessions({ keys: ['codex:mid', 'cursor:big'] }, root)
+    // big(1000) > mid(500)
+    expect(rows.map((r) => r.sessionId)).toEqual(['big', 'mid'])
+  })
+
+  it('keys 在排序 / 截断之前施加,不被 top-N 挤掉', () => {
+    seed()
+    // 仅命中 small(50,最小用量),limit=1 仍应返回它而非整库 top-1(big)
+    const rows = querySessions({ keys: ['cursor:small'], limit: 1 }, root)
+    expect(rows.map((r) => r.sessionId)).toEqual(['small'])
+  })
+
+  it('keys 含不存在的 key:安全忽略,不报错', () => {
+    seed()
+    const rows = querySessions({ keys: ['cursor:big', 'cursor:nope', 'claude-code:ghost'] }, root)
+    expect(rows.map((r) => r.sessionId)).toEqual(['big'])
+  })
+
+  it('keys 空 / 缺省:向后兼容不过滤', () => {
+    seed()
+    expect(querySessions({ keys: [] }, root)).toHaveLength(3)
+    expect(querySessions({}, root)).toHaveLength(3)
+  })
+
+  it('keys 与 source 过滤可叠加', () => {
+    seed()
+    // big 是 cursor、mid 是 codex;限定 source=cursor 后 mid 被排除
+    const rows = querySessions({ keys: ['cursor:big', 'codex:mid'], source: 'cursor' }, root)
+    expect(rows.map((r) => r.sessionId)).toEqual(['big'])
+  })
 })
 
 describe('recordUsage 集成会话维度', () => {

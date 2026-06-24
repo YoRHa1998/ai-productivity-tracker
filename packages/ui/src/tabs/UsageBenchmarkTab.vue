@@ -4,6 +4,7 @@ import {
   ElButton,
   ElCheckbox,
   ElCheckboxGroup,
+  ElDrawer,
   ElInput,
   ElMessage,
   ElMessageBox,
@@ -12,22 +13,28 @@ import {
   ElRadioGroup,
   ElTag
 } from 'element-plus'
+import { useRouter } from 'vue-router'
 
 import {
   AgentRequestError,
   fetchUsageBenchmark,
+  fetchSessionUsage,
   startUsageBenchmark,
   stopUsageBenchmark,
   cancelUsageBenchmark,
   deleteUsageBenchmark,
   AI_USAGE_SOURCES,
   type AiUsageSource,
+  type SessionUsageView,
   type UsageBenchmarkSession,
   type UsageBenchmarkState
 } from '../api'
 import { useChartTheme } from '../composables/useChartTheme'
 import { VChart, type ECOption } from '../charts/echarts'
+import SessionUsageRow from '../components/SessionUsageRow.vue'
 import UsageBar from '../components/UsageBar.vue'
+
+const router = useRouter()
 
 const SOURCE_COLOR: Record<AiUsageSource, string> = {
   cursor: '#6ea7f5',
@@ -284,6 +291,86 @@ function toggleCompare(id: string) {
   compareIds.value = next
 }
 
+// ───────────────────────── 记录详情(下钻窗口内各会话实际消耗) ─────────────────────────
+
+/** 详情抽屉开关 + 当前记录 + 反查到的会话明细(按 total 倒序)。 */
+const detailOpen = ref(false)
+const detailSession = ref<UsageBenchmarkSession | null>(null)
+const detailLoading = ref(false)
+const detailRows = ref<SessionUsageView[]>([])
+/** 记录落盘的 sessionId 总数(跨来源 keys 数量),用于「不可解析」计数。 */
+const detailTotalSessions = ref(0)
+
+/** 详情头部:各来源 token 合计(按记录 sources 顺序)+ 跨来源合计。 */
+const detailSourceRows = computed(() => {
+  const s = detailSession.value
+  if (!s) return []
+  return s.sources.map((src) => ({
+    key: src,
+    label: SOURCE_LABEL[src],
+    color: SOURCE_COLOR[src],
+    total: s.totals[src]?.total ?? 0
+  }))
+})
+
+const detailGrand = computed(() => detailSession.value?.grandTotal?.total ?? 0)
+
+/** 详情会话列表 total 最大值,作 UsageBar 归一化 max。 */
+const detailMaxTotal = computed(() =>
+  detailRows.value.reduce((m, s) => (s.totalTokens > m ? s.totalTokens : m), 0)
+)
+
+/** 记录持有但会话维度 store 反查不到的 sessionId 数(采集开关曾关 / 已被保留上限裁剪)。 */
+const detailUnresolved = computed(() =>
+  Math.max(0, detailTotalSessions.value - detailRows.value.length)
+)
+
+/** 把记录各来源去重 sessionId 汇总成 `${source}:${sessionId}` key 集合。 */
+function collectSessionKeys(session: UsageBenchmarkSession): string[] {
+  const keys: string[] = []
+  for (const [src, totals] of Object.entries(session.totals)) {
+    const ids = totals?.sessionIds
+    if (!Array.isArray(ids)) continue
+    for (const id of ids) {
+      if (typeof id === 'string' && id) keys.push(`${src}:${id}`)
+    }
+  }
+  return keys
+}
+
+async function openDetail(session: UsageBenchmarkSession) {
+  detailSession.value = session
+  detailOpen.value = true
+  detailLoading.value = true
+  detailRows.value = []
+  const keys = collectSessionKeys(session)
+  detailTotalSessions.value = keys.length
+  if (keys.length === 0) {
+    detailLoading.value = false
+    return
+  }
+  try {
+    // Path A:按记录落盘 sessionId 精确反查,不依赖时间窗近似;keys 在服务端排序/截断之前施加。
+    const res = await fetchSessionUsage({ keys, limit: 1000 })
+    detailRows.value = [...res.sessions].sort((a, b) => b.totalTokens - a.totalTokens)
+  } catch {
+    // 反查失败不阻断面板,留空走兜底空态
+    detailRows.value = []
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+function onDetailClosed() {
+  detailSession.value = null
+  detailRows.value = []
+  detailTotalSessions.value = 0
+}
+
+function gotoRequirement(jiraKey: string) {
+  void router.push({ path: '/workspace', query: { jira: jiraKey } })
+}
+
 onMounted(() => {
   void load()
   tickTimer = setInterval(() => {
@@ -466,11 +553,18 @@ onUnmounted(() => {
         <article
           v-for="s in sortedSessions"
           :key="s.id"
-          class="aip-bmk__card aipt-glass"
+          class="aip-bmk__card aipt-glass aip-bmk__card--clickable"
           :class="{ 'aip-bmk__card--checked': compareIds.has(s.id) }"
+          role="button"
+          tabindex="0"
+          :title="`查看「${s.label || '(未命名)'}」的会话明细`"
+          @click="openDetail(s)"
+          @keydown.enter="openDetail(s)"
         >
           <div class="aip-bmk__card-head">
-            <ElCheckbox :model-value="compareIds.has(s.id)" @change="() => toggleCompare(s.id)" />
+            <span class="aip-bmk__card-check" @click.stop>
+              <ElCheckbox :model-value="compareIds.has(s.id)" @change="() => toggleCompare(s.id)" />
+            </span>
             <span class="aip-bmk__card-title">{{ s.label || '(未命名)' }}</span>
             <span class="aip-bmk__card-time"
               >{{ formatDateTime(s.startedAt) }} · {{ formatDuration(s.durationMs) }}</span
@@ -480,7 +574,7 @@ onUnmounted(() => {
               text
               type="danger"
               class="aip-bmk__card-del"
-              @click="onDelete(s)"
+              @click.stop="onDelete(s)"
             >
               删除
             </ElButton>
@@ -507,6 +601,77 @@ onUnmounted(() => {
         </article>
       </div>
     </div>
+
+    <!-- 记录详情抽屉:窗口内各会话实际消耗 -->
+    <ElDrawer
+      v-model="detailOpen"
+      size="720"
+      destroy-on-close
+      class="aip-bmk-drawer"
+      :with-header="true"
+      @closed="onDetailClosed"
+    >
+      <template #header>
+        <div class="aip-bmk-drawer__header">
+          <h3 class="aip-bmk-drawer__title">
+            {{ detailSession?.label || '(未命名)' }}
+          </h3>
+          <span v-if="detailSession" class="aip-bmk-drawer__time">
+            {{ formatDateTime(detailSession.startedAt) }} →
+            {{ formatDateTime(detailSession.endedAt) }} ·
+            {{ formatDuration(detailSession.durationMs) }}
+          </span>
+        </div>
+      </template>
+
+      <div v-if="detailSession" class="aip-bmk-drawer__body">
+        <!-- 记录窗口口径合计(窗口内累加值) -->
+        <section class="aip-bmk-drawer__totals">
+          <div class="aip-bmk-drawer__grand">
+            <span class="aip-bmk-drawer__grand-value aipt-num">{{
+              formatNumber(detailGrand)
+            }}</span>
+            <span class="aip-bmk-drawer__grand-unit">窗口内合计 token</span>
+          </div>
+          <div class="aip-bmk-drawer__source-list">
+            <span v-for="row in detailSourceRows" :key="row.key" class="aip-bmk-drawer__source">
+              <span class="aip-bmk__dot" :style="{ background: row.color }" />
+              {{ row.label }}
+              <b class="aipt-num">{{ formatCompactTokens(row.total) }}</b>
+            </span>
+          </div>
+        </section>
+
+        <!-- 会话累计口径说明 -->
+        <p class="aip-bmk-drawer__note">
+          下列为窗口内涉及的各会话的<b>会话累计</b>用量(会话生命周期 firstAt→lastAt
+          的累计),可能与上方「窗口内合计」不完全一致 —— 会话可能在测算窗口之外仍有活动。
+        </p>
+        <p v-if="detailUnresolved > 0" class="aip-bmk-drawer__warn">
+          另有 {{ detailUnresolved }} 个会话无可用明细(采集开关曾关闭,或已被会话用量保留上限裁剪)。
+        </p>
+
+        <div v-if="detailLoading" class="aip-bmk-drawer__loading">加载会话明细…</div>
+        <div v-else-if="detailRows.length === 0" class="aip-bmk-drawer__empty">
+          <ElEmpty
+            :description="
+              detailTotalSessions === 0
+                ? '该记录窗口内未捕获到任何会话 sessionId,无法展示会话明细'
+                : '该记录的会话明细均无法解析(采集开关曾关闭或已被保留上限裁剪)'
+            "
+          />
+        </div>
+        <div v-else class="aip-bmk-drawer__sessions">
+          <SessionUsageRow
+            v-for="row in detailRows"
+            :key="row.key"
+            :session="row"
+            :max-total="detailMaxTotal"
+            @goto-requirement="gotoRequirement"
+          />
+        </div>
+      </div>
+    </ElDrawer>
   </section>
 </template>
 
@@ -794,10 +959,25 @@ onUnmounted(() => {
   border-color: var(--aipt-accent, #6ea7f5);
 }
 
+.aip-bmk__card--clickable {
+  cursor: pointer;
+}
+
+.aip-bmk__card--clickable:hover {
+  border-color: var(--aipt-accent, #6ea7f5);
+}
+
 .aip-bmk__card-head {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 对比复选框包裹:阻断卡片点击冒泡,仅切换对比态 */
+.aip-bmk__card-check {
+  display: inline-flex;
+  align-items: center;
+  cursor: default;
 }
 
 .aip-bmk__card-title {
@@ -854,5 +1034,119 @@ onUnmounted(() => {
 .aip-bmk__card-source b {
   color: var(--aipt-text-strong);
   font-weight: 700;
+}
+
+/* ───────── 记录详情抽屉 ───────── */
+.aip-bmk-drawer__header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.aip-bmk-drawer__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--aipt-text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aip-bmk-drawer__time {
+  font-size: 12px;
+  color: var(--aipt-text-muted);
+}
+
+.aip-bmk-drawer__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipt-space-4);
+}
+
+.aip-bmk-drawer__totals {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aipt-space-4);
+  flex-wrap: wrap;
+  padding: var(--aipt-space-4);
+  border-radius: var(--aipt-radius-3, 12px);
+  background: var(--aipt-surface-2, rgba(255, 255, 255, 0.04));
+}
+
+.aip-bmk-drawer__grand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.aip-bmk-drawer__grand-value {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--aipt-text-strong);
+}
+
+.aip-bmk-drawer__grand-unit {
+  font-size: 11px;
+  color: var(--aipt-text-muted);
+}
+
+.aip-bmk-drawer__source-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--aipt-space-3);
+}
+
+.aip-bmk-drawer__source {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--aipt-text-muted);
+}
+
+.aip-bmk-drawer__source b {
+  color: var(--aipt-text-strong);
+  font-weight: 700;
+}
+
+.aip-bmk-drawer__note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--aipt-text-muted);
+}
+
+.aip-bmk-drawer__note b {
+  color: var(--aipt-text-secondary);
+  font-weight: 700;
+}
+
+.aip-bmk-drawer__warn {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #d99a3c;
+}
+
+.aip-bmk-drawer__loading {
+  padding: var(--aipt-space-5);
+  text-align: center;
+  font-size: 13px;
+  color: var(--aipt-text-muted);
+}
+
+.aip-bmk-drawer__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+}
+
+.aip-bmk-drawer__sessions {
+  display: flex;
+  flex-direction: column;
 }
 </style>

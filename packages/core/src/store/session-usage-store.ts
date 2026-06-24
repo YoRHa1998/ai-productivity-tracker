@@ -382,6 +382,12 @@ export interface QuerySessionsParams {
   sort?: SessionUsageSortKey
   /** 排序方向(默认 desc) */
   dir?: SessionUsageSortDir
+  /**
+   * 按会话 key 集合精确过滤(每项 `${source}:${sessionId}`)。
+   * 提供时仅保留 key 命中集合内的会话,过滤在排序 / 截断之前施加(不被 top-N 挤掉);
+   * 集合内不存在的 key 安全忽略;空 / 缺省不过滤(向后兼容)。
+   */
+  keys?: string[]
 }
 
 const DEFAULT_QUERY_LIMIT = 50
@@ -432,8 +438,15 @@ export function querySessions(params: QuerySessionsParams = {}, root?: string): 
     Number.isFinite(params.limit) && (params.limit as number) > 0
       ? Math.floor(params.limit as number)
       : DEFAULT_QUERY_LIMIT
+  // keys 集合过滤:非空数组时构造 Set,在排序 / 截断之前按 key 命中保留;空 / 缺省(或全部非法)不过滤。
+  let keySet: Set<string> | undefined
+  if (Array.isArray(params.keys) && params.keys.length > 0) {
+    const valid = params.keys.filter((k): k is string => typeof k === 'string' && k.length > 0)
+    if (valid.length > 0) keySet = new Set(valid)
+  }
 
-  let entries = Object.entries(file.sessions).filter(([, rec]) => {
+  let entries = Object.entries(file.sessions).filter(([key, rec]) => {
+    if (keySet && !keySet.has(key)) return false
     if (source && rec.source !== source) return false
     if (project && rec.projectName !== project) return false
     if (Number.isFinite(fromMs)) {

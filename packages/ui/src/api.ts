@@ -958,10 +958,18 @@ export type FetchSessionUsageParams = {
   limit?: number
   sort?: SessionUsageSortKey
   dir?: SessionUsageSortDir
+  /**
+   * 按会话 key 集合精确反查(每项 `${source}:${sessionId}`),序列化为逗号分隔的 `keys` query。
+   * 在服务端排序 / 截断之前施加过滤,空 / 缺省不过滤(向后兼容)。
+   */
+  keys?: string[]
 }
 
 /** 查询会话维度用量列表(服务端排序 + 截断)。 */
 export function fetchSessionUsage(params: FetchSessionUsageParams = {}) {
+  const keys = Array.isArray(params.keys)
+    ? params.keys.filter((k) => typeof k === 'string' && k.trim().length > 0)
+    : []
   return agentRequest<{ sessions: SessionUsageView[] }>(
     `/ai-productivity/session-usage${buildQuery({
       from: params.from,
@@ -970,7 +978,8 @@ export function fetchSessionUsage(params: FetchSessionUsageParams = {}) {
       project: params.project,
       limit: params.limit !== undefined ? String(params.limit) : undefined,
       sort: params.sort,
-      dir: params.dir
+      dir: params.dir,
+      keys: keys.length > 0 ? keys.join(',') : undefined
     })}`
   )
 }
