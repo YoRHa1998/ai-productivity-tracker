@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname } from 'node:path'
 
 import { aiUsagePath } from './paths.js'
+import { accumulateBenchmark, hasActiveBenchmark } from './usage-benchmark-store.js'
 
 /** AI 用量维度键 —— 复用既有 IterationSource 的可采集子集(排除 'unknown')。 */
 export type AiUsageSource = 'cursor' | 'claude-code' | 'codex'
@@ -203,6 +204,17 @@ export function isAiUsageEnabled(root?: string): boolean {
 }
 
 /**
+ * 是否有任意「用量采集消费者」在工作 —— 整体用量监控开启,或有进行中的测算会话。
+ *
+ * 采集链路(watcher / hook 旁路)用它作闸门:任一为真即把事件送达 `recordUsage`,
+ * `recordUsage` 内部再各自决定写 ai-usage.json(仅 enabled)与写测算(仅有 active 会话)。
+ * 两个分支都读进程内布尔缓存,无消费者时与改造前等价短路(零盘 I/O)。
+ */
+export function isUsageCaptureActive(root?: string): boolean {
+  return isAiUsageEnabled(root) || hasActiveBenchmark(root)
+}
+
+/**
  * 切换采集开关并持久化 + 刷新进程内缓存。返回最新 config。
  */
 export function setAiUsageEnabled(enabled: boolean, root?: string): AiUsageConfig {
@@ -249,8 +261,14 @@ function ensureBucket(file: AiUsageFile, source: string, date: string): AiUsageD
  * dedupeKey 防重复 POST —— 故同一真实事件不会被重复 record。
  */
 export function recordUsage(event: AiUsageEvent, root?: string): void {
-  if (!isAiUsageEnabled(root)) return
   if (!event || !AI_USAGE_SOURCES.includes(event.source)) return
+
+  // 测算旁路(D2):无 active 会话时 accumulateBenchmark 自身零盘 I/O 短路;
+  // 独立于整体用量开关,故放在 enabled 守卫之外。容错由调用点 try/catch 兜底。
+  accumulateBenchmark(event, root)
+
+  // 整体用量日聚合:语义不变,仅 enabled 时写 ai-usage.json。
+  if (!isAiUsageEnabled(root)) return
 
   const file = readAiUsage(root)
   const date = localDateKey(event.at)

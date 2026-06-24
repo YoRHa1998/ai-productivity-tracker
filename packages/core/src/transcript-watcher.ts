@@ -26,7 +26,7 @@ import { appendTokenUsage } from './bindings.js'
 import { buildIterationExtras } from './iteration-extras.js'
 import { appendIteration } from './store/iteration-store.js'
 import { loadRequirement } from './store/requirement-store.js'
-import { isAiUsageEnabled, recordUsage } from './store/ai-usage-store.js'
+import { isUsageCaptureActive, recordUsage } from './store/ai-usage-store.js'
 
 const DEFAULT_CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects')
 const DEFAULT_STATE_PATH = join(
@@ -586,9 +586,10 @@ export class TranscriptWatcher {
       this.lastFlushedFingerprint.set(turnKey, fingerprintTokens(trigger.msg.tokens))
     }
 
-    // AI 整体用量旁路(D2):在 issueKey 闸门之前记录,覆盖非 Jira 分支(main 等)。
-    // recordUsage 内部读进程内 enabled 缓存,关闭时零盘 I/O 短路;容错静默,不影响需求链路。
-    if (buf.tokenSum > 0 && isAiUsageEnabled()) {
+    // AI 整体用量 + 用量测算旁路(D2/D3):在 issueKey 闸门之前记录,覆盖非 Jira 分支(main 等)。
+    // 闸门 isUsageCaptureActive = 整体用量开启 或 有进行中测算会话;两者皆读进程内缓存,
+    // 都不活跃时零盘 I/O 短路。recordUsage 内部各自决定写 ai-usage / 测算;容错静默,不影响需求链路。
+    if (buf.tokenSum > 0 && isUsageCaptureActive()) {
       try {
         recordUsage({
           source: 'claude-code',

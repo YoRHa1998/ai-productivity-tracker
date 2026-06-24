@@ -34,6 +34,11 @@ export const RETROSPECTIVE_FILE_NAME = 'retrospective.json'
  * 不绑 jiraKey 目录;查询 O(1),覆盖 main / 非仓库会话。详见 ai-usage-store.ts。
  */
 export const AI_USAGE_FILE_NAME = 'ai-usage.json'
+/**
+ * 「用量测算」秒表式窗口化测算单文件(active 会话 + 历史记录)。与整体用量、需求维度
+ * 都正交,直接落 data 根;详见 usage-benchmark-store.ts。
+ */
+export const USAGE_BENCHMARK_FILE_NAME = 'usage-benchmark.json'
 
 export function aipRoot(root?: string): string {
   return root ? resolve(root) : resolveDefaultRoot()
@@ -60,6 +65,11 @@ export function jiraConfigPath(root?: string): string {
 /** 「AI 整体用量」聚合文件路径(data 根下单文件,惰性创建)。 */
 export function aiUsagePath(root?: string): string {
   return join(aipRoot(root), AI_USAGE_FILE_NAME)
+}
+
+/** 「用量测算」文件路径(data 根下单文件,惰性创建)。 */
+export function usageBenchmarkPath(root?: string): string {
+  return join(aipRoot(root), USAGE_BENCHMARK_FILE_NAME)
 }
 
 /** JiraKey 在文件路径里的安全形态:大写 + [A-Z0-9-] 过滤 */

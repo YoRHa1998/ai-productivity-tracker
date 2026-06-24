@@ -30,7 +30,7 @@ import { appendTokenUsage } from './bindings.js'
 import { buildIterationExtras } from './iteration-extras.js'
 import { appendIteration } from './store/iteration-store.js'
 import { loadRequirement } from './store/requirement-store.js'
-import { isAiUsageEnabled, recordUsage } from './store/ai-usage-store.js'
+import { isUsageCaptureActive, recordUsage } from './store/ai-usage-store.js'
 
 const DEFAULT_CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
 /**
@@ -519,9 +519,10 @@ export class CodexWatcher {
     // 本轮无新增 token(纯无效轮 / 重复 task_complete)→ 不落 iteration / 不记用量
     if (delta <= 0) return
 
-    // AI 整体用量旁路(D2):在 issueKey 闸门之前记录,覆盖非 Jira 分支。
-    // 容错静默,关闭时零盘 I/O 短路;绝不影响需求维度采集。
-    if (isAiUsageEnabled()) {
+    // AI 整体用量 + 用量测算旁路(D2/D3):在 issueKey 闸门之前记录,覆盖非 Jira 分支。
+    // 闸门 isUsageCaptureActive = 整体用量开启 或 有进行中测算会话;都不活跃时零盘 I/O 短路。
+    // 容错静默,绝不影响需求维度采集。
+    if (isUsageCaptureActive()) {
       try {
         const dInput = Math.max(0, buf.currentTotalUsage.inputTokens - baselineUsage.inputTokens)
         const dCached = Math.max(
