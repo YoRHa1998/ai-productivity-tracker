@@ -356,15 +356,15 @@ function formatTimeWindowAbsolute(s: SessionUsageView): string {
 
 /**
  * 会话持续时长(firstAt → lastAt)紧凑展示,比绝对起止时间更直观:
- * < 1 分钟 → `Ns`;< 60 分钟 → `Nmin`;否则 `Xh` 或 `XhYmin`(不足 1h 余数)。
- * 时间无法解析 / 起止相同 → `0s`。
+ * 不足 1 分钟(含起止相同 / 时间无法解析)统一上调展示为 `1min`;
+ * < 60 分钟 → `Nmin`;否则 `Xh` 或 `XhYmin`(不足 1h 余数)。
  */
 function formatDuration(s: SessionUsageView): string {
   const from = Date.parse(s.firstAt)
   const to = Date.parse(s.lastAt)
-  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return '0s'
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return '1min'
   const totalSec = Math.round((to - from) / 1000)
-  if (totalSec < 60) return `${totalSec}s`
+  if (totalSec < 60) return '1min'
   const totalMin = Math.round(totalSec / 60)
   if (totalMin < 60) return `${totalMin}min`
   const hours = Math.floor(totalMin / 60)
@@ -564,31 +564,38 @@ onMounted(() => {
                 </button>
               </div>
               <div class="aip-usage__session-meta">
-                <span class="aip-usage__tag" :class="SOURCE_TAG_CLASS[s.source]">{{
-                  SOURCE_LABEL[s.source]
-                }}</span>
                 <span
-                  v-if="s.projectName"
-                  class="aip-usage__tag aip-usage__tag--ellipsis"
-                  :title="`项目 ${s.projectName}`"
-                  >{{ s.projectName }}</span
+                  class="aip-usage__tag aip-usage__tag--source"
+                  :class="SOURCE_TAG_CLASS[s.source]"
+                  :title="
+                    s.model ? `${SOURCE_LABEL[s.source]} · ${s.model}` : SOURCE_LABEL[s.source]
+                  "
+                  >{{ SOURCE_LABEL[s.source]
+                  }}<span v-if="s.model" class="aip-usage__tag-model"> · {{ s.model }}</span></span
                 >
                 <span
-                  v-if="s.branch"
-                  class="aip-usage__tag aip-usage__tag--ellipsis"
-                  :title="`分支 ${s.branch}`"
-                  >{{ s.branch }}</span
+                  v-if="s.projectName || s.branch"
+                  class="aip-usage__tag aip-usage__tag--scope"
+                  :title="
+                    [
+                      s.projectName ? `项目 ${s.projectName}` : '',
+                      s.branch ? `分支 ${s.branch}` : ''
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')
+                  "
+                  ><template v-if="s.projectName">{{ s.projectName }}</template
+                  ><template v-if="s.projectName && s.branch"> · </template
+                  ><template v-if="s.branch">{{ s.branch }}</template></span
                 >
                 <span
-                  v-if="s.model"
-                  class="aip-usage__tag aip-usage__tag--ellipsis aip-usage__tag--model"
-                  :title="s.model"
-                  >{{ s.model }}</span
+                  class="aip-usage__tag aip-usage__tag--duration"
+                  :title="formatTimeWindowAbsolute(s)"
+                  >{{ formatDuration(s) }}</span
                 >
-                <span class="aip-usage__tag" :title="formatTimeWindowAbsolute(s)">{{
-                  formatDuration(s)
-                }}</span>
-                <span class="aip-usage__tag">{{ formatNumber(s.turns) }} 轮</span>
+                <span class="aip-usage__tag aip-usage__tag--turns"
+                  >{{ formatNumber(s.turns) }} 轮</span
+                >
               </div>
             </div>
             <div class="aip-usage__session-bar">
@@ -900,23 +907,46 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
+  max-width: 100%;
   padding: 1px 8px;
   border-radius: var(--aipt-radius-pill);
-  background: var(--aipt-surface-strong);
+  background: rgba(148, 163, 184, 0.16);
   color: var(--aipt-text-secondary);
   border: 1px solid transparent;
   line-height: 1.5;
 }
 
-.aip-usage__tag--ellipsis {
-  max-width: 160px;
-  white-space: nowrap;
+/* 平台·模型标签:平台名不裁剪,仅给模型部分一个较宽的省略兜底,避免超长模型名撑爆 */
+.aip-usage__tag-model {
+  display: inline-block;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
-.aip-usage__tag--model {
-  max-width: 180px;
+/* 项目·分支标签:项目名完整展示(整体可随 meta 容器换行),不做单行省略截断 */
+.aip-usage__tag--scope {
+  white-space: normal;
+  word-break: break-word;
+  background: rgba(167, 139, 250, 0.16);
+  border-color: rgba(167, 139, 250, 0.34);
+  color: #a78bfa;
+}
+
+/* 时长标签:淡琥珀系 */
+.aip-usage__tag--duration {
+  background: rgba(245, 188, 110, 0.18);
+  border-color: rgba(245, 188, 110, 0.36);
+  color: #d99a3c;
+}
+
+/* 轮次标签:淡青系 */
+.aip-usage__tag--turns {
+  background: rgba(94, 200, 191, 0.18);
+  border-color: rgba(94, 200, 191, 0.36);
+  color: #3fa89d;
 }
 
 /* AI 工具标签按工具着色(半透明底 + 同色边/文字,与 SOURCE_COLOR 同源) */
