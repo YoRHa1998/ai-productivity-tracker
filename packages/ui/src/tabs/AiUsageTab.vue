@@ -6,6 +6,8 @@ import {
   ElMessage,
   ElRadioGroup,
   ElRadioButton,
+  ElSelect,
+  ElOption,
   ElEmpty,
   ElTooltip
 } from 'element-plus'
@@ -22,6 +24,7 @@ import {
   type AiUsageResponse,
   type AiUsageSource,
   type SessionUsageView,
+  type SessionUsageSortKey,
   type SessionUsageSortDir
 } from '../api'
 import AuroraLineCard from '../charts/AuroraLineCard.vue'
@@ -205,12 +208,24 @@ const SOURCE_LABEL: Record<AiUsageSource, string> = {
   codex: 'Codex'
 }
 
-/** 会话列表工具筛选('all' 全部);时间范围(近 7 / 30 天);排序方向(用量高→低 / 低→高)。 */
+/**
+ * 会话列表筛选 / 排序状态:
+ * - sessionSource:AI 平台('all' 全部);
+ * - sessionProject:所属项目('all' 全部 / 具体项目名,服务端精确过滤);
+ * - sessionRangeDays:时间范围(近 7 / 30 天);
+ * - sessionSortKey:排序依据(用量高低 total / 记录时间 lastAt);
+ * - sessionSortDir:排序方向(降序 desc / 升序 asc)。
+ */
 const sessionSource = ref<'all' | AiUsageSource>('all')
+const sessionProject = ref<'all' | string>('all')
 const sessionRangeDays = ref<7 | 30>(7)
+const sessionSortKey = ref<SessionUsageSortKey>('total')
 const sessionSortDir = ref<SessionUsageSortDir>('desc')
 const sessionLoading = ref(false)
 const sessions = ref<SessionUsageView[]>([])
+
+/** 「所属项目」下拉的动态选项(由当前时间范围 + 平台、不带 project 的会话集合派生)。 */
+const projectOptions = ref<string[]>([])
 
 /**
  * 当前列表所有会话 total 之和,作 UsageBar 归一化 max:条长 = value/Σ = 占总和比例。
@@ -233,7 +248,8 @@ async function loadSessions() {
     const res = await fetchSessionUsage({
       from: sessionFromIso(),
       source: sessionSource.value === 'all' ? undefined : sessionSource.value,
-      sort: 'total',
+      project: sessionProject.value === 'all' ? undefined : sessionProject.value,
+      sort: sessionSortKey.value,
       dir: sessionSortDir.value,
       limit: 50
     })
@@ -246,7 +262,44 @@ async function loadSessions() {
   }
 }
 
-watch([sessionSource, sessionRangeDays, sessionSortDir], () => {
+/**
+ * 派生「所属项目」下拉选项:按当前时间范围 + AI 平台、不带 project 过滤拉一份较大集合,
+ * distinct 出非空 projectName(无项目名会话不产生选项)。若当前选中的项目在新选项中不存在
+ * (典型:切换平台后该项目无会话),回退到「全部」。
+ */
+async function loadProjectOptions() {
+  try {
+    const res = await fetchSessionUsage({
+      from: sessionFromIso(),
+      source: sessionSource.value === 'all' ? undefined : sessionSource.value,
+      sort: 'total',
+      dir: 'desc',
+      limit: 200
+    })
+    const names = Array.from(
+      new Set(
+        res.sessions
+          .map((s) => s.projectName)
+          .filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
+      )
+    ).sort((a, b) => a.localeCompare(b))
+    projectOptions.value = names
+    if (sessionProject.value !== 'all' && !names.includes(sessionProject.value)) {
+      sessionProject.value = 'all'
+    }
+  } catch {
+    projectOptions.value = []
+  }
+}
+
+// 平台 / 时间范围变更:先重算项目下拉选项(可能回退选中项),再刷新列表。
+watch([sessionSource, sessionRangeDays], async () => {
+  await loadProjectOptions()
+  void loadSessions()
+})
+
+// 项目 / 排序依据 / 方向变更:仅刷新列表。
+watch([sessionProject, sessionSortKey, sessionSortDir], () => {
   void loadSessions()
 })
 
@@ -274,6 +327,7 @@ function gotoRequirement(jiraKey: string) {
 
 onMounted(() => {
   void load()
+  void loadProjectOptions()
   void loadSessions()
 })
 </script>
@@ -379,20 +433,54 @@ onMounted(() => {
         <div class="aip-usage__sessions-head">
           <div class="aip-usage__chart-title">会话用量(最烧 token 的会话)</div>
           <div class="aip-usage__sessions-filters">
-            <ElRadioGroup v-model="sessionSource" size="small">
-              <ElRadioButton value="all">全部</ElRadioButton>
-              <ElRadioButton value="cursor">Cursor</ElRadioButton>
-              <ElRadioButton value="claude-code">Claude</ElRadioButton>
-              <ElRadioButton value="codex">Codex</ElRadioButton>
-            </ElRadioGroup>
-            <ElRadioGroup v-model="sessionRangeDays" size="small">
-              <ElRadioButton :value="7">近 7 天</ElRadioButton>
-              <ElRadioButton :value="30">近 30 天</ElRadioButton>
-            </ElRadioGroup>
-            <ElRadioGroup v-model="sessionSortDir" size="small">
-              <ElRadioButton value="desc">用量高→低</ElRadioButton>
-              <ElRadioButton value="asc">用量低→高</ElRadioButton>
-            </ElRadioGroup>
+            <ElSelect
+              v-model="sessionSortKey"
+              size="small"
+              class="aip-usage__filter-select"
+              aria-label="排序依据"
+            >
+              <ElOption label="用量高低" value="total" />
+              <ElOption label="记录时间" value="lastAt" />
+            </ElSelect>
+            <ElSelect
+              v-model="sessionSortDir"
+              size="small"
+              class="aip-usage__filter-select"
+              aria-label="排序方向"
+            >
+              <ElOption label="降序" value="desc" />
+              <ElOption label="升序" value="asc" />
+            </ElSelect>
+            <ElSelect
+              v-model="sessionSource"
+              size="small"
+              class="aip-usage__filter-select"
+              aria-label="AI 平台"
+            >
+              <ElOption label="全部平台" value="all" />
+              <ElOption label="Cursor" value="cursor" />
+              <ElOption label="Claude" value="claude-code" />
+              <ElOption label="Codex" value="codex" />
+            </ElSelect>
+            <ElSelect
+              v-if="projectOptions.length > 0"
+              v-model="sessionProject"
+              size="small"
+              class="aip-usage__filter-select aip-usage__filter-select--project"
+              aria-label="所属项目"
+            >
+              <ElOption label="全部项目" value="all" />
+              <ElOption v-for="p in projectOptions" :key="p" :label="p" :value="p" />
+            </ElSelect>
+            <ElSelect
+              v-model="sessionRangeDays"
+              size="small"
+              class="aip-usage__filter-select"
+              aria-label="时间范围"
+            >
+              <ElOption label="近 7 天" :value="7" />
+              <ElOption label="近 30 天" :value="30" />
+            </ElSelect>
           </div>
         </div>
 
@@ -649,6 +737,14 @@ onMounted(() => {
   align-items: center;
   gap: var(--aipt-space-3);
   flex-wrap: wrap;
+}
+
+.aip-usage__filter-select {
+  width: 116px;
+}
+
+.aip-usage__filter-select--project {
+  width: 148px;
 }
 
 .aip-usage__sessions-empty {

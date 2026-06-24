@@ -953,6 +953,8 @@ export type FetchSessionUsageParams = {
   from?: string
   to?: string
   source?: AiUsageSource
+  /** 按所属项目名精确过滤(空 / 缺省不过滤) */
+  project?: string
   limit?: number
   sort?: SessionUsageSortKey
   dir?: SessionUsageSortDir
@@ -965,6 +967,7 @@ export function fetchSessionUsage(params: FetchSessionUsageParams = {}) {
       from: params.from,
       to: params.to,
       source: params.source,
+      project: params.project,
       limit: params.limit !== undefined ? String(params.limit) : undefined,
       sort: params.sort,
       dir: params.dir
