@@ -42,6 +42,7 @@ import {
   handleAiProductivityDeleteRetrospective,
   handleAiProductivityGetAiUsage,
   handleAiProductivityPatchAiUsageConfig,
+  handleSessionUsageQuery,
   handleGetUsageBenchmark,
   handleStartUsageBenchmark,
   handleStopUsageBenchmark,
@@ -72,7 +73,9 @@ import {
   readAiUsage,
   __resetAiUsageCacheForTest,
   readBenchmark,
-  __resetBenchmarkCacheForTest
+  __resetBenchmarkCacheForTest,
+  accumulateSessionUsage,
+  type AiUsageEvent
 } from '@ai-productivity-tracker/core/store'
 import type { ServerConfig as ServiceConfig } from '../config.js'
 
@@ -3442,6 +3445,88 @@ describe('AI 整体用量端点 + Cursor 采集', () => {
     const day = Object.keys(usage.daily['cursor'])[0]
     expect(usage.daily['cursor'][day].total).toBe(200)
     expect(usage.daily['cursor'][day].turns).toBe(1)
+  })
+})
+
+describe('会话维度用量端点(session-usage)', () => {
+  let aipCleanup: () => void
+
+  function seedSession(
+    partial: Partial<AiUsageEvent> & Pick<AiUsageEvent, 'source' | 'sessionId'>
+  ): void {
+    accumulateSessionUsage(
+      {
+        source: partial.source,
+        sessionId: partial.sessionId,
+        title: partial.title,
+        jiraKey: partial.jiraKey,
+        at: partial.at ?? new Date().toISOString(),
+        tokens: partial.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0 }
+      },
+      aipRoot()
+    )
+  }
+
+  beforeEach(() => {
+    const setup = setupAipRoot()
+    aipCleanup = setup.restore
+  })
+
+  afterEach(() => {
+    aipCleanup()
+  })
+
+  it('默认按 token 倒序返回会话', () => {
+    seedSession({
+      source: 'cursor',
+      sessionId: 'big',
+      at: '2026-06-22T10:00:00.000Z',
+      tokens: { input: 900, output: 0, cacheRead: 0, cacheCreation: 0, total: 900 }
+    })
+    seedSession({
+      source: 'codex',
+      sessionId: 'small',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 30, output: 0, cacheRead: 0, cacheCreation: 0, total: 30 }
+    })
+    const mock = makeMockRes()
+    handleSessionUsageQuery(mock.res, {})
+    expect(mock.statusCode).toBe(200)
+    const sessions = JSON.parse(mock.body).data.sessions
+    expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(['big', 'small'])
+    expect(sessions[0].totalTokens).toBe(900)
+  })
+
+  it('source + 时间范围过滤', () => {
+    seedSession({
+      source: 'cursor',
+      sessionId: 'a',
+      at: '2026-06-20T10:00:00.000Z',
+      tokens: { input: 10, output: 0, cacheRead: 0, cacheCreation: 0, total: 10 }
+    })
+    seedSession({
+      source: 'cursor',
+      sessionId: 'b',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 20, output: 0, cacheRead: 0, cacheCreation: 0, total: 20 }
+    })
+    seedSession({
+      source: 'codex',
+      sessionId: 'c',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 30, output: 0, cacheRead: 0, cacheCreation: 0, total: 30 }
+    })
+    const mock = makeMockRes()
+    handleSessionUsageQuery(mock.res, { source: 'cursor', from: '2026-06-23T00:00:00.000Z' })
+    const sessions = JSON.parse(mock.body).data.sessions
+    expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(['b'])
+  })
+
+  it('参数缺省兜底:空库返回空数组、非法 source 忽略', () => {
+    const mock = makeMockRes()
+    handleSessionUsageQuery(mock.res, { source: 'bogus', limit: 'x', sort: 'weird' })
+    expect(mock.statusCode).toBe(200)
+    expect(JSON.parse(mock.body).data.sessions).toEqual([])
   })
 })
 

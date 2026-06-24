@@ -47,6 +47,7 @@ import {
   handleAiProductivityDeleteRetrospective,
   handleAiProductivityListHarnessSuggestions,
   handleAiProductivityGetAiUsage,
+  handleSessionUsageQuery,
   handleAiProductivityPatchAiUsageConfig,
   handleGetUsageBenchmark,
   handleStartUsageBenchmark,
@@ -327,6 +328,19 @@ async function routeAiProductivity(
   if (method === 'PATCH' && pathname === '/ai-productivity/ai-usage/config') {
     const body = parseJson(await readBody(req)) as Record<string, unknown> | null
     handleAiProductivityPatchAiUsageConfig(res, (body ?? {}) as PatchAiUsageConfigBody)
+    return true
+  }
+
+  // ── 会话维度用量(panel-origin 放行,见 isAiProductivityPanelPath 默认放行)──
+  if (method === 'GET' && pathname === '/ai-productivity/session-usage') {
+    handleSessionUsageQuery(res, {
+      from: url.searchParams.get('from'),
+      to: url.searchParams.get('to'),
+      source: url.searchParams.get('source'),
+      limit: url.searchParams.get('limit'),
+      sort: url.searchParams.get('sort'),
+      dir: url.searchParams.get('dir')
+    })
     return true
   }
 

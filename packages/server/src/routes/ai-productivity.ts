@@ -89,6 +89,8 @@ import {
   isUsageCaptureActive,
   setAiUsageEnabled,
   getAiUsageView,
+  querySessions,
+  truncateTitle,
   startBenchmark,
   stopBenchmark,
   cancelBenchmark,
@@ -97,6 +99,9 @@ import {
   type AiUsageEvent,
   type AiUsageView,
   type AiUsageSource,
+  type SessionUsageView,
+  type SessionUsageSortKey,
+  type SessionUsageSortDir,
   type UsageBenchmarkActive,
   type UsageBenchmarkSession,
   type UsageBenchmarkFile,
@@ -593,13 +598,101 @@ function rawNum(payload: Record<string, unknown> | undefined, key: string): numb
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0
 }
 
+/** 读 transcript 取首条 user 文本时的最大字节数(够覆盖首批消息,避免读超大文件)。 */
+const TRANSCRIPT_TITLE_MAX_BYTES = 2 * 1024 * 1024
+
+/**
+ * 从任意 transcript 行对象 best-effort 提取「user 文本」:
+ * 兼容 `role/type === 'user'` + `content`(字符串或 text 块数组) / `message.content` / `text`。
+ * 非 user 行或无文本返回空串。
+ */
+function extractUserTextFromTranscriptObj(obj: unknown): string {
+  if (!obj || typeof obj !== 'object') return ''
+  const o = obj as Record<string, unknown>
+  const role = typeof o.role === 'string' ? o.role : typeof o.type === 'string' ? o.type : ''
+  if (role !== 'user') return ''
+  const msg = (o.message && typeof o.message === 'object' ? o.message : o) as Record<
+    string,
+    unknown
+  >
+  const content = msg.content ?? o.text
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    const parts: string[] = []
+    for (const block of content) {
+      if (block && typeof block === 'object' && (block as { type?: unknown }).type === 'text') {
+        const t = (block as { text?: unknown }).text
+        if (typeof t === 'string') parts.push(t)
+      } else if (typeof block === 'string') {
+        parts.push(block)
+      }
+    }
+    return parts.join('\n')
+  }
+  return ''
+}
+
+/**
+ * Best-effort 读 Cursor transcript_path 首条 user 行文本作会话标题素材(D3)。
+ *
+ * 读不到文件 / 解析失败 / 无 user 行一律安全返回空串(标题留空,不阻断用量累加)。
+ * 仅读前 TRANSCRIPT_TITLE_MAX_BYTES 字节,逐行 JSON 解析,命中首条 user 文本即返回。
+ */
+function readTranscriptTitle(transcriptPath: unknown): string {
+  if (typeof transcriptPath !== 'string' || !transcriptPath) return ''
+  if (!existsSync(transcriptPath)) return ''
+  let fd: number
+  try {
+    fd = openSync(transcriptPath, 'r')
+  } catch {
+    return ''
+  }
+  try {
+    const chunkSize = 64 * 1024
+    const buf = Buffer.alloc(chunkSize)
+    let acc = ''
+    let total = 0
+    while (total < TRANSCRIPT_TITLE_MAX_BYTES) {
+      const bytes = readSync(fd, buf, 0, chunkSize, total)
+      if (bytes <= 0) break
+      total += bytes
+      acc += buf.toString('utf-8', 0, bytes)
+      let nl: number
+      while ((nl = acc.indexOf('\n')) >= 0) {
+        const line = acc.slice(0, nl)
+        acc = acc.slice(nl + 1)
+        if (line.trim()) {
+          try {
+            const text = extractUserTextFromTranscriptObj(JSON.parse(line))
+            if (text.trim()) return text
+          } catch {
+            /* 跳过非 JSON 行 */
+          }
+        }
+      }
+    }
+    if (acc.trim()) {
+      try {
+        return extractUserTextFromTranscriptObj(JSON.parse(acc))
+      } catch {
+        /* ignore */
+      }
+    }
+    return ''
+  } catch {
+    return ''
+  } finally {
+    closeSync(fd)
+  }
+}
+
 /**
  * 由 Cursor hook payload 归一化出「AI 整体用量」事件(D2)。
  *
  * 仅 cursor 来源返回事件(claude/codex 整体用量由各自 watcher 覆盖,避免双算)。
  * token 细分与 claude/codex 同口径:`total` 取有效用量(= body.tokens),
  * `input` 取剔除 cache 后的纯新增输入,cacheRead/cacheCreation 透传 Cursor 的
- * cache_read/cache_write。缺维度安全降级。仅结构化元数据,不含正文。
+ * cache_read/cache_write。缺维度安全降级。仅结构化元数据 + 截断会话标题,不含完整正文。
  */
 function buildCursorUsageEvent(body: HookRequestBody, at: string): AiUsageEvent | null {
   if (mapHookSource(body.source) !== 'cursor') return null
@@ -620,11 +713,18 @@ function buildCursorUsageEvent(body: HookRequestBody, at: string): AiUsageEvent 
     (typeof body.dedupeKey === 'string' && body.dedupeKey) ||
     ''
 
+  // 会话维度富化(D3):best-effort 读 transcript 首条 user 行作 title(读不到留空);
+  // 已解析 issueKey 时填 jiraKey(从 branch 提取,main / 非仓库会话留空)。
+  const title = truncateTitle(readTranscriptTitle(raw?.transcript_path)) || undefined
+  const jiraKey = (typeof body.branch === 'string' && extractIssueKey(body.branch)) || undefined
+
   return {
     source: 'cursor',
     sessionId,
     model,
     tokens: { input, output, cacheRead, cacheCreation, total },
+    title,
+    jiraKey,
     at
   }
 }
@@ -2365,6 +2465,45 @@ export function handleAiProductivityPatchAiUsageConfig(
   }
   const config = setAiUsageEnabled(body.enabled)
   ok(res, config)
+}
+
+const SESSION_USAGE_SOURCES: readonly AiUsageSource[] = ['cursor', 'claude-code', 'codex']
+
+/**
+ * 看板侧 GET /ai-productivity/session-usage (panel-origin 放行)
+ *
+ * query:`from?` / `to?`(ISO/日期)、`source?`(cursor|claude-code|codex)、
+ * `limit?`(默认 50)、`sort?`(total|lastAt,默认 total)、`dir?`(asc|desc,默认 desc)。
+ * 服务端完成过滤 / 排序 / 截断后返回 `{ sessions }`。
+ */
+export function handleSessionUsageQuery(
+  res: ServerResponse,
+  query: {
+    from?: string | null
+    to?: string | null
+    source?: string | null
+    limit?: string | null
+    sort?: string | null
+    dir?: string | null
+  }
+): void {
+  const from = typeof query.from === 'string' && query.from.trim() ? query.from.trim() : undefined
+  const to = typeof query.to === 'string' && query.to.trim() ? query.to.trim() : undefined
+  const source =
+    typeof query.source === 'string' &&
+    (SESSION_USAGE_SOURCES as readonly string[]).includes(query.source)
+      ? (query.source as AiUsageSource)
+      : undefined
+  let limit: number | undefined
+  if (typeof query.limit === 'string' && query.limit.trim()) {
+    const parsed = Number(query.limit)
+    if (Number.isFinite(parsed) && parsed > 0) limit = Math.floor(parsed)
+  }
+  const sort: SessionUsageSortKey = query.sort === 'lastAt' ? 'lastAt' : 'total'
+  const dir: SessionUsageSortDir = query.dir === 'asc' ? 'asc' : 'desc'
+
+  const sessions: SessionUsageView[] = querySessions({ from, to, source, limit, sort, dir })
+  ok(res, { sessions })
 }
 
 // ────────────────────────────────────────────────────────────────────
