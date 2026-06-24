@@ -1,18 +1,30 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { ElButton, ElSwitch, ElMessage, ElRadioGroup, ElRadioButton, ElEmpty } from 'element-plus'
+import { computed, onMounted, ref, watch } from 'vue'
+import {
+  ElButton,
+  ElSwitch,
+  ElMessage,
+  ElRadioGroup,
+  ElRadioButton,
+  ElEmpty,
+  ElTooltip
+} from 'element-plus'
 
 import {
   AgentRequestError,
   fetchAiUsage,
   patchAiUsageConfig,
   AI_USAGE_SOURCES,
+  type AiUsageDailyView,
   type AiUsageResponse,
   type AiUsageSource
 } from '../api'
 import AuroraLineCard from '../charts/AuroraLineCard.vue'
 
 const DAYS = 14
+
+/** 展示偏好持久化键:是否把 cacheRead 合并进 token 展示口径。 */
+const MERGE_CACHE_READ_KEY = 'aipt:ai-usage:merge-cache-read'
 
 /** 各 AI 趋势线配色(与卡片左侧色点一致)。 */
 const SOURCE_COLOR: Record<AiUsageSource, string> = {
@@ -29,6 +41,34 @@ const data = ref<AiUsageResponse | null>(null)
 /** 趋势图维度:token 总量(默认)或对话次数。 */
 const metric = ref<'tokens' | 'turns'>('tokens')
 
+/**
+ * 是否把 cacheRead 合并进 token 展示口径(纯展示偏好,localStorage 持久化)。
+ * 关闭 = 有效用量(totalTokens);开启 = 有效用量 + 缓存读取(≈ 计费口径)。
+ */
+const mergeCacheRead = ref<boolean>(readMergeCacheRead())
+
+function readMergeCacheRead(): boolean {
+  try {
+    return localStorage.getItem(MERGE_CACHE_READ_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+watch(mergeCacheRead, (v) => {
+  try {
+    localStorage.setItem(MERGE_CACHE_READ_KEY, v ? '1' : '0')
+  } catch {
+    /* localStorage 不可用时静默降级,仅丢失持久化能力,不影响展示 */
+  }
+})
+
+/** 统一 token 展示口径:按开关决定是否把 cacheRead 加回 totalTokens。 */
+function tokenOf(view: AiUsageDailyView | undefined): number {
+  if (!view) return 0
+  return view.totalTokens + (mergeCacheRead.value ? view.cacheReadTokens : 0)
+}
+
 const enabled = computed(() => data.value?.enabled ?? false)
 
 const todayCards = computed(() =>
@@ -38,7 +78,7 @@ const todayCards = computed(() =>
       key: s.key,
       label: s.label,
       color: SOURCE_COLOR[s.key],
-      totalTokens: view?.totalTokens ?? 0,
+      totalTokens: tokenOf(view),
       turns: view?.turns ?? 0
     }
   })
@@ -73,18 +113,52 @@ const chartSeries = computed(() => {
     data: series.map((point) => {
       const v = point[s.key]
       if (!v) return 0
-      return metric.value === 'tokens' ? v.totalTokens : v.turns
+      return metric.value === 'tokens' ? tokenOf(v) : v.turns
     })
   }))
 })
 
-const chartSubtitle = computed(() =>
-  metric.value === 'tokens' ? `近 ${DAYS} 天各 AI 有效 token 消耗` : `近 ${DAYS} 天各 AI 对话次数`
+const chartSubtitle = computed(() => {
+  if (metric.value !== 'tokens') return `近 ${DAYS} 天各 AI 对话次数`
+  return mergeCacheRead.value
+    ? `近 ${DAYS} 天各 AI token 消耗(含缓存读取)`
+    : `近 ${DAYS} 天各 AI 有效 token 消耗`
+})
+
+/** 今日卡片单位文案:随合并开关反映口径。 */
+const cardTokenUnit = computed(() =>
+  mergeCacheRead.value ? '今日 token(含缓存读取)' : '今日 token'
 )
 
 function formatNumber(n: number): string {
   return n.toLocaleString('en-US')
 }
+
+/**
+ * token 紧凑展示:>=1000 用 K,>=100 万用 M,>=10 亿用 B。
+ * 保留至多 1 位小数,并去掉末尾的 .0(如 12.0K → 12K)。
+ */
+function formatCompactTokens(n: number): string {
+  const abs = Math.abs(n)
+  if (abs < 1000) return String(n)
+  const units: Array<{ value: number; suffix: string }> = [
+    { value: 1_000_000_000, suffix: 'B' },
+    { value: 1_000_000, suffix: 'M' },
+    { value: 1_000, suffix: 'K' }
+  ]
+  for (const { value, suffix } of units) {
+    if (abs >= value) {
+      const scaled = Math.round((n / value) * 10) / 10
+      return `${scaled}${suffix}`
+    }
+  }
+  return String(n)
+}
+
+/** token 趋势图的 y 轴 / tooltip 使用 K/M 紧凑单位;对话次数维度保持原值。 */
+const chartValueFormatter = computed(() =>
+  metric.value === 'tokens' ? formatCompactTokens : undefined
+)
 
 async function load() {
   loading.value = true
@@ -131,6 +205,23 @@ onMounted(() => {
       </div>
       <div class="aip-usage__heading-actions">
         <div class="aip-usage__switch">
+          <span class="aip-usage__switch-label">合并缓存读取(cacheRead)</span>
+          <ElTooltip placement="bottom" :show-after="100">
+            <template #content>
+              <div class="aip-usage__help-tip">
+                默认统计的是「有效用量」口径(input + output + cacheCreation),已剔除缓存读取
+                (cacheRead)—— 因为 cacheRead 计费仅约 0.1x,且同一上下文会被反复命中,直接累加会让
+                数值虚高数倍。<br />
+                开启本开关后,卡片与趋势图的 token 改为展示「有效用量 + cacheRead」,更接近 AI
+                平台账单 口径。该选项仅影响展示,不改变已采集的原始数据,且仅作用于 token
+                维度(对话次数不受影响)。
+              </div>
+            </template>
+            <span class="aip-usage__help" role="img" aria-label="说明">?</span>
+          </ElTooltip>
+          <ElSwitch v-model="mergeCacheRead" />
+        </div>
+        <div class="aip-usage__switch">
           <span class="aip-usage__switch-label">采集监控</span>
           <ElSwitch
             :model-value="enabled"
@@ -160,8 +251,12 @@ onMounted(() => {
             <span class="aip-usage__card-label">{{ card.label }}</span>
           </div>
           <div class="aip-usage__card-metric">
-            <span class="aip-usage__card-value aipt-num">{{ formatNumber(card.totalTokens) }}</span>
-            <span class="aip-usage__card-unit">今日 token</span>
+            <span
+              class="aip-usage__card-value aipt-num"
+              :title="`${formatNumber(card.totalTokens)} token`"
+              >{{ formatCompactTokens(card.totalTokens) }}</span
+            >
+            <span class="aip-usage__card-unit">{{ cardTokenUnit }}</span>
           </div>
           <div class="aip-usage__card-foot">
             <span class="aipt-num">{{ formatNumber(card.turns) }}</span> 次对话
@@ -191,6 +286,7 @@ onMounted(() => {
           :categories="chartCategories"
           :series="chartSeries"
           :subtitle="chartSubtitle"
+          :value-formatter="chartValueFormatter"
           :height="300"
         />
       </div>
@@ -248,6 +344,36 @@ onMounted(() => {
 .aip-usage__switch-label {
   font-size: 12px;
   color: var(--aipt-text-muted);
+}
+
+.aip-usage__help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--aipt-text-muted);
+  color: var(--aipt-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.aip-usage__help:hover {
+  color: var(--aipt-text-strong);
+  border-color: var(--aipt-text-strong);
+}
+
+.aip-usage__help-tip {
+  max-width: 320px;
+  line-height: 1.6;
+  font-size: 12px;
 }
 
 .aip-usage__error {

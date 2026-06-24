@@ -20,12 +20,15 @@ interface AuroraLineProps {
   /** 副标题 */
   subtitle?: string
   height?: number | string
+  /** y 轴刻度与 tooltip 数值的格式化函数(如 token 的 K/M 紧凑展示) */
+  valueFormatter?: (value: number) => string
 }
 
 const props = withDefaults(defineProps<AuroraLineProps>(), {
   title: '',
   subtitle: '',
-  height: 240
+  height: 240,
+  valueFormatter: undefined
 })
 
 const DEFAULT_COLORS = ['#6ea7f5', '#86c5e8', '#f0a6c8', '#9fe5d4']
@@ -35,6 +38,7 @@ const { tokens: themeTokens } = useChartTheme()
 const option = computed<ECOption>(() => {
   const cats = props.categories?.length ? props.categories : ['']
   const t = themeTokens.value
+  const fmt = props.valueFormatter
   return {
     grid: { left: 8, right: 12, top: 16, bottom: 24, containLabel: true },
     tooltip: {
@@ -43,6 +47,7 @@ const option = computed<ECOption>(() => {
       borderColor: t.tooltipBorder,
       borderWidth: 1,
       textStyle: { color: t.tooltipText, fontSize: 12 },
+      ...(fmt ? { valueFormatter: (value) => fmt(Number(value)) } : {}),
       axisPointer: {
         type: 'line',
         lineStyle: { color: t.axisLine, type: 'dashed' }
@@ -73,7 +78,11 @@ const option = computed<ECOption>(() => {
       splitLine: { lineStyle: { color: t.faint, type: 'dashed' } },
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: t.text, fontSize: 10 }
+      axisLabel: {
+        color: t.text,
+        fontSize: 10,
+        ...(fmt ? { formatter: (value: number) => fmt(Number(value)) } : {})
+      }
     },
     series: props.series.map((s, idx) => {
       const color = s.color ?? DEFAULT_COLORS[idx % DEFAULT_COLORS.length]
