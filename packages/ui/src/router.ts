@@ -3,6 +3,7 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
 import AiProductivityTrackerWorkspaceTab from './tabs/AiProductivityTrackerWorkspaceTab.vue'
 import AiProductivityTrackerLessonsTab from './tabs/AiProductivityTrackerLessonsTab.vue'
 import AiUsageTab from './tabs/AiUsageTab.vue'
+import UsageBenchmarkTab from './tabs/UsageBenchmarkTab.vue'
 import AiProductivityTrackerSettingsTab from './tabs/AiProductivityTrackerSettingsTab.vue'
 import AiProductivityTrackerMcpConfigTab from './tabs/AiProductivityTrackerMcpConfigTab.vue'
 import AiProductivityTrackerGuideTab from './tabs/AiProductivityTrackerGuideTab.vue'
@@ -27,6 +28,13 @@ export interface NavItem {
 }
 
 export const primaryNav: NavItem[] = [
+  { key: 'ai-usage', label: 'AI 用量', icon: 'i-lucide-activity', routeName: 'ai-usage' },
+  {
+    key: 'usage-benchmark',
+    label: '用量测算',
+    icon: 'i-lucide-timer',
+    routeName: 'usage-benchmark'
+  },
   {
     key: 'workspace',
     label: '需求看板',
@@ -34,7 +42,6 @@ export const primaryNav: NavItem[] = [
     routeName: 'workspace'
   },
   { key: 'lessons', label: '复盘经验', icon: 'i-lucide-sparkles', routeName: 'lessons' },
-  { key: 'ai-usage', label: 'AI 用量', icon: 'i-lucide-activity', routeName: 'ai-usage' },
   { key: 'settings', label: '设置', icon: 'i-lucide-settings-2', routeName: 'settings-basic' }
 ]
 
@@ -55,7 +62,7 @@ export const tabs: TabMeta[] = primaryNav.concat(footerNav).map((n, idx) => ({
 }))
 
 const routes: RouteRecordRaw[] = [
-  { path: '/', redirect: '/workspace' },
+  { path: '/', redirect: '/ai-usage' },
   {
     path: '/workspace',
     name: 'workspace',
@@ -73,6 +80,12 @@ const routes: RouteRecordRaw[] = [
     name: 'ai-usage',
     component: AiUsageTab,
     meta: { label: 'AI 用量', navKey: 'ai-usage' }
+  },
+  {
+    path: '/usage-benchmark',
+    name: 'usage-benchmark',
+    component: UsageBenchmarkTab,
+    meta: { label: '用量测算', navKey: 'usage-benchmark' }
   },
   {
     path: '/settings',
@@ -108,7 +121,7 @@ const routes: RouteRecordRaw[] = [
     component: AiProductivityTrackerGuideTab,
     meta: { label: '使用说明', navKey: 'guide' }
   },
-  { path: '/:pathMatch(.*)*', redirect: '/workspace' }
+  { path: '/:pathMatch(.*)*', redirect: '/ai-usage' }
 ]
 
 export const router = createRouter({

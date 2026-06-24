@@ -920,3 +920,84 @@ export function patchAiUsageConfig(input: { enabled: boolean }) {
     body: JSON.stringify(input)
   })
 }
+
+// ===== 用量测算(usage-benchmark)秒表式窗口化测算 API =====
+
+/** 单工具在一次测算窗口内的累加值。 */
+export type UsageBenchmarkTotals = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreation: number
+  total: number
+  turns: number
+  sessionIds: string[]
+}
+
+/** 跨选中工具求和的合计。 */
+export type UsageBenchmarkGrandTotal = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreation: number
+  total: number
+  turns: number
+}
+
+/** 进行中的测算会话。 */
+export type UsageBenchmarkActive = {
+  id: string
+  label?: string
+  sources: AiUsageSource[]
+  startedAt: string
+  totals: Partial<Record<AiUsageSource, UsageBenchmarkTotals>>
+}
+
+/** 已完成的历史测算记录。 */
+export type UsageBenchmarkSession = UsageBenchmarkActive & {
+  endedAt: string
+  durationMs: number
+  grandTotal: UsageBenchmarkGrandTotal
+}
+
+export type UsageBenchmarkState = {
+  active: UsageBenchmarkActive | null
+  sessions: UsageBenchmarkSession[]
+}
+
+/** 读取进行中会话 + 历史测算记录。 */
+export function fetchUsageBenchmark() {
+  return agentRequest<UsageBenchmarkState>('/ai-productivity/usage-benchmark')
+}
+
+/** 启动一个测算会话(多选工具)。 */
+export function startUsageBenchmark(input: { label?: string; sources: AiUsageSource[] }) {
+  return agentRequest<{ active: UsageBenchmarkActive }>('/ai-productivity/usage-benchmark/start', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input)
+  })
+}
+
+/** 结束当前测算会话,返回刚定格的记录。 */
+export function stopUsageBenchmark() {
+  return agentRequest<{ session: UsageBenchmarkSession }>('/ai-productivity/usage-benchmark/stop', {
+    method: 'POST'
+  })
+}
+
+/** 取消当前测算会话。 */
+export function cancelUsageBenchmark() {
+  return agentRequest<{ active: null }>('/ai-productivity/usage-benchmark/cancel', {
+    method: 'POST'
+  })
+}
+
+/** 删除一条历史测算记录。 */
+export function deleteUsageBenchmark(id: string) {
+  return agentRequest<{ ok: boolean }>('/ai-productivity/usage-benchmark/delete', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id })
+  })
+}
