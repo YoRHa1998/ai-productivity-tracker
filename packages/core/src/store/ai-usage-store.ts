@@ -70,6 +70,16 @@ export interface AiUsageEvent {
    * 标签;main / 非仓库会话留空。仅会话维度消费;daily 日聚合不消费。
    */
   jiraKey?: string
+  /**
+   * 会话所属项目名(best-effort):采集点取业务仓库 package.json name(失败回退目录名)。
+   * 仅会话维度(session-usage.json)消费;daily 日聚合不消费,向后兼容。
+   */
+  projectName?: string
+  /**
+   * 会话所属分支(best-effort):采集点已持有的当前分支。
+   * 仅会话维度消费;daily 日聚合不消费,向后兼容。
+   */
+  branch?: string
   /** 事件时间(ISO 字符串),决定落入哪个自然日桶 */
   at: string
 }

@@ -54,6 +54,10 @@ export interface SessionUsageRecord {
   title?: string
   /** 命中的 Jira issue key(best-effort,可下钻;非空时覆盖) */
   jiraKey?: string
+  /** 会话所属项目名(best-effort,取 package.json name 或目录名;非空时覆盖) */
+  projectName?: string
+  /** 会话所属分支(best-effort;非空时覆盖,取最近) */
+  branch?: string
   firstAt: string
   lastAt: string
 }
@@ -81,13 +85,65 @@ function optStr(v: unknown): string | undefined {
 }
 
 /**
- * 把任意文本归一化成一行会话标题:去首尾空白 / 折行(及连续空白)压成单空格 / 截断。
+ * 已知「噪声标签块」名:IDE 注入在用户输入外围的包裹标签,连内容一并剥离。
+ * 大小写不敏感、容忍未闭合(见 sanitizeTitle)。
+ */
+const NOISE_TAG_NAMES: readonly string[] = [
+  'timestamp',
+  'cursor_commands',
+  'system_reminder',
+  'attached_files',
+  'additional_data'
+]
+
+/**
+ * 剥离 IDE 注入的包裹标签,只保留用户真实输入内容(标题去噪)。
+ *
+ * 口径(见 openspec/changes/improve-session-usage-list/design.md D1):
+ * 1. 若含 `<user_query>...</user_query>`,优先提取**最后一个**块的内部正文(命令行 +
+ *    真实输入并存时,真实输入在 user_query 内);容忍未闭合(取最后一个开标签之后的全部)。
+ *    取到 user_query 正文后**不再**做全局标签剥离,保留含尖括号的正常文本(如泛型 `Array<T>`)。
+ * 2. 否则移除已知噪声标签块(连内容,大小写不敏感、容忍未闭合)。
+ * 3. 再剥离任何残留的成对 / 单个尖括号标签标记,保留标签之间的可读文本。
+ *
+ * 非字符串安全兜底成空串;幂等(对已清洗文本再跑结果不变)。不做折行 / 截断(交 truncateTitle)。
+ */
+export function sanitizeTitle(text: unknown): string {
+  if (typeof text !== 'string') return ''
+
+  // 1. user_query:优先提取最后一个闭合块内部正文。
+  let inner: string | null = null
+  const closed = /<user_query\b[^>]*>([\s\S]*?)<\/user_query>/gi
+  let m: RegExpExecArray | null
+  while ((m = closed.exec(text)) !== null) inner = m[1]
+  if (inner === null) {
+    // 容忍未闭合:取最后一个 <user_query ...> 开标签之后的全部正文。
+    const open = /<user_query\b[^>]*>/gi
+    let lastEnd = -1
+    while ((m = open.exec(text)) !== null) lastEnd = m.index + m[0].length
+    if (lastEnd >= 0) inner = text.slice(lastEnd)
+  }
+  if (inner !== null) return inner.trim()
+
+  // 2. 无 user_query:移除已知噪声标签块(连内容,容忍未闭合)。
+  let s = text
+  for (const name of NOISE_TAG_NAMES) {
+    s = s.replace(new RegExp(`<${name}\\b[^>]*>[\\s\\S]*?<\\/${name}>`, 'gi'), ' ')
+    s = s.replace(new RegExp(`<${name}\\b[^>]*>[\\s\\S]*$`, 'gi'), ' ')
+  }
+  // 3. 剥离残留的成对 / 单个尖括号标签标记,保留标签之间可读文本。
+  s = s.replace(/<\/?[a-zA-Z][^>]*>/g, ' ')
+  return s.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * 把任意文本归一化成一行会话标题:先去标签(sanitizeTitle)/ 去首尾空白 / 折行(及连续
+ * 空白)压成单空格 / 截断。
  *
  * 非字符串或空白输入安全兜底成空串。各采集点与 store 共用,保证口径一致。
  */
 export function truncateTitle(text: unknown, max: number = TITLE_MAX_LEN): string {
-  if (typeof text !== 'string') return ''
-  const oneLine = text.replace(/\s+/g, ' ').trim()
+  const oneLine = sanitizeTitle(text).replace(/\s+/g, ' ').trim()
   if (!oneLine) return ''
   const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : TITLE_MAX_LEN
   return oneLine.length > limit ? oneLine.slice(0, limit) : oneLine
@@ -118,6 +174,8 @@ function normalizeRecord(key: string, raw: unknown): SessionUsageRecord | null {
     model: optStr(r.model),
     title: optStr(r.title),
     jiraKey: optStr(r.jiraKey),
+    projectName: optStr(r.projectName),
+    branch: optStr(r.branch),
     firstAt,
     lastAt
   }
@@ -240,6 +298,13 @@ export function accumulateSessionUsage(event: AiUsageEvent, root?: string): void
   const jiraKey = optStr(event.jiraKey)
   if (jiraKey) rec.jiraKey = jiraKey
 
+  // projectName / branch 非空覆盖(取最近一次,与 model 同策略;branch 中途切换以最近为准)。
+  const projectName = optStr(event.projectName)
+  if (projectName) rec.projectName = projectName
+
+  const branch = optStr(event.branch)
+  if (branch) rec.branch = branch
+
   // title 仅首次写入,后续轮不覆盖(标题恒为会话第一句)。
   if (!rec.title) {
     const title = truncateTitle(event.title)
@@ -261,6 +326,8 @@ export interface SessionUsageView {
   sessionId: string
   title?: string
   jiraKey?: string
+  projectName?: string
+  branch?: string
   model?: string
   inputTokens: number
   outputTokens: number
@@ -298,8 +365,11 @@ function recordToView(key: string, rec: SessionUsageRecord): SessionUsageView {
     key,
     source: rec.source,
     sessionId: rec.sessionId,
-    title: rec.title,
+    // 展示侧幂等去标签(D1):清洗本能力上线前落盘的「带标签脏标题」,不改写落盘数据。
+    title: rec.title ? truncateTitle(rec.title) || undefined : undefined,
     jiraKey: rec.jiraKey,
+    projectName: rec.projectName,
+    branch: rec.branch,
     model: rec.model,
     inputTokens: rec.input,
     outputTokens: rec.output,

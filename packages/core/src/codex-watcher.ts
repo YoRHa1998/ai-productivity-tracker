@@ -32,6 +32,7 @@ import { appendIteration } from './store/iteration-store.js'
 import { loadRequirement } from './store/requirement-store.js'
 import { isUsageCaptureActive, recordUsage } from './store/ai-usage-store.js'
 import { truncateTitle } from './store/session-usage-store.js'
+import { readProjectNameFromPackageJson } from './project-meta.js'
 
 const DEFAULT_CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
 /**
@@ -554,6 +555,9 @@ export class CodexWatcher {
           // 会话维度富化(D3):会话首个 user_message 截断作 title;命中 Jira 分支时附 jiraKey。
           title: truncateTitle(buf.title) || undefined,
           jiraKey: buf.issueKey || undefined,
+          // 会话所属项目 / 分支(best-effort,buffer 已持有 gitRoot / branch)。
+          projectName: readProjectNameFromPackageJson(buf.gitRoot) || undefined,
+          branch: buf.branch || undefined,
           at: reportedAt
         })
       } catch {

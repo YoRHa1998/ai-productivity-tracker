@@ -8,7 +8,9 @@ import {
   readSessionUsage,
   pruneSessions,
   querySessions,
+  sanitizeTitle,
   truncateTitle,
+  writeSessionUsage,
   RETENTION_DAYS,
   TITLE_MAX_LEN,
   type SessionUsageFile,
@@ -27,6 +29,8 @@ function evt(partial: Partial<AiUsageEvent> & Pick<AiUsageEvent, 'source'>): AiU
     toolCalls: partial.toolCalls,
     title: partial.title,
     jiraKey: partial.jiraKey,
+    projectName: partial.projectName,
+    branch: partial.branch,
     at: partial.at ?? new Date().toISOString(),
     tokens: partial.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0 }
   }
@@ -322,6 +326,171 @@ describe('recordUsage 集成会话维度', () => {
       root
     )
     expect(existsSync(sessionUsagePath(root))).toBe(false)
+  })
+})
+
+describe('sanitizeTitle', () => {
+  it('提取最后一个 user_query 正文,剥离外围标签', () => {
+    expect(sanitizeTitle('<timestamp>2026</timestamp> <user_query> 你好</user_query>')).toBe('你好')
+  })
+
+  it('命令行 + 真实输入并存时取最后一个 user_query', () => {
+    const text =
+      '<user_query>/cmd 模板</user_query>\n更多上下文\n<user_query>真正的问题</user_query>'
+    expect(sanitizeTitle(text)).toBe('真正的问题')
+  })
+
+  it('容忍未闭合 user_query(被截断的脏标题)', () => {
+    expect(sanitizeTitle('<timestamp>x</timestamp> <user_query> 帮我写代码')).toBe('帮我写代码')
+  })
+
+  it('已取 user_query 正文时保留含尖括号的正常文本(泛型)', () => {
+    expect(sanitizeTitle('<user_query>实现 Array<T> 工具类型</user_query>')).toBe(
+      '实现 Array<T> 工具类型'
+    )
+  })
+
+  it('无 user_query 时移除噪声标签块及其内容', () => {
+    const text =
+      '<timestamp>2026-06-24</timestamp><system_reminder>be nice</system_reminder>真实输入'
+    expect(sanitizeTitle(text)).toBe('真实输入')
+  })
+
+  it('无 user_query 时剥离残留的成对 / 单个尖括号标签', () => {
+    expect(sanitizeTitle('<foo>保留我</foo>')).toBe('保留我')
+    expect(sanitizeTitle('前缀 <bar> 中段')).toBe('前缀 中段')
+  })
+
+  it('未闭合的噪声标签块吞到文末', () => {
+    expect(sanitizeTitle('<additional_data> 一堆系统数据 to the end')).toBe('')
+  })
+
+  it('空 / 非字符串安全兜底', () => {
+    expect(sanitizeTitle('')).toBe('')
+    expect(sanitizeTitle(undefined)).toBe('')
+    expect(sanitizeTitle(123 as unknown)).toBe('')
+  })
+
+  it('幂等:对已清洗文本再跑结果不变', () => {
+    const once = sanitizeTitle('<timestamp>x</timestamp> <user_query> 你好</user_query>')
+    expect(sanitizeTitle(once)).toBe(once)
+    const noisy = sanitizeTitle('<system_reminder>r</system_reminder>纯文本')
+    expect(sanitizeTitle(noisy)).toBe(noisy)
+  })
+})
+
+describe('session-usage-store: projectName / branch', () => {
+  let root: string
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'aip-session-pb-'))
+  })
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('projectName / branch 非空覆盖更新(取最近)', () => {
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's',
+        projectName: 'proj-a',
+        branch: 'feature/INSTANT-1',
+        tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+      }),
+      root
+    )
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's',
+        projectName: 'proj-b',
+        branch: 'feature/INSTANT-2',
+        tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+      }),
+      root
+    )
+    const r = readSessionUsage(root).sessions['cursor:s']
+    expect(r.projectName).toBe('proj-b')
+    expect(r.branch).toBe('feature/INSTANT-2')
+  })
+
+  it('后续轮缺失 projectName / branch 时保留既有值(空不覆盖)', () => {
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's',
+        projectName: 'proj-a',
+        branch: 'main',
+        tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+      }),
+      root
+    )
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's',
+        tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+      }),
+      root
+    )
+    const r = readSessionUsage(root).sessions['cursor:s']
+    expect(r.projectName).toBe('proj-a')
+    expect(r.branch).toBe('main')
+  })
+
+  it('缺失时安全留空,不阻断累加', () => {
+    accumulateSessionUsage(
+      evt({
+        source: 'codex',
+        sessionId: 's',
+        tokens: { input: 5, output: 0, cacheRead: 0, cacheCreation: 0, total: 5 }
+      }),
+      root
+    )
+    const r = readSessionUsage(root).sessions['codex:s']
+    expect(r.total).toBe(5)
+    expect(r.projectName).toBeUndefined()
+    expect(r.branch).toBeUndefined()
+  })
+
+  it('querySessions 视图透传 projectName / branch', () => {
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's',
+        projectName: 'proj-x',
+        branch: 'dev',
+        tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+      }),
+      root
+    )
+    const view = querySessions({}, root)[0]
+    expect(view.projectName).toBe('proj-x')
+    expect(view.branch).toBe('dev')
+  })
+
+  it('历史记录无 projectName / branch 字段读取兼容,展示层清洗脏标题', () => {
+    const file: SessionUsageFile = {
+      version: 1,
+      sessions: {
+        'cursor:legacy': rec({
+          sessionId: 'legacy',
+          lastAt: '2026-06-24T10:00:00.000Z',
+          total: 100,
+          title: '<timestamp>2026</timestamp> <user_query> 旧脏标题</user_query>'
+        })
+      }
+    }
+    writeSessionUsage(file, root)
+    const view = querySessions({}, root)[0]
+    expect(view.projectName).toBeUndefined()
+    expect(view.branch).toBeUndefined()
+    // 展示侧幂等去标签(D1):落盘脏标题被清洗
+    expect(view.title).toBe('旧脏标题')
+    // 落盘数据不被改写
+    expect(readSessionUsage(root).sessions['cursor:legacy'].title).toBe(
+      '<timestamp>2026</timestamp> <user_query> 旧脏标题</user_query>'
+    )
   })
 })
 
