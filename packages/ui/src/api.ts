@@ -921,6 +921,53 @@ export function patchAiUsageConfig(input: { enabled: boolean }) {
   })
 }
 
+// ===== 会话维度用量(session-usage)看板 API =====
+
+/** 单个会话的用量视图(服务端已过滤 / 排序 / 截断)。 */
+export type SessionUsageView = {
+  key: string
+  source: AiUsageSource
+  sessionId: string
+  title?: string
+  jiraKey?: string
+  model?: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  totalTokens: number
+  turns: number
+  toolCalls: number
+  firstAt: string
+  lastAt: string
+}
+
+export type SessionUsageSortKey = 'total' | 'lastAt'
+export type SessionUsageSortDir = 'asc' | 'desc'
+
+export type FetchSessionUsageParams = {
+  from?: string
+  to?: string
+  source?: AiUsageSource
+  limit?: number
+  sort?: SessionUsageSortKey
+  dir?: SessionUsageSortDir
+}
+
+/** 查询会话维度用量列表(服务端排序 + 截断)。 */
+export function fetchSessionUsage(params: FetchSessionUsageParams = {}) {
+  return agentRequest<{ sessions: SessionUsageView[] }>(
+    `/ai-productivity/session-usage${buildQuery({
+      from: params.from,
+      to: params.to,
+      source: params.source,
+      limit: params.limit !== undefined ? String(params.limit) : undefined,
+      sort: params.sort,
+      dir: params.dir
+    })}`
+  )
+}
+
 // ===== 用量测算(usage-benchmark)秒表式窗口化测算 API =====
 
 /** 单工具在一次测算窗口内的累加值。 */

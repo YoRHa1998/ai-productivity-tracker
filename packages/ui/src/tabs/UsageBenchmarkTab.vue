@@ -8,6 +8,8 @@ import {
   ElMessage,
   ElMessageBox,
   ElEmpty,
+  ElRadioButton,
+  ElRadioGroup,
   ElTag
 } from 'element-plus'
 
@@ -25,6 +27,7 @@ import {
 } from '../api'
 import { useChartTheme } from '../composables/useChartTheme'
 import { VChart, type ECOption } from '../charts/echarts'
+import UsageBar from '../components/UsageBar.vue'
 
 const SOURCE_COLOR: Record<AiUsageSource, string> = {
   cursor: '#6ea7f5',
@@ -85,6 +88,27 @@ const activeRows = computed(() => {
 const compareSessions = computed(() => sessions.value.filter((s) => compareIds.value.has(s.id)))
 
 const canCompare = computed(() => compareSessions.value.length >= 2)
+
+/** 历史记录排序:最近(既有 endedAt 倒序)/ 用量高→低 / 用量低→高(前端本地排序)。 */
+const historySort = ref<'recent' | 'usage-desc' | 'usage-asc'>('recent')
+
+const sortedSessions = computed(() => {
+  const list = [...sessions.value]
+  if (historySort.value === 'usage-desc') list.sort((a, b) => sessionGrand(b) - sessionGrand(a))
+  else if (historySort.value === 'usage-asc') list.sort((a, b) => sessionGrand(a) - sessionGrand(b))
+  // 'recent' 保持服务端 endedAt 倒序原序
+  return list
+})
+
+/** 历史记录列表内最大 grandTotal,作 UsageBar 归一化 max。 */
+const historyMaxGrand = computed(() =>
+  sessions.value.reduce((m, s) => (sessionGrand(s) > m ? sessionGrand(s) : m), 0)
+)
+
+/** 对比区内最大 grandTotal,作 UsageBar 归一化 max。 */
+const compareMaxGrand = computed(() =>
+  compareSessions.value.reduce((m, s) => (sessionGrand(s) > m ? sessionGrand(s) : m), 0)
+)
 
 const { tokens: themeTokens } = useChartTheme()
 
@@ -403,6 +427,12 @@ onUnmounted(() => {
               </td>
             </tr>
             <tr>
+              <td>用量对比</td>
+              <td v-for="s in compareSessions" :key="s.id">
+                <UsageBar :value="sessionGrand(s)" :max="compareMaxGrand" />
+              </td>
+            </tr>
+            <tr>
               <td>对话次数</td>
               <td v-for="s in compareSessions" :key="s.id" class="aipt-num">
                 {{ formatNumber(s.grandTotal?.turns ?? 0) }}
@@ -421,13 +451,20 @@ onUnmounted(() => {
 
     <!-- 历史记录列表 -->
     <div class="aip-bmk__history">
-      <div class="aip-bmk__section-title">历史记录</div>
+      <div class="aip-bmk__history-head">
+        <div class="aip-bmk__section-title">历史记录</div>
+        <ElRadioGroup v-if="sessions.length > 0" v-model="historySort" size="small">
+          <ElRadioButton value="recent">最近</ElRadioButton>
+          <ElRadioButton value="usage-desc">用量高→低</ElRadioButton>
+          <ElRadioButton value="usage-asc">用量低→高</ElRadioButton>
+        </ElRadioGroup>
+      </div>
       <div v-if="sessions.length === 0" class="aip-bmk__empty aipt-glass">
         <ElEmpty description="还没有测算记录,选择工具并「开始记录」一次试试" />
       </div>
       <div v-else class="aip-bmk__cards">
         <article
-          v-for="s in sessions"
+          v-for="s in sortedSessions"
           :key="s.id"
           class="aip-bmk__card aipt-glass"
           :class="{ 'aip-bmk__card--checked': compareIds.has(s.id) }"
@@ -459,6 +496,7 @@ onUnmounted(() => {
               >总 token · {{ formatNumber(s.grandTotal?.turns ?? 0) }} 次对话</span
             >
           </div>
+          <UsageBar :value="sessionGrand(s)" :max="historyMaxGrand" />
           <div class="aip-bmk__card-sources">
             <span v-for="src in s.sources" :key="src" class="aip-bmk__card-source">
               <span class="aip-bmk__dot" :style="{ background: SOURCE_COLOR[src] }" />
@@ -720,6 +758,14 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--aipt-space-3);
+}
+
+.aip-bmk__history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aipt-space-4);
+  flex-wrap: wrap;
 }
 
 .aip-bmk__empty {

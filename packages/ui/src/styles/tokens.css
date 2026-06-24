@@ -60,6 +60,11 @@
   --aipt-state-info: #86c5e8;
   --aipt-state-info-soft: rgba(134, 197, 232, 0.14);
 
+  /* ----- 用量指示条三档配色(UsageBar,亮暗各一套,见下) ----- */
+  --aipt-usage-low: #7eddc5; /* 绿:用量轻 */
+  --aipt-usage-mid: #f5c489; /* 橙:用量中 */
+  --aipt-usage-high: #f08597; /* 红:用量重 */
+
   /* ----- 通用阶梯 ----- */
   --aipt-radius-sm: 6px;
   --aipt-radius-md: 10px;
@@ -203,6 +208,11 @@
   --aipt-state-warning: #b76b1d;
   --aipt-state-danger: #d33d5f;
   --aipt-state-info: #2f8cdd;
+
+  /* 用量条:浅色模式调暗以提升对比度 */
+  --aipt-usage-low: #16a07a;
+  --aipt-usage-mid: #b76b1d;
+  --aipt-usage-high: #d33d5f;
 }
 
 /* prefers-color-scheme 兜底:用户没有显式设置主题且系统是浅色,自动应用浅色 token */
@@ -239,6 +249,9 @@
     --aipt-state-warning: #b76b1d;
     --aipt-state-danger: #d33d5f;
     --aipt-state-info: #2f8cdd;
+    --aipt-usage-low: #16a07a;
+    --aipt-usage-mid: #b76b1d;
+    --aipt-usage-high: #d33d5f;
   }
 }
 

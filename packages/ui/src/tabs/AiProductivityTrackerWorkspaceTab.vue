@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ElButton,
   ElDrawer,
@@ -36,6 +37,9 @@ import { useNumberFlow } from '../composables/useNumberFlow'
 import SparkLine from '../charts/SparkLine.vue'
 import RetrospectiveReportPanel from './RetrospectiveReportPanel.vue'
 import '../styles/aip-shared.css'
+
+const route = useRoute()
+const router = useRouter()
 
 const loading = ref(false)
 const requirements = ref<RequirementSummary[]>([])
@@ -156,6 +160,10 @@ async function loadList() {
 }
 
 async function openDetail(row: RequirementSummary) {
+  await openDetailByKey(row.jiraKey)
+}
+
+async function openDetailByKey(jiraKey: string) {
   drawerOpen.value = true
   detailLoading.value = true
   currentDetail.value = null
@@ -163,7 +171,7 @@ async function openDetail(row: RequirementSummary) {
   estimateEditing.value = false
   titleEditing.value = false
   try {
-    currentDetail.value = await getRequirementDetail(row.jiraKey)
+    currentDetail.value = await getRequirementDetail(jiraKey)
     void maybeAutoSyncJiraTitle(currentDetail.value)
   } catch (err) {
     ElMessage.error((err as Error).message || '详情加载失败')
@@ -635,8 +643,15 @@ const avgBoostFlow = useNumberFlow(
   { duration: 900 }
 )
 
-onMounted(() => {
-  loadList()
+onMounted(async () => {
+  await loadList()
+  // 跨页下钻:?jira=KEY(如「AI 用量」会话徽标点击)自动打开对应需求详情,消费后清掉 query。
+  const deepLink = route.query.jira
+  const jiraKey = Array.isArray(deepLink) ? deepLink[0] : deepLink
+  if (typeof jiraKey === 'string' && jiraKey) {
+    void openDetailByKey(jiraKey)
+    void router.replace({ path: route.path, query: { ...route.query, jira: undefined } })
+  }
 })
 </script>
 

@@ -10,18 +10,26 @@ import {
   ElTooltip
 } from 'element-plus'
 
+import { useRouter } from 'vue-router'
+
 import {
   AgentRequestError,
   fetchAiUsage,
+  fetchSessionUsage,
   patchAiUsageConfig,
   AI_USAGE_SOURCES,
   type AiUsageDailyView,
   type AiUsageResponse,
-  type AiUsageSource
+  type AiUsageSource,
+  type SessionUsageView,
+  type SessionUsageSortDir
 } from '../api'
 import AuroraLineCard from '../charts/AuroraLineCard.vue'
+import UsageBar from '../components/UsageBar.vue'
 
 const DAYS = 14
+
+const router = useRouter()
 
 /** 展示偏好持久化键:是否把 cacheRead 合并进 token 展示口径。 */
 const MERGE_CACHE_READ_KEY = 'aipt:ai-usage:merge-cache-read'
@@ -189,8 +197,81 @@ async function onToggle(next: boolean) {
   }
 }
 
+// ───────────────────────── 会话明细区(会话 Top N) ─────────────────────────
+
+const SOURCE_LABEL: Record<AiUsageSource, string> = {
+  cursor: 'Cursor',
+  'claude-code': 'Claude Code',
+  codex: 'Codex'
+}
+
+/** 会话列表工具筛选('all' 全部);时间范围(近 7 / 30 天);排序方向(用量高→低 / 低→高)。 */
+const sessionSource = ref<'all' | AiUsageSource>('all')
+const sessionRangeDays = ref<7 | 30>(7)
+const sessionSortDir = ref<SessionUsageSortDir>('desc')
+const sessionLoading = ref(false)
+const sessions = ref<SessionUsageView[]>([])
+
+/** 当前列表内最大 total,作 UsageBar 归一化 max(最烧那条满格)。 */
+const sessionMaxTotal = computed(() =>
+  sessions.value.reduce((m, s) => (s.totalTokens > m ? s.totalTokens : m), 0)
+)
+
+function sessionFromIso(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - (sessionRangeDays.value - 1))
+  d.setHours(0, 0, 0, 0)
+  return d.toISOString()
+}
+
+async function loadSessions() {
+  sessionLoading.value = true
+  try {
+    const res = await fetchSessionUsage({
+      from: sessionFromIso(),
+      source: sessionSource.value === 'all' ? undefined : sessionSource.value,
+      sort: 'total',
+      dir: sessionSortDir.value,
+      limit: 50
+    })
+    sessions.value = res.sessions
+  } catch {
+    // 会话明细加载失败不阻断主页面,留空列表(空态引导兜底)
+    sessions.value = []
+  } finally {
+    sessionLoading.value = false
+  }
+}
+
+watch([sessionSource, sessionRangeDays, sessionSortDir], () => {
+  void loadSessions()
+})
+
+/** 会话展示标识:title 优先;否则短会话 ID + 工具(回退在模板里附时间窗)。 */
+function sessionLabel(s: SessionUsageView): string {
+  if (s.title && s.title.trim()) return s.title
+  const shortId = s.sessionId ? s.sessionId.slice(0, 8) : '—'
+  return `${SOURCE_LABEL[s.source]} · ${shortId}`
+}
+
+function formatTimeWindow(s: SessionUsageView): string {
+  const fmt = (iso: string) => {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return ''
+    return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+  const from = fmt(s.firstAt)
+  const to = fmt(s.lastAt)
+  return from && to ? `${from} → ${to}` : from || to
+}
+
+function gotoRequirement(jiraKey: string) {
+  void router.push({ path: '/workspace', query: { jira: jiraKey } })
+}
+
 onMounted(() => {
   void load()
+  void loadSessions()
 })
 </script>
 
@@ -289,6 +370,70 @@ onMounted(() => {
           :value-formatter="chartValueFormatter"
           :height="300"
         />
+      </div>
+
+      <div class="aip-usage__sessions aipt-glass">
+        <div class="aip-usage__sessions-head">
+          <div class="aip-usage__chart-title">会话用量(最烧 token 的会话)</div>
+          <div class="aip-usage__sessions-filters">
+            <ElRadioGroup v-model="sessionSource" size="small">
+              <ElRadioButton value="all">全部</ElRadioButton>
+              <ElRadioButton value="cursor">Cursor</ElRadioButton>
+              <ElRadioButton value="claude-code">Claude</ElRadioButton>
+              <ElRadioButton value="codex">Codex</ElRadioButton>
+            </ElRadioGroup>
+            <ElRadioGroup v-model="sessionRangeDays" size="small">
+              <ElRadioButton :value="7">近 7 天</ElRadioButton>
+              <ElRadioButton :value="30">近 30 天</ElRadioButton>
+            </ElRadioGroup>
+            <ElRadioGroup v-model="sessionSortDir" size="small">
+              <ElRadioButton value="desc">用量高→低</ElRadioButton>
+              <ElRadioButton value="asc">用量低→高</ElRadioButton>
+            </ElRadioGroup>
+          </div>
+        </div>
+
+        <div v-if="sessions.length === 0" class="aip-usage__sessions-empty">
+          <ElEmpty
+            :description="
+              enabled
+                ? '当前筛选下暂无会话,产生新对话后这里会按会话展示 token 明细'
+                : '开启 AI 整体用量采集后,这里会按会话展示 token 明细'
+            "
+          />
+        </div>
+
+        <div v-else class="aip-usage__session-list">
+          <article v-for="s in sessions" :key="s.key" class="aip-usage__session-row">
+            <div class="aip-usage__session-main">
+              <div class="aip-usage__session-title-line">
+                <span class="aip-usage__session-title" :title="s.title || s.sessionId">{{
+                  sessionLabel(s)
+                }}</span>
+                <button
+                  v-if="s.jiraKey"
+                  type="button"
+                  class="aip-usage__session-jira"
+                  :title="`跳转到需求 ${s.jiraKey}`"
+                  @click="gotoRequirement(s.jiraKey)"
+                >
+                  {{ s.jiraKey }}
+                </button>
+              </div>
+              <div class="aip-usage__session-meta">
+                <span class="aip-usage__session-source">{{ SOURCE_LABEL[s.source] }}</span>
+                <span v-if="s.model" class="aip-usage__session-model" :title="s.model">{{
+                  s.model
+                }}</span>
+                <span class="aip-usage__session-window">{{ formatTimeWindow(s) }}</span>
+                <span class="aip-usage__session-turns">{{ formatNumber(s.turns) }} 轮</span>
+              </div>
+            </div>
+            <div class="aip-usage__session-bar">
+              <UsageBar :value="s.totalTokens" :max="sessionMaxTotal" />
+            </div>
+          </article>
+        </div>
       </div>
     </template>
   </section>
@@ -467,5 +612,118 @@ onMounted(() => {
   justify-content: center;
   min-height: 300px;
   padding: var(--aipt-space-5);
+}
+
+.aip-usage__sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipt-space-4);
+  padding: var(--aipt-space-5);
+}
+
+.aip-usage__sessions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aipt-space-4);
+  flex-wrap: wrap;
+}
+
+.aip-usage__sessions-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--aipt-space-3);
+  flex-wrap: wrap;
+}
+
+.aip-usage__sessions-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+}
+
+.aip-usage__session-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.aip-usage__session-row {
+  display: flex;
+  align-items: center;
+  gap: var(--aipt-space-4);
+  padding: var(--aipt-space-3) 0;
+  border-bottom: 1px solid var(--aipt-border-faint);
+}
+
+.aip-usage__session-row:last-child {
+  border-bottom: none;
+}
+
+.aip-usage__session-main {
+  flex: 1 1 60%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aip-usage__session-title-line {
+  display: flex;
+  align-items: center;
+  gap: var(--aipt-space-2);
+  min-width: 0;
+}
+
+.aip-usage__session-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aipt-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aip-usage__session-jira {
+  flex: 0 0 auto;
+  border: 1px solid var(--aipt-border-strong);
+  background: var(--aipt-surface);
+  color: var(--aipt-text-secondary);
+  border-radius: var(--aipt-radius-pill);
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    color var(--aipt-duration-fast),
+    border-color var(--aipt-duration-fast);
+}
+
+.aip-usage__session-jira:hover {
+  color: var(--aipt-text-on-accent);
+  background: var(--aipt-primary);
+  border-color: var(--aipt-primary);
+}
+
+.aip-usage__session-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--aipt-space-3);
+  font-size: 11px;
+  color: var(--aipt-text-muted);
+  flex-wrap: wrap;
+}
+
+.aip-usage__session-model {
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aip-usage__session-bar {
+  flex: 1 1 40%;
+  min-width: 140px;
+  max-width: 320px;
 }
 </style>
