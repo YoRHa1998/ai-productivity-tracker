@@ -1649,4 +1649,56 @@ describe('TranscriptWatcher.processFileForTest', () => {
       expect(r.title).toBe('修复登录 bug')
     })
   })
+
+  describe('非 git 会话用量解耦(无 gitRoot/branch 仍记最小用量)', () => {
+    let nonGitDir: string
+
+    beforeEach(() => {
+      __resetAiUsageCacheForTest()
+      setAiUsageEnabled(true)
+      nonGitDir = mkdtempSync(join(tmpdir(), 'aip-nogit-cwd-'))
+    })
+    afterEach(() => {
+      __resetAiUsageCacheForTest()
+      rmSync(nonGitDir, { recursive: true, force: true })
+    })
+
+    it('cwd 不在任何 git 仓库时仍记录会话用量,projectName/branch/jiraKey 留空且不写需求', async () => {
+      const projectDir = join(claudeRoot, '-nogit-fake')
+      mkdirSync(projectDir, { recursive: true })
+      const f = join(projectDir, 's-nogit.jsonl')
+      const base = Date.now()
+      const ts = (offsetMs: number): string => new Date(base + offsetMs).toISOString()
+      writeFileSync(
+        f,
+        buildUserLine({
+          cwd: nonGitDir,
+          gitBranch: '',
+          sessionId: 'sess-nogit',
+          content: '随便问一句',
+          timestamp: ts(0)
+        }) +
+          buildAssistantLine({
+            cwd: nonGitDir,
+            gitBranch: '',
+            sessionId: 'sess-nogit',
+            stopReason: 'end_turn',
+            totalInput: 10,
+            totalOutput: 20,
+            timestamp: ts(5000),
+            uuid: 'nogit-a'
+          })
+      )
+
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+
+      const r = readSessionUsage().sessions['claude-code:sess-nogit']
+      expect(r).toBeDefined()
+      expect(r.total).toBeGreaterThan(0)
+      expect(r.projectName).toBeUndefined()
+      expect(r.branch).toBeUndefined()
+      expect(r.jiraKey).toBeUndefined()
+    })
+  })
 })

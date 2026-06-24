@@ -475,11 +475,12 @@ export class CodexWatcher {
 
     const info = this.sessionMeta.get(sessionId)
     if (!info) return null
-    const gitRoot = findGitRoot(info.cwd)
-    if (!gitRoot) return null
-    const branch = info.gitBranch ?? getCurrentBranch(gitRoot)
-    if (!branch) return null
-    const issueKey = extractIssueKey(branch) ?? ''
+    // AI 整体用量解耦(D2):不再因「非 git 仓库 / 无分支」return null 丢弃整轮。
+    // gitRoot / branch 缺失时退化为空串,flushTurn 仍记最小用量(projectName / branch 留空),
+    // 仅需求维度(binding / iteration)在 issueKey 非空时才走 —— 与 Cursor usageOnly 旁路对齐。
+    const gitRoot = findGitRoot(info.cwd) ?? ''
+    const branch = gitRoot ? (info.gitBranch ?? getCurrentBranch(gitRoot) ?? '') : ''
+    const issueKey = branch ? (extractIssueKey(branch) ?? '') : ''
 
     const sessionState = this.state.sessions[sessionId]
     const baseline = sessionState?.flushedTotal ?? 0

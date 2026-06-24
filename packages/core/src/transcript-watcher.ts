@@ -403,16 +403,14 @@ export class TranscriptWatcher {
    *   上一次 flush 的 (input,output,cacheCreation,cacheRead) 四元组,完全相同视为 stale 复制。
    */
   private routeMessage(msg: ParsedAssistantMessage): void {
-    const gitRoot = findGitRoot(msg.cwd)
-    if (!gitRoot) return
+    // AI 整体用量解耦(D2):不再因「非 git 仓库 / 无分支」early-return 丢弃整轮。
+    // gitRoot / branch 缺失时退化为空串,flushTurn 仍记最小用量(projectName / branch 留空),
+    // 仅需求维度(binding / iteration)在 issueKey 非空时才走 —— 与 Cursor usageOnly 旁路对齐。
+    const gitRoot = findGitRoot(msg.cwd) ?? ''
+    const branch = gitRoot ? (msg.gitBranch ?? getCurrentBranch(gitRoot) ?? '') : ''
 
-    const branch = msg.gitBranch ?? getCurrentBranch(gitRoot)
-    if (!branch) return
-
-    // AI 整体用量旁路(D2):issueKey 闸门**之前**不再 early-return —— 非 Jira 分支(main 等)
-    // 也要建 turnBuffer 并在 flushTurn 记录整体用量。issueKey 为空串时,flushTurn 只记用量、
-    // 不写需求 iteration / binding(需求维度行为完全不变)。
-    const issueKey = extractIssueKey(branch) ?? ''
+    // issueKey 为空串时,flushTurn 只记用量、不写需求 iteration / binding(需求维度行为完全不变)。
+    const issueKey = branch ? (extractIssueKey(branch) ?? '') : ''
 
     // requirement 是否 init 留到 flushTurn 里判断 — 即使没 init,也要让 binding/pending
     // 维持旧行为(累加到 pending,等待 init 时 mergePendingTokens 回填)。

@@ -18,6 +18,8 @@ import { upsertBinding } from './bindings.js'
 import { saveRequirement } from './store/requirement-store.js'
 import { listIterations } from './store/iteration-store.js'
 import { aipRoot } from './store/paths.js'
+import { setAiUsageEnabled, __resetAiUsageCacheForTest } from './store/ai-usage-store.js'
+import { readSessionUsage } from './store/session-usage-store.js'
 
 interface TokenTotals {
   input: number
@@ -245,7 +247,7 @@ describe('CodexWatcher.processFileForTest', () => {
     expect(listIterations('ABC-1').length).toBe(0)
   })
 
-  it('cwd 不在 git 仓库 → 静默跳过', async () => {
+  it('cwd 不在 git 仓库 → 不落 iteration(需求维度仍不写)', async () => {
     setupBound()
     const f = sessionFile()
     const nonGit = mkdtempSync(join(tmpdir(), 'aip-codex-nongit-'))
@@ -260,6 +262,41 @@ describe('CodexWatcher.processFileForTest', () => {
     await w.processFileForTest(f)
     expect(listIterations('ABC-1').length).toBe(0)
     rmSync(nonGit, { recursive: true, force: true })
+  })
+
+  it('cwd 不在 git 仓库但用量开启 → 仍记最小会话用量,projectName/branch/jiraKey 留空', async () => {
+    __resetAiUsageCacheForTest()
+    setAiUsageEnabled(true)
+    const nonGit = mkdtempSync(join(tmpdir(), 'aip-codex-nongit-usage-'))
+    try {
+      const f = sessionFile('nogit-usage.jsonl')
+      const base = Date.now()
+      const ts = (offsetMs: number): string => new Date(base + offsetMs).toISOString()
+      writeFileSync(
+        f,
+        sessionMetaLine({
+          sessionId: 'sess-nogit-usage',
+          cwd: nonGit,
+          gitBranch: '',
+          timestamp: ts(0)
+        }) +
+          userMessageLine(ts(1000)) +
+          tokenCountLine({ input: 100, output: 20 }, ts(2000)) +
+          taskCompleteLine(ts(3000))
+      )
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+
+      const r = readSessionUsage().sessions['codex:sess-nogit-usage']
+      expect(r).toBeDefined()
+      expect(r.total).toBeGreaterThan(0)
+      expect(r.projectName).toBeUndefined()
+      expect(r.branch).toBeUndefined()
+      expect(r.jiraKey).toBeUndefined()
+    } finally {
+      __resetAiUsageCacheForTest()
+      rmSync(nonGit, { recursive: true, force: true })
+    }
   })
 
   it('已绑定但需求未 init → 不落 iteration', async () => {
