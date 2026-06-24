@@ -5,7 +5,7 @@ import { cwd } from 'node:process'
 
 import { findAipDir, bindingsPath } from './lib/paths.js'
 import { withBindingsLock, type BindingsFile } from './lib/files.js'
-import { extractIssueKey, getCurrentBranch } from './lib/git.js'
+import { extractIssueKey, findGitRoot, getCurrentBranch } from './lib/git.js'
 import {
   postHookToAgent,
   postTurnStartToAgent,
@@ -133,7 +133,14 @@ export function tryParseHookInput(raw: string): HookInput | null {
  *   3) stdin JSON 里的 workspace_roots[] 数组(Cursor 官方 hook payload schema)
  *   4) cwd()(Claude Code 路径会落在项目根)
  */
-export function resolveProjectRoot(input: HookInput | null): string | null {
+/**
+ * 收集候选工作区目录(按优先级):
+ *   1) CURSOR_PROJECT_DIR / CLAUDE_PROJECT_DIR 环境变量(老约定)
+ *   2) WORKSPACE_FOLDER_PATHS(':' 分隔,多工作区全收)
+ *   3) stdin JSON 的 workspace_roots[]
+ *   4) cwd()
+ */
+function listWorkspaceCandidates(input: HookInput | null): string[] {
   const candidates: string[] = []
 
   const env = process.env.CURSOR_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR
@@ -156,12 +163,36 @@ export function resolveProjectRoot(input: HookInput | null): string | null {
   }
 
   candidates.push(cwd())
+  return candidates
+}
 
-  for (const candidate of candidates) {
+export function resolveProjectRoot(input: HookInput | null): string | null {
+  for (const candidate of listWorkspaceCandidates(input)) {
     const aipDir = findAipDir(candidate)
     if (aipDir) return candidate
   }
   return null
+}
+
+/**
+ * 解析「AI 用量」采集所需的 git 上下文(项目根 + 分支),**不依赖需求基础设施**。
+ *
+ * 与 resolveProjectRoot 的区别:后者要求目录含 `.ai-productivity/`(init 过需求才有),
+ * 本函数只要候选目录在任意 git 仓库内即可命中——用于在 main 等无 Jira key 分支 /
+ * 未 init 需求的仓库,让用量会话仍能富化项目名 + 分支。三条候选都不命中 git 时返回
+ * { gitRoot: null, branch: null }(纯 scratch 会话)。
+ */
+export function resolveGitContext(input: HookInput | null): {
+  gitRoot: string | null
+  branch: string | null
+} {
+  for (const candidate of listWorkspaceCandidates(input)) {
+    const gitRoot = findGitRoot(candidate)
+    if (gitRoot) {
+      return { gitRoot, branch: getCurrentBranch(gitRoot) }
+    }
+  }
+  return { gitRoot: null, branch: null }
 }
 
 function describeSimpleResult(label: string, result: AgentSimpleResult): string {
@@ -352,16 +383,21 @@ export async function runHook() {
   // 无论后续走哪条路径,先写 sentinel 证明 hook 到达过
   writeSentinelIfDebug(rawStdin, parsedInput, projectRoot, tokens)
 
-  // 没找到项目根 → 该 IDE 当前会话不在被追踪仓库。
+  // 没找到项目根(未 init 需求的仓库 / 非仓库会话)→ 不走需求链路。
   //
   // AI 整体用量旁路(D3):静默退出**之前**,若是带 token 的 iteration 事件(afterAgentResponse /
-  // Stop),仍向 daemon 上报一条「最小化用量信号」(usageOnly:true,只带 source/tokens/model/
-  // sessionId,**不带正文 / 需求上下文**),供整体用量采集覆盖非仓库会话。
-  // 上报容错静默:daemon 不可达 / 失败一律吞掉,绝不影响 hook 退出码与既有需求链路。
+  // Stop),仍向 daemon 上报「用量信号」(usageOnly:true,不带正文 / 需求上下文)供整体用量采集。
+  // 解耦增强:这里不再依赖需求基础设施 `.ai-productivity/`,而是独立解析一次 git 上下文,
+  // 把 projectRoot / branch 一并上报,使 main 等无 Jira key 分支的会话也能富化项目名 + 分支
+  // (daemon buildCursorUsageEvent 据此填 projectName / branch / jiraKey)。非 git 会话则两者
+  // 留空,仅记最小用量。上报容错静默:daemon 不可达 / 失败一律吞掉,绝不影响 hook 退出码。
   if (!projectRoot) {
     if (eventRoute === 'iteration' && tokens > 0) {
+      const { gitRoot, branch } = resolveGitContext(parsedInput)
       try {
         await postHookToAgent({
+          projectRoot: gitRoot ?? undefined,
+          branch: branch ?? undefined,
           tokens,
           source,
           dedupeKey,

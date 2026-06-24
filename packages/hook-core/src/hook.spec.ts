@@ -1,10 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import { findGitRoot } from './lib/git.js'
 import {
   buildDedupeKey,
   buildRawHookPayload,
   classifyHookEvent,
   parseHookTokens,
+  resolveGitContext,
   resolveProjectRoot,
   tryParseHookInput,
   type HookInput
@@ -221,6 +228,75 @@ describe('resolveProjectRoot', () => {
       if (orig.claude != null) process.env.CLAUDE_PROJECT_DIR = orig.claude
       if (orig.workspaces != null) process.env.WORKSPACE_FOLDER_PATHS = orig.workspaces
       else delete process.env.WORKSPACE_FOLDER_PATHS
+    }
+  })
+})
+
+describe('resolveGitContext (AI 用量解耦 — 不依赖 .ai-productivity)', () => {
+  let repo: string
+  let envBackup: {
+    cursor?: string
+    claude?: string
+    workspaces?: string
+  }
+
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'aip-gitctx-'))
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'a@b.c'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'tester'], { cwd: repo })
+    execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'init'], { cwd: repo })
+    envBackup = {
+      cursor: process.env.CURSOR_PROJECT_DIR,
+      claude: process.env.CLAUDE_PROJECT_DIR,
+      workspaces: process.env.WORKSPACE_FOLDER_PATHS
+    }
+    delete process.env.CURSOR_PROJECT_DIR
+    delete process.env.CLAUDE_PROJECT_DIR
+    delete process.env.WORKSPACE_FOLDER_PATHS
+  })
+
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true })
+    if (envBackup.cursor != null) process.env.CURSOR_PROJECT_DIR = envBackup.cursor
+    else delete process.env.CURSOR_PROJECT_DIR
+    if (envBackup.claude != null) process.env.CLAUDE_PROJECT_DIR = envBackup.claude
+    else delete process.env.CLAUDE_PROJECT_DIR
+    if (envBackup.workspaces != null) process.env.WORKSPACE_FOLDER_PATHS = envBackup.workspaces
+    else delete process.env.WORKSPACE_FOLDER_PATHS
+  })
+
+  it('main 等无 Jira key 分支(且未 init 需求)仍能从 workspace_roots 解出 gitRoot + branch', () => {
+    // 关键:repo 没有 .ai-productivity/,resolveProjectRoot 会返回 null,
+    // 但 resolveGitContext 仍应命中 git 仓库并拿到 main 分支。
+    expect(resolveProjectRoot({ workspace_roots: [repo] } as HookInput)).toBeNull()
+
+    const ctx = resolveGitContext({ workspace_roots: [repo] } as HookInput)
+    // macOS tmpdir 经 /private 符号链接,git --show-toplevel 会规范化路径,故只断言后缀。
+    expect(ctx.gitRoot).not.toBeNull()
+    expect(ctx.gitRoot && ctx.gitRoot.length).toBeGreaterThan(0)
+    expect(ctx.branch).toBe('main')
+  })
+
+  it('findGitRoot 对非 git 目录返回 null(resolveGitContext 该候选不命中的底层依据)', () => {
+    // 注:resolveGitContext 末尾兜底会追加 cwd(),而测试进程 cwd 本身在 git 仓库内,
+    // 故无法直接断言 resolveGitContext 整体为 null;这里改为验证其底层 findGitRoot 的语义。
+    const scratch = mkdtempSync(join(tmpdir(), 'aip-nogit-'))
+    try {
+      expect(findGitRoot(scratch)).toBeNull()
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  it('首个 workspace_root 非 git 时,跳过它继续找下一个 git 候选', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'aip-nogit-'))
+    try {
+      const ctx = resolveGitContext({ workspace_roots: [scratch, repo] } as HookInput)
+      expect(ctx.branch).toBe('main')
+      expect(ctx.gitRoot).not.toBeNull()
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
     }
   })
 })
