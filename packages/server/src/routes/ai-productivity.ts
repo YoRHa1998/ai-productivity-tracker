@@ -86,11 +86,20 @@ import {
   removeRetrospective,
   writeRetrospective,
   recordUsage,
-  isAiUsageEnabled,
+  isUsageCaptureActive,
   setAiUsageEnabled,
   getAiUsageView,
+  startBenchmark,
+  stopBenchmark,
+  cancelBenchmark,
+  deleteBenchmark,
+  readBenchmark,
   type AiUsageEvent,
   type AiUsageView,
+  type AiUsageSource,
+  type UsageBenchmarkActive,
+  type UsageBenchmarkSession,
+  type UsageBenchmarkFile,
   type StoredRequirement,
   type StoredSubtask,
   type UpdateRequirementPatch,
@@ -700,11 +709,12 @@ export async function handleAiProductivityHook(
     return
   }
 
-  // AI 整体用量旁路(D2/4.2):在 issueKey 解析之前记录 Cursor 整体用量,独立于 Jira 绑定。
-  // 放在 dedupe 闸门之后(去重事件不重复累加),enabled===false 时短路;容错静默。
+  // AI 整体用量 + 用量测算旁路(D2/D3/4.2):在 issueKey 解析之前记录 Cursor 用量,独立于 Jira 绑定。
+  // 放在 dedupe 闸门之后(去重事件不重复累加);闸门 isUsageCaptureActive = 整体用量开启 或
+  // 有进行中测算会话,都不活跃时短路;容错静默。
   const usageAt = (deps.nowFn ?? (() => new Date()))().toISOString()
   let cursorUsageRecorded = false
-  if (isAiUsageEnabled()) {
+  if (isUsageCaptureActive()) {
     try {
       const ev = buildCursorUsageEvent(body, usageAt)
       if (ev) {
@@ -2355,6 +2365,98 @@ export function handleAiProductivityPatchAiUsageConfig(
   }
   const config = setAiUsageEnabled(body.enabled)
   ok(res, config)
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 用量测算(usage-benchmark,秒表式窗口化测算,panel-origin 放行)
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /ai-productivity/usage-benchmark
+ * 返回 `{ active, sessions }`:进行中会话(无则 null)+ 历史记录(倒序)。
+ */
+export function handleGetUsageBenchmark(res: ServerResponse): void {
+  const file: UsageBenchmarkFile = readBenchmark()
+  ok(res, { active: file.active, sessions: file.sessions })
+}
+
+export interface StartUsageBenchmarkBody {
+  label?: unknown
+  sources?: unknown
+}
+
+const BENCHMARK_SOURCE_SET: readonly AiUsageSource[] = ['cursor', 'claude-code', 'codex']
+
+/**
+ * POST /ai-productivity/usage-benchmark/start
+ * body `{ label?, sources:string[] }`:启动测算会话。sources 非法 / 已有 active → 400。
+ */
+export function handleStartUsageBenchmark(
+  res: ServerResponse,
+  body: StartUsageBenchmarkBody
+): void {
+  const rawSources = Array.isArray(body?.sources) ? body.sources : []
+  const sources = Array.from(
+    new Set(
+      rawSources.filter((s): s is AiUsageSource =>
+        BENCHMARK_SOURCE_SET.includes(s as AiUsageSource)
+      )
+    )
+  )
+  if (sources.length === 0) {
+    fail(res, 400, '至少选择一个有效的 AI 工具(cursor / claude-code / codex)')
+    return
+  }
+  const label = typeof body?.label === 'string' ? body.label : undefined
+  try {
+    const active: UsageBenchmarkActive = startBenchmark({ label, sources })
+    ok(res, { active })
+  } catch (err) {
+    fail(res, 400, err instanceof Error ? err.message : '启动测算失败')
+  }
+}
+
+/**
+ * POST /ai-productivity/usage-benchmark/stop
+ * 结束当前测算会话,返回刚定格的记录。无 active → 400。
+ */
+export function handleStopUsageBenchmark(res: ServerResponse): void {
+  try {
+    const session: UsageBenchmarkSession = stopBenchmark()
+    ok(res, { session })
+  } catch (err) {
+    fail(res, 400, err instanceof Error ? err.message : '结束测算失败')
+  }
+}
+
+/**
+ * POST /ai-productivity/usage-benchmark/cancel
+ * 取消当前测算会话(幂等),返回 `{ active:null }`。
+ */
+export function handleCancelUsageBenchmark(res: ServerResponse): void {
+  cancelBenchmark()
+  ok(res, { active: null })
+}
+
+export interface DeleteUsageBenchmarkBody {
+  id?: unknown
+}
+
+/**
+ * POST /ai-productivity/usage-benchmark/delete
+ * body `{ id }`:删除一条历史记录(幂等)。
+ */
+export function handleDeleteUsageBenchmark(
+  res: ServerResponse,
+  body: DeleteUsageBenchmarkBody
+): void {
+  const id = typeof body?.id === 'string' ? body.id : ''
+  if (!id) {
+    fail(res, 400, 'id 必填')
+    return
+  }
+  deleteBenchmark(id)
+  ok(res, { ok: true })
 }
 
 // 缺省导出,提供给 server.ts 注册

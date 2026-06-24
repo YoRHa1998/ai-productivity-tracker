@@ -48,6 +48,13 @@ import {
   handleAiProductivityListHarnessSuggestions,
   handleAiProductivityGetAiUsage,
   handleAiProductivityPatchAiUsageConfig,
+  handleGetUsageBenchmark,
+  handleStartUsageBenchmark,
+  handleStopUsageBenchmark,
+  handleCancelUsageBenchmark,
+  handleDeleteUsageBenchmark,
+  type StartUsageBenchmarkBody,
+  type DeleteUsageBenchmarkBody,
   type InitRequestBody,
   type HookRequestBody,
   type PatchAiUsageConfigBody,
@@ -320,6 +327,34 @@ async function routeAiProductivity(
   if (method === 'PATCH' && pathname === '/ai-productivity/ai-usage/config') {
     const body = parseJson(await readBody(req)) as Record<string, unknown> | null
     handleAiProductivityPatchAiUsageConfig(res, (body ?? {}) as PatchAiUsageConfigBody)
+    return true
+  }
+
+  // ── 用量测算(panel-origin 放行,见 isAiProductivityPanelPath 默认放行)──
+  if (method === 'GET' && pathname === '/ai-productivity/usage-benchmark') {
+    handleGetUsageBenchmark(res)
+    return true
+  }
+
+  if (method === 'POST' && pathname === '/ai-productivity/usage-benchmark/start') {
+    const body = parseJson(await readBody(req)) as Record<string, unknown> | null
+    handleStartUsageBenchmark(res, (body ?? {}) as StartUsageBenchmarkBody)
+    return true
+  }
+
+  if (method === 'POST' && pathname === '/ai-productivity/usage-benchmark/stop') {
+    handleStopUsageBenchmark(res)
+    return true
+  }
+
+  if (method === 'POST' && pathname === '/ai-productivity/usage-benchmark/cancel') {
+    handleCancelUsageBenchmark(res)
+    return true
+  }
+
+  if (method === 'POST' && pathname === '/ai-productivity/usage-benchmark/delete') {
+    const body = parseJson(await readBody(req)) as Record<string, unknown> | null
+    handleDeleteUsageBenchmark(res, (body ?? {}) as DeleteUsageBenchmarkBody)
     return true
   }
 

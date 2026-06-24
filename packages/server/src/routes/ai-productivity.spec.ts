@@ -42,6 +42,11 @@ import {
   handleAiProductivityDeleteRetrospective,
   handleAiProductivityGetAiUsage,
   handleAiProductivityPatchAiUsageConfig,
+  handleGetUsageBenchmark,
+  handleStartUsageBenchmark,
+  handleStopUsageBenchmark,
+  handleCancelUsageBenchmark,
+  handleDeleteUsageBenchmark,
   __resetCursorTurnStartsForTest,
   __snapshotCursorTurnStarts
 } from './ai-productivity.js'
@@ -65,7 +70,9 @@ import {
   lessonHandledSentinelPath,
   setAiUsageEnabled,
   readAiUsage,
-  __resetAiUsageCacheForTest
+  __resetAiUsageCacheForTest,
+  readBenchmark,
+  __resetBenchmarkCacheForTest
 } from '@ai-productivity-tracker/core/store'
 import type { ServerConfig as ServiceConfig } from '../config.js'
 
@@ -3341,7 +3348,7 @@ describe('AI 整体用量端点 + Cursor 采集', () => {
           cache_read_tokens: 100
         }
       },
-      { dedupePath, nowFn: () => new Date('2026-06-23T10:00:00.000Z') }
+      { dedupePath, nowFn: () => new Date() }
     )
     setAiUsageEnabled(false)
 
@@ -3435,5 +3442,90 @@ describe('AI 整体用量端点 + Cursor 采集', () => {
     const day = Object.keys(usage.daily['cursor'])[0]
     expect(usage.daily['cursor'][day].total).toBe(200)
     expect(usage.daily['cursor'][day].turns).toBe(1)
+  })
+})
+
+describe('用量测算端点(usage-benchmark)', () => {
+  let aipCleanup: () => void
+
+  beforeEach(() => {
+    const setup = setupAipRoot()
+    aipCleanup = setup.restore
+    __resetBenchmarkCacheForTest()
+    __resetAiUsageCacheForTest()
+  })
+
+  afterEach(() => {
+    aipCleanup()
+    __resetBenchmarkCacheForTest()
+    __resetAiUsageCacheForTest()
+  })
+
+  it('启动 → 查询 → 结束 → 删除 全流程', () => {
+    const start = makeMockRes()
+    handleStartUsageBenchmark(start.res, { label: '优化前', sources: ['cursor', 'codex'] })
+    expect(start.statusCode).toBe(200)
+    const active = JSON.parse(start.body).data.active
+    expect(active.sources).toEqual(['cursor', 'codex'])
+
+    const get = makeMockRes()
+    handleGetUsageBenchmark(get.res)
+    expect(JSON.parse(get.body).data.active.id).toBe(active.id)
+
+    const stop = makeMockRes()
+    handleStopUsageBenchmark(stop.res)
+    expect(stop.statusCode).toBe(200)
+    const session = JSON.parse(stop.body).data.session
+    expect(session.id).toBe(active.id)
+    expect(readBenchmark().active).toBeNull()
+    expect(readBenchmark().sessions).toHaveLength(1)
+
+    const del = makeMockRes()
+    handleDeleteUsageBenchmark(del.res, { id: session.id })
+    expect(del.statusCode).toBe(200)
+    expect(readBenchmark().sessions).toHaveLength(0)
+  })
+
+  it('空 sources 报 400', () => {
+    const mock = makeMockRes()
+    handleStartUsageBenchmark(mock.res, { sources: [] })
+    expect(mock.statusCode).toBe(400)
+  })
+
+  it('已有 active 时重复启动报 400', () => {
+    handleStartUsageBenchmark(makeMockRes().res, { sources: ['cursor'] })
+    const dup = makeMockRes()
+    handleStartUsageBenchmark(dup.res, { sources: ['codex'] })
+    expect(dup.statusCode).toBe(400)
+  })
+
+  it('无 active 时结束报 400', () => {
+    const mock = makeMockRes()
+    handleStopUsageBenchmark(mock.res)
+    expect(mock.statusCode).toBe(400)
+  })
+
+  it('取消进行中会话(幂等)', () => {
+    handleStartUsageBenchmark(makeMockRes().res, { sources: ['cursor'] })
+    const cancel = makeMockRes()
+    handleCancelUsageBenchmark(cancel.res)
+    expect(cancel.statusCode).toBe(200)
+    expect(readBenchmark().active).toBeNull()
+    // 再取消无副作用
+    const cancel2 = makeMockRes()
+    handleCancelUsageBenchmark(cancel2.res)
+    expect(cancel2.statusCode).toBe(200)
+  })
+
+  it('删除不存在 id 幂等返回 200', () => {
+    const mock = makeMockRes()
+    handleDeleteUsageBenchmark(mock.res, { id: 'nope' })
+    expect(mock.statusCode).toBe(200)
+  })
+
+  it('删除缺 id 报 400', () => {
+    const mock = makeMockRes()
+    handleDeleteUsageBenchmark(mock.res, {})
+    expect(mock.statusCode).toBe(400)
   })
 })
