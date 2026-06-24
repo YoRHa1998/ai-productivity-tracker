@@ -3460,6 +3460,8 @@ describe('会话维度用量端点(session-usage)', () => {
         sessionId: partial.sessionId,
         title: partial.title,
         jiraKey: partial.jiraKey,
+        projectName: partial.projectName,
+        branch: partial.branch,
         at: partial.at ?? new Date().toISOString(),
         tokens: partial.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0 }
       },
@@ -3527,6 +3529,70 @@ describe('会话维度用量端点(session-usage)', () => {
     handleSessionUsageQuery(mock.res, { source: 'bogus', limit: 'x', sort: 'weird' })
     expect(mock.statusCode).toBe(200)
     expect(JSON.parse(mock.body).data.sessions).toEqual([])
+  })
+
+  it('project 精确过滤 + 不被 top-N 截断挤掉', () => {
+    seedSession({
+      source: 'cursor',
+      sessionId: 'web-big',
+      projectName: 'acme-web',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 100, output: 0, cacheRead: 0, cacheCreation: 0, total: 100 }
+    })
+    seedSession({
+      source: 'codex',
+      sessionId: 'api-huge',
+      projectName: 'acme-api',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 9000, output: 0, cacheRead: 0, cacheCreation: 0, total: 9000 }
+    })
+    const mock = makeMockRes()
+    handleSessionUsageQuery(mock.res, { project: 'acme-web', limit: '1' })
+    const sessions = JSON.parse(mock.body).data.sessions
+    expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(['web-big'])
+  })
+
+  it('project 缺省 / 空向后兼容(不过滤)', () => {
+    seedSession({
+      source: 'cursor',
+      sessionId: 'p1',
+      projectName: 'acme-web',
+      tokens: { input: 10, output: 0, cacheRead: 0, cacheCreation: 0, total: 10 }
+    })
+    seedSession({
+      source: 'cursor',
+      sessionId: 'p2',
+      tokens: { input: 20, output: 0, cacheRead: 0, cacheCreation: 0, total: 20 }
+    })
+    const mock = makeMockRes()
+    handleSessionUsageQuery(mock.res, { project: '  ' })
+    const sessions = JSON.parse(mock.body).data.sessions
+    expect(sessions.map((s: { sessionId: string }) => s.sessionId).sort()).toEqual(['p1', 'p2'])
+  })
+
+  it('project 与 source / 时间窗叠加', () => {
+    seedSession({
+      source: 'cursor',
+      sessionId: 'web-cursor',
+      projectName: 'acme-web',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 100, output: 0, cacheRead: 0, cacheCreation: 0, total: 100 }
+    })
+    seedSession({
+      source: 'codex',
+      sessionId: 'web-codex',
+      projectName: 'acme-web',
+      at: '2026-06-24T10:00:00.000Z',
+      tokens: { input: 200, output: 0, cacheRead: 0, cacheCreation: 0, total: 200 }
+    })
+    const mock = makeMockRes()
+    handleSessionUsageQuery(mock.res, {
+      project: 'acme-web',
+      source: 'cursor',
+      from: '2026-06-23T00:00:00.000Z'
+    })
+    const sessions = JSON.parse(mock.body).data.sessions
+    expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(['web-cursor'])
   })
 })
 

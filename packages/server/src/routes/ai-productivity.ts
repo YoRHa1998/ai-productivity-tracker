@@ -91,6 +91,7 @@ import {
   getAiUsageView,
   querySessions,
   truncateTitle,
+  isPlaceholderTitle,
   startBenchmark,
   stopBenchmark,
   cancelBenchmark,
@@ -636,7 +637,8 @@ function extractUserTextFromTranscriptObj(obj: unknown): string {
  * Best-effort 读 Cursor transcript_path 首条 user 行文本作会话标题素材(D3)。
  *
  * 读不到文件 / 解析失败 / 无 user 行一律安全返回空串(标题留空,不阻断用量累加)。
- * 仅读前 TRANSCRIPT_TITLE_MAX_BYTES 字节,逐行 JSON 解析,命中首条 user 文本即返回。
+ * 仅读前 TRANSCRIPT_TITLE_MAX_BYTES 字节,逐行 JSON 解析。逐条 user 文本经清洗 + 占位
+ * 判定,跳过空 / 纯占位素材,返回首条「清洗后非空且非占位」的原文(D1);取不到则空。
  */
 function readTranscriptTitle(transcriptPath: unknown): string {
   if (typeof transcriptPath !== 'string' || !transcriptPath) return ''
@@ -664,7 +666,8 @@ function readTranscriptTitle(transcriptPath: unknown): string {
         if (line.trim()) {
           try {
             const text = extractUserTextFromTranscriptObj(JSON.parse(line))
-            if (text.trim()) return text
+            // 跳过清洗后为空 / 纯占位的素材,继续向后扫描首条真实输入(D1)。
+            if (text.trim() && !isPlaceholderTitle(text)) return text
           } catch {
             /* 跳过非 JSON 行 */
           }
@@ -673,7 +676,8 @@ function readTranscriptTitle(transcriptPath: unknown): string {
     }
     if (acc.trim()) {
       try {
-        return extractUserTextFromTranscriptObj(JSON.parse(acc))
+        const text = extractUserTextFromTranscriptObj(JSON.parse(acc))
+        if (text.trim() && !isPlaceholderTitle(text)) return text
       } catch {
         /* ignore */
       }
@@ -2483,7 +2487,8 @@ const SESSION_USAGE_SOURCES: readonly AiUsageSource[] = ['cursor', 'claude-code'
  * 看板侧 GET /ai-productivity/session-usage (panel-origin 放行)
  *
  * query:`from?` / `to?`(ISO/日期)、`source?`(cursor|claude-code|codex)、
- * `limit?`(默认 50)、`sort?`(total|lastAt,默认 total)、`dir?`(asc|desc,默认 desc)。
+ * `project?`(按 projectName 精确过滤,空 / 缺省不过滤)、`limit?`(默认 50)、
+ * `sort?`(total|lastAt,默认 total)、`dir?`(asc|desc,默认 desc)。
  * 服务端完成过滤 / 排序 / 截断后返回 `{ sessions }`。
  */
 export function handleSessionUsageQuery(
@@ -2492,6 +2497,7 @@ export function handleSessionUsageQuery(
     from?: string | null
     to?: string | null
     source?: string | null
+    project?: string | null
     limit?: string | null
     sort?: string | null
     dir?: string | null
@@ -2504,6 +2510,8 @@ export function handleSessionUsageQuery(
     (SESSION_USAGE_SOURCES as readonly string[]).includes(query.source)
       ? (query.source as AiUsageSource)
       : undefined
+  const project =
+    typeof query.project === 'string' && query.project.trim() ? query.project.trim() : undefined
   let limit: number | undefined
   if (typeof query.limit === 'string' && query.limit.trim()) {
     const parsed = Number(query.limit)
@@ -2512,7 +2520,15 @@ export function handleSessionUsageQuery(
   const sort: SessionUsageSortKey = query.sort === 'lastAt' ? 'lastAt' : 'total'
   const dir: SessionUsageSortDir = query.dir === 'asc' ? 'asc' : 'desc'
 
-  const sessions: SessionUsageView[] = querySessions({ from, to, source, limit, sort, dir })
+  const sessions: SessionUsageView[] = querySessions({
+    from,
+    to,
+    source,
+    project,
+    limit,
+    sort,
+    dir
+  })
   ok(res, { sessions })
 }
 

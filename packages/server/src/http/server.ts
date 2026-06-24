@@ -337,6 +337,7 @@ async function routeAiProductivity(
       from: url.searchParams.get('from'),
       to: url.searchParams.get('to'),
       source: url.searchParams.get('source'),
+      project: url.searchParams.get('project'),
       limit: url.searchParams.get('limit'),
       sort: url.searchParams.get('sort'),
       dir: url.searchParams.get('dir')
