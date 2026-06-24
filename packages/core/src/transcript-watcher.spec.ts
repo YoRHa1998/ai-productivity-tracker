@@ -18,6 +18,8 @@ import { upsertBinding } from './bindings.js'
 import { saveRequirement } from './store/requirement-store.js'
 import { listIterations, loadRawPayload } from './store/iteration-store.js'
 import { aipRoot } from './store/paths.js'
+import { setAiUsageEnabled, __resetAiUsageCacheForTest } from './store/ai-usage-store.js'
+import { readSessionUsage } from './store/session-usage-store.js'
 
 interface AssistantLineOptions {
   cwd: string
@@ -1591,6 +1593,60 @@ describe('TranscriptWatcher.processFileForTest', () => {
       // 不修改文件,再次处理 → skip,iteration 数不变
       await w.processFileForTest(f)
       expect(listIterations('ABC-1').length).toBe(1)
+    })
+  })
+
+  describe('会话标题素材:跳过首条占位取后续真实输入', () => {
+    beforeEach(() => {
+      __resetAiUsageCacheForTest()
+      setAiUsageEnabled(true)
+    })
+    afterEach(() => {
+      __resetAiUsageCacheForTest()
+    })
+
+    it('首条 user 行为纯占位 [Image] 时跳过,取后续真实输入作会话标题', async () => {
+      const projectDir = join(claudeRoot, '-x-fake')
+      mkdirSync(projectDir, { recursive: true })
+      const f = join(projectDir, 's1.jsonl')
+      const branch = 'feature/ABC-1-watcher'
+      // 时间戳取「当下」附近,避免会话维度 prune(retention 30 天)把记录裁掉。
+      const base = Date.now()
+      const ts = (offsetMs: number): string => new Date(base + offsetMs).toISOString()
+      writeFileSync(
+        f,
+        buildUserLine({
+          cwd: repoRoot,
+          gitBranch: branch,
+          sessionId: 'sess-title',
+          content: '[Image]',
+          timestamp: ts(0)
+        }) +
+          buildUserLine({
+            cwd: repoRoot,
+            gitBranch: branch,
+            sessionId: 'sess-title',
+            content: '修复登录 bug',
+            timestamp: ts(5000)
+          }) +
+          buildAssistantLine({
+            cwd: repoRoot,
+            gitBranch: branch,
+            sessionId: 'sess-title',
+            stopReason: 'end_turn',
+            totalInput: 10,
+            totalOutput: 20,
+            timestamp: ts(10000),
+            uuid: 'title-a'
+          })
+      )
+
+      const w = makeWatcher()
+      await w.processFileForTest(f)
+
+      const r = readSessionUsage().sessions['claude-code:sess-title']
+      expect(r).toBeDefined()
+      expect(r.title).toBe('修复登录 bug')
     })
   })
 })

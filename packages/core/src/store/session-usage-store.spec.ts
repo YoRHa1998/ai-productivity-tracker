@@ -8,6 +8,7 @@ import {
   readSessionUsage,
   pruneSessions,
   querySessions,
+  isPlaceholderTitle,
   sanitizeTitle,
   truncateTitle,
   writeSessionUsage,
@@ -491,6 +492,190 @@ describe('session-usage-store: projectName / branch', () => {
     expect(readSessionUsage(root).sessions['cursor:legacy'].title).toBe(
       '<timestamp>2026</timestamp> <user_query> 旧脏标题</user_query>'
     )
+  })
+})
+
+describe('isPlaceholderTitle', () => {
+  it('空 / 非字符串 / 纯空白 → true', () => {
+    expect(isPlaceholderTitle('')).toBe(true)
+    expect(isPlaceholderTitle('   ')).toBe(true)
+    expect(isPlaceholderTitle(undefined)).toBe(true)
+    expect(isPlaceholderTitle(123 as unknown)).toBe(true)
+  })
+
+  it('纯标签清洗后为空 → true', () => {
+    expect(isPlaceholderTitle('<timestamp>x</timestamp>')).toBe(true)
+    expect(isPlaceholderTitle('<additional_data> 一堆系统数据 to the end')).toBe(true)
+  })
+
+  it('纯图片占位(含全/半角括号、大小写、多块、带文件名)→ true', () => {
+    expect(isPlaceholderTitle('[Image]')).toBe(true)
+    expect(isPlaceholderTitle('[image]')).toBe(true)
+    expect(isPlaceholderTitle('[图片]')).toBe(true)
+    expect(isPlaceholderTitle('【图片】')).toBe(true)
+    expect(isPlaceholderTitle('[Image][Image]')).toBe(true)
+    expect(isPlaceholderTitle('[Image: foo.png]')).toBe(true)
+    expect(isPlaceholderTitle('  [Image]  ')).toBe(true)
+  })
+
+  it('含真实正文 → false(不误判)', () => {
+    expect(isPlaceholderTitle('修复登录 bug')).toBe(false)
+    expect(isPlaceholderTitle('[Image] 帮我看看这张图')).toBe(false)
+    expect(isPlaceholderTitle('<user_query>实现 Array<T></user_query>')).toBe(false)
+  })
+
+  it('幂等', () => {
+    const v = '[Image]'
+    expect(isPlaceholderTitle(v)).toBe(isPlaceholderTitle(v))
+  })
+})
+
+describe('session-usage-store: title 占位跳过', () => {
+  let root: string
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'aip-session-ph-'))
+  })
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('首条素材为空 / 纯占位时跳过不写,留待后续真实输入补位', () => {
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's',
+        title: '[Image]',
+        tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+      }),
+      root
+    )
+    expect(readSessionUsage(root).sessions['cursor:s'].title).toBeUndefined()
+
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's',
+        title: '修复登录 bug',
+        tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+      }),
+      root
+    )
+    expect(readSessionUsage(root).sessions['cursor:s'].title).toBe('修复登录 bug')
+  })
+
+  it('含真实文本的素材正常写入(不误删)', () => {
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's',
+        title: '[Image] 看看这张截图',
+        tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+      }),
+      root
+    )
+    expect(readSessionUsage(root).sessions['cursor:s'].title).toBe('[Image] 看看这张截图')
+  })
+
+  it('幂等:重复写占位仍不落标题', () => {
+    const e = evt({
+      source: 'cursor',
+      sessionId: 's',
+      title: '[Image]',
+      tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+    })
+    accumulateSessionUsage(e, root)
+    accumulateSessionUsage(e, root)
+    expect(readSessionUsage(root).sessions['cursor:s'].title).toBeUndefined()
+  })
+
+  it('展示侧:历史落盘的纯占位标题视为空走兜底(undefined),不改写落盘', () => {
+    const file: SessionUsageFile = {
+      version: 1,
+      sessions: {
+        'cursor:ph': rec({
+          sessionId: 'ph',
+          lastAt: '2026-06-24T10:00:00.000Z',
+          total: 100,
+          title: '[Image]'
+        })
+      }
+    }
+    writeSessionUsage(file, root)
+    const view = querySessions({}, root)[0]
+    expect(view.title).toBeUndefined()
+    expect(readSessionUsage(root).sessions['cursor:ph'].title).toBe('[Image]')
+  })
+})
+
+describe('session-usage-store: project 过滤', () => {
+  let root: string
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'aip-session-proj-'))
+  })
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  function seedProjects() {
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 'a',
+        projectName: 'acme-web',
+        at: '2026-06-24T10:00:00.000Z',
+        tokens: { input: 100, output: 0, cacheRead: 0, cacheCreation: 0, total: 100 }
+      }),
+      root
+    )
+    accumulateSessionUsage(
+      evt({
+        source: 'codex',
+        sessionId: 'b',
+        projectName: 'acme-api',
+        at: '2026-06-24T10:00:00.000Z',
+        tokens: { input: 200, output: 0, cacheRead: 0, cacheCreation: 0, total: 200 }
+      }),
+      root
+    )
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 'c',
+        at: '2026-06-24T10:00:00.000Z',
+        tokens: { input: 50, output: 0, cacheRead: 0, cacheCreation: 0, total: 50 }
+      }),
+      root
+    )
+  }
+
+  it('按 projectName 精确过滤', () => {
+    seedProjects()
+    expect(querySessions({ project: 'acme-web' }, root).map((r) => r.sessionId)).toEqual(['a'])
+    expect(querySessions({ project: 'acme-api' }, root).map((r) => r.sessionId)).toEqual(['b'])
+  })
+
+  it('缺省 / 空字符串不过滤(向后兼容)', () => {
+    seedProjects()
+    expect(
+      querySessions({}, root)
+        .map((r) => r.sessionId)
+        .sort()
+    ).toEqual(['a', 'b', 'c'])
+    expect(querySessions({ project: '' }, root)).toHaveLength(3)
+    expect(querySessions({ project: '   ' }, root)).toHaveLength(3)
+  })
+
+  it('与 source / 时间窗叠加', () => {
+    seedProjects()
+    expect(
+      querySessions({ project: 'acme-web', source: 'cursor' }, root).map((r) => r.sessionId)
+    ).toEqual(['a'])
+    expect(querySessions({ project: 'acme-web', source: 'codex' }, root)).toHaveLength(0)
+    expect(
+      querySessions({ project: 'acme-api', from: '2026-06-24T00:00:00.000Z' }, root).map(
+        (r) => r.sessionId
+      )
+    ).toEqual(['b'])
   })
 })
 

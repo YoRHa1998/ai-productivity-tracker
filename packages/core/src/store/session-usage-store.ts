@@ -137,6 +137,29 @@ export function sanitizeTitle(text: unknown): string {
 }
 
 /**
+ * 已知「纯图片占位」块宽松匹配:半/全角方括号包裹,内部正文以 `image` / `图片` 前缀
+ * (大小写不敏感),容忍带文件名等变体(如 `[Image: foo.png]`)。
+ *
+ * 集合可按需扩展(后续如需覆盖视频 / 文件占位,补充前缀即可),漏判仅退化为
+ * 「标题显示占位」,不影响用量数据。
+ */
+const PLACEHOLDER_BLOCK = /[[【]\s*(?:image|图片)[^\]】]*[\]】]/gi
+
+/**
+ * 判定一段文本是否为「无意义素材」(空 / 纯图片占位),用于采集与展示双侧跳过。
+ *
+ * 口径(见 openspec/changes/optimize-session-usage-panel/design.md D1):先 `sanitizeTitle`,
+ * 若结果为空,或剥离全部已知占位块(可多块,如 `[Image][Image]`)后无其它可读正文,
+ * 则视为无意义。幂等;非字符串安全兜底成 true。
+ */
+export function isPlaceholderTitle(text: unknown): boolean {
+  const cleaned = sanitizeTitle(text)
+  if (!cleaned) return true
+  const stripped = cleaned.replace(PLACEHOLDER_BLOCK, ' ').replace(/\s+/g, ' ').trim()
+  return stripped === ''
+}
+
+/**
  * 把任意文本归一化成一行会话标题:先去标签(sanitizeTitle)/ 去首尾空白 / 折行(及连续
  * 空白)压成单空格 / 截断。
  *
@@ -306,9 +329,10 @@ export function accumulateSessionUsage(event: AiUsageEvent, root?: string): void
   if (branch) rec.branch = branch
 
   // title 仅首次写入,后续轮不覆盖(标题恒为会话第一句)。
+  // 纯占位 / 空素材跳过不写,留待后续真实输入补位(D1)。
   if (!rec.title) {
     const title = truncateTitle(event.title)
-    if (title) rec.title = title
+    if (title && !isPlaceholderTitle(title)) rec.title = title
   }
 
   pruneSessions(file)
@@ -350,6 +374,8 @@ export interface QuerySessionsParams {
   to?: string
   /** 工具过滤 */
   source?: AiUsageSource
+  /** 所属项目过滤(按 projectName 精确匹配;空 / 缺省不过滤) */
+  project?: string
   /** 截断条数(默认 50) */
   limit?: number
   /** 排序字段(默认 total) */
@@ -365,8 +391,12 @@ function recordToView(key: string, rec: SessionUsageRecord): SessionUsageView {
     key,
     source: rec.source,
     sessionId: rec.sessionId,
-    // 展示侧幂等去标签(D1):清洗本能力上线前落盘的「带标签脏标题」,不改写落盘数据。
-    title: rec.title ? truncateTitle(rec.title) || undefined : undefined,
+    // 展示侧幂等去标签(D1):清洗本能力上线前落盘的「带标签脏标题」,不改写落盘数据;
+    // 历史落盘的纯占位标题(如 `[Image]`)视为空走兜底短 ID。
+    title:
+      rec.title && !isPlaceholderTitle(rec.title)
+        ? truncateTitle(rec.title) || undefined
+        : undefined,
     jiraKey: rec.jiraKey,
     projectName: rec.projectName,
     branch: rec.branch,
@@ -393,6 +423,7 @@ function recordToView(key: string, rec: SessionUsageRecord): SessionUsageView {
 export function querySessions(params: QuerySessionsParams = {}, root?: string): SessionUsageView[] {
   const file = readSessionUsage(root)
   const source = isSessionUsageSource(params.source) ? params.source : undefined
+  const project = optStr(params.project)
   const fromMs = params.from ? Date.parse(params.from) : NaN
   const toMs = params.to ? Date.parse(params.to) : NaN
   const sort: SessionUsageSortKey = params.sort === 'lastAt' ? 'lastAt' : 'total'
@@ -404,6 +435,7 @@ export function querySessions(params: QuerySessionsParams = {}, root?: string): 
 
   let entries = Object.entries(file.sessions).filter(([, rec]) => {
     if (source && rec.source !== source) return false
+    if (project && rec.projectName !== project) return false
     if (Number.isFinite(fromMs)) {
       const last = Date.parse(rec.lastAt)
       if (Number.isFinite(last) && last < fromMs) return false

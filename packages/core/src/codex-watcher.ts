@@ -31,7 +31,7 @@ import { buildIterationExtras } from './iteration-extras.js'
 import { appendIteration } from './store/iteration-store.js'
 import { loadRequirement } from './store/requirement-store.js'
 import { isUsageCaptureActive, recordUsage } from './store/ai-usage-store.js'
-import { truncateTitle } from './store/session-usage-store.js'
+import { truncateTitle, isPlaceholderTitle } from './store/session-usage-store.js'
 import { readProjectNameFromPackageJson } from './project-meta.js'
 
 const DEFAULT_CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
@@ -443,8 +443,11 @@ export class CodexWatcher {
       if (buf) {
         buf.userPromptTs = boundary.timestamp
         buf.lastEventTs = boundary.timestamp
-        // 取首个 user_message 文本作会话标题素材(本轮未捕获过时才写)。
-        if (!buf.title) buf.title = truncateTitle(boundary.text)
+        // 取首个 user_message 文本作会话标题素材:跳过空 / 纯占位素材,留待后续真实输入补位(D1)。
+        if (!buf.title) {
+          const material = truncateTitle(boundary.text)
+          if (material && !isPlaceholderTitle(material)) buf.title = material
+        }
       }
       return
     }

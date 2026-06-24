@@ -27,7 +27,7 @@ import { buildIterationExtras } from './iteration-extras.js'
 import { appendIteration } from './store/iteration-store.js'
 import { loadRequirement } from './store/requirement-store.js'
 import { isUsageCaptureActive, recordUsage } from './store/ai-usage-store.js'
-import { truncateTitle } from './store/session-usage-store.js'
+import { truncateTitle, isPlaceholderTitle } from './store/session-usage-store.js'
 import { readProjectNameFromPackageJson } from './project-meta.js'
 
 const DEFAULT_CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects')
@@ -520,9 +520,16 @@ export class TranscriptWatcher {
   private routeUserMessage(msg: ParsedUserMessage): void {
     if (!msg.sessionId) return
     this.pendingUserPromptTs.set(msg.sessionId, msg.timestamp)
-    // 捕获首条用户输入文本作会话标题素材(tool_result 等空文本行不覆盖已有素材)。
+    // 捕获首条用户输入文本作会话标题素材:跳过空 / 纯占位(如 [Image])素材,且已有有意义
+    // 素材优先(不被后续覆盖),使首条真实输入能补位(D1)。
     const titleMaterial = truncateTitle(msg.text)
-    if (titleMaterial) this.pendingUserTitle.set(msg.sessionId, titleMaterial)
+    if (
+      titleMaterial &&
+      !isPlaceholderTitle(titleMaterial) &&
+      !this.pendingUserTitle.has(msg.sessionId)
+    ) {
+      this.pendingUserTitle.set(msg.sessionId, titleMaterial)
+    }
     // v2.14.1 同 sessionId 若已有 buffer(典型场景:LLM 多轮 tool_use 期间用户工具结果回填),
     // 把 user 行 timestamp 也算作「会话活动信号」,避免 stale flush 把活会话误切。
     const turnKey = msg.sessionId
