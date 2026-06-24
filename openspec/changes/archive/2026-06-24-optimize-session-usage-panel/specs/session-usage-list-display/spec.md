@@ -1,10 +1,4 @@
-# session-usage-list-display Specification
-
-## Purpose
-
-TBD - created by archiving change improve-session-usage-list. Update Purpose after archive.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 会话标题去标签展示
 
@@ -45,54 +39,6 @@ TBD - created by archiving change improve-session-usage-list. Update Purpose aft
 - **WHEN** 用户真实输入(经 user_query 提取后)本身包含成对尖括号片段(如代码泛型)
 - **THEN** 系统在已取到 user_query 正文的情况下不再做全局标签剥离,保留该正文内容
 
-### Requirement: 会话用量条绝对阈值配色
-
-看板会话用量列表 SHALL 按会话有效用量合计(total)的**绝对值**为用量条配色,分三档:`total` 达到危险阈值(默认 300K)显示红色、达到警示阈值(默认 150K)显示橙色、否则显示绿色。该配色 MUST 与用量条长度的归一化分母无关(即便条很短,只要绝对量达阈值即显对应颜色)。阈值 MUST 为可覆盖的默认常量。颜色 MUST 取既有设计 token(`--aipt-usage-low/mid/high`),不写死色值。「用量测算」记录列表的既有相对比值配色行为 MUST NOT 受影响。
-
-#### Scenario: 大于等于 300K 显红
-
-- **WHEN** 某会话 total ≥ 300K
-- **THEN** 该会话用量条显示红色(`--aipt-usage-high`)
-
-#### Scenario: 150K 到 300K 显橙
-
-- **WHEN** 某会话 total 在 150K(含)到 300K(不含)之间
-- **THEN** 该会话用量条显示橙色(`--aipt-usage-mid`)
-
-#### Scenario: 小于 150K 显绿
-
-- **WHEN** 某会话 total < 150K
-- **THEN** 该会话用量条显示绿色(`--aipt-usage-low`)
-
-#### Scenario: 绝对配色不受条长分母影响
-
-- **WHEN** 某会话条长占总和比例很小、但其 total ≥ 300K
-- **THEN** 该会话用量条仍显示红色
-
-#### Scenario: 用量测算页配色不变
-
-- **WHEN** 用户查看「用量测算」记录列表
-- **THEN** 其用量条仍按相对当前列表最大值的比值分档配色,行为与本能力上线前一致
-
-### Requirement: 会话用量条按列表总和占比
-
-看板会话用量列表 SHALL 按「各会话有效用量合计占当前列表总和的比例」决定用量条长度:条长百分比 = 该会话 total ÷ 当前列表所有会话 total 之和。当列表仅有 1 个会话时其条长 MUST 占满 100%;当有多个会话时各条 MUST 按各自占总和的比例渲染(例如比例 5:3:2 → 50% / 30% / 20%)。列表总和为 0 或空列表时条长 MUST 安全归零。
-
-#### Scenario: 单会话占满
-
-- **WHEN** 列表中仅有 1 个会话
-- **THEN** 该会话用量条长度为 100%
-
-#### Scenario: 多会话按比例
-
-- **WHEN** 列表中有 3 个会话,total 比例为 5:3:2
-- **THEN** 三条用量条长度分别为 50%、30%、20%
-
-#### Scenario: 空列表或全零安全
-
-- **WHEN** 列表为空或所有会话 total 之和为 0
-- **THEN** 用量条长度归零,不产生非法宽度
-
 ### Requirement: 会话所属项目与分支记录
 
 系统 SHALL 在会话维度记录中持久化该会话所属的项目名(projectName)与分支(branch),均为 best-effort 可选字段,并在看板会话行稳定展示非空值。各采集链路(Cursor hook / Claude transcript-watcher / Codex watcher)MUST 在能解析到时填入:项目名取业务仓库 `package.json` 的 name(失败回退仓库目录名),分支取采集点已持有的当前分支。两字段 MUST 经会话用量查询视图(`SessionUsageView`)透传给看板。看板会话行 SHALL 在已有元信息旁轻量展示非空的项目名与分支(各自独立标签);字段为空时 MUST NOT 渲染对应标签。缺失时(如非仓库会话 / 解析失败 / 上线前的历史记录)MUST 安全留空且 MUST NOT 阻断会话维度的 token 累加。
@@ -116,6 +62,8 @@ TBD - created by archiving change improve-session-usage-list. Update Purpose aft
 
 - **WHEN** 看板查询到本能力上线前写入、无 projectName / branch 的旧会话记录
 - **THEN** 系统正常返回该记录,对应字段为空,不报错
+
+## ADDED Requirements
 
 ### Requirement: 会话用量列表筛选与排序
 
