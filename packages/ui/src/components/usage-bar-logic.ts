@@ -11,6 +11,15 @@ export interface UsageThresholds {
 
 export const DEFAULT_USAGE_THRESHOLDS: UsageThresholds = { warn: 0.33, danger: 0.66 }
 
+/**
+ * 绝对 token 阈值(会话列表配色用):达到 danger(300K)红、达到 warn(150K)橙、否则绿。
+ * 与「条长归一化分母」无关,可被 props 覆盖。
+ */
+export const DEFAULT_ABSOLUTE_USAGE_THRESHOLDS: UsageThresholds = {
+  warn: 150_000,
+  danger: 300_000
+}
+
 /** value 相对 max 的归一化比值,clamp 到 [0,1];max<=0 或非法时为 0。 */
 export function usageRatio(value: number, max: number): number {
   if (!Number.isFinite(max) || max <= 0) return 0
@@ -31,6 +40,22 @@ export function usageColorVar(
 ): string {
   if (ratio >= thresholds.danger) return 'var(--aipt-usage-high)'
   if (ratio >= thresholds.warn) return 'var(--aipt-usage-mid)'
+  return 'var(--aipt-usage-low)'
+}
+
+/**
+ * 按 value 的**绝对值**落入绿/橙/红三档,返回对应 CSS 变量引用。
+ *
+ * 与 usageColorVar(按比值)互补:用于会话列表「绝对量级」配色,即便条很短,只要
+ * value 达阈值即显对应颜色。
+ */
+export function usageColorVarAbsolute(
+  value: number,
+  thresholds: UsageThresholds = DEFAULT_ABSOLUTE_USAGE_THRESHOLDS
+): string {
+  const v = Number.isFinite(value) && value > 0 ? value : 0
+  if (v >= thresholds.danger) return 'var(--aipt-usage-high)'
+  if (v >= thresholds.warn) return 'var(--aipt-usage-mid)'
   return 'var(--aipt-usage-low)'
 }
 

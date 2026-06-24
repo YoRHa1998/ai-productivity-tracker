@@ -212,9 +212,12 @@ const sessionSortDir = ref<SessionUsageSortDir>('desc')
 const sessionLoading = ref(false)
 const sessions = ref<SessionUsageView[]>([])
 
-/** 当前列表内最大 total,作 UsageBar 归一化 max(最烧那条满格)。 */
-const sessionMaxTotal = computed(() =>
-  sessions.value.reduce((m, s) => (s.totalTokens > m ? s.totalTokens : m), 0)
+/**
+ * 当前列表所有会话 total 之和,作 UsageBar 归一化 max:条长 = value/Σ = 占总和比例。
+ * 单条 → Σ=value → 100%;多条按各自占比(5:3:2 → 50/30/20)。Σ=0 时 UsageBar 安全归零。
+ */
+const sessionSumTotal = computed(() =>
+  sessions.value.reduce((sum, s) => sum + (s.totalTokens > 0 ? s.totalTokens : 0), 0)
 )
 
 function sessionFromIso(): string {
@@ -422,6 +425,18 @@ onMounted(() => {
               </div>
               <div class="aip-usage__session-meta">
                 <span class="aip-usage__session-source">{{ SOURCE_LABEL[s.source] }}</span>
+                <span
+                  v-if="s.projectName"
+                  class="aip-usage__session-project"
+                  :title="`项目 ${s.projectName}`"
+                  >{{ s.projectName }}</span
+                >
+                <span
+                  v-if="s.branch"
+                  class="aip-usage__session-branch"
+                  :title="`分支 ${s.branch}`"
+                  >{{ s.branch }}</span
+                >
                 <span v-if="s.model" class="aip-usage__session-model" :title="s.model">{{
                   s.model
                 }}</span>
@@ -430,7 +445,7 @@ onMounted(() => {
               </div>
             </div>
             <div class="aip-usage__session-bar">
-              <UsageBar :value="s.totalTokens" :max="sessionMaxTotal" />
+              <UsageBar :value="s.totalTokens" :max="sessionSumTotal" color-mode="absolute" />
             </div>
           </article>
         </div>
@@ -719,6 +734,18 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.aip-usage__session-project,
+.aip-usage__session-branch {
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 6px;
+  border-radius: var(--aipt-radius-pill);
+  background: var(--aipt-surface-strong);
+  color: var(--aipt-text-secondary);
 }
 
 .aip-usage__session-bar {

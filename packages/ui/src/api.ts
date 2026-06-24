@@ -930,6 +930,10 @@ export type SessionUsageView = {
   sessionId: string
   title?: string
   jiraKey?: string
+  /** 会话所属项目名(best-effort,可空) */
+  projectName?: string
+  /** 会话所属分支(best-effort,可空) */
+  branch?: string
   model?: string
   inputTokens: number
   outputTokens: number
