@@ -228,11 +228,11 @@ const sessions = ref<SessionUsageView[]>([])
 const projectOptions = ref<string[]>([])
 
 /**
- * 当前列表所有会话 total 之和,作 UsageBar 归一化 max:条长 = value/Σ = 占总和比例。
- * 单条 → Σ=value → 100%;多条按各自占比(5:3:2 → 50/30/20)。Σ=0 时 UsageBar 安全归零。
+ * 当前列表所有会话 total 的最大值,作 UsageBar 归一化 max:条长 = value/max。
+ * 用量最高的会话条满 100%,其余按各自占比等比放大。max=0 时 UsageBar 安全归零。
  */
-const sessionSumTotal = computed(() =>
-  sessions.value.reduce((sum, s) => sum + (s.totalTokens > 0 ? s.totalTokens : 0), 0)
+const sessionMaxTotal = computed(() =>
+  sessions.value.reduce((m, s) => (s.totalTokens > m ? s.totalTokens : m), 0)
 )
 
 function sessionFromIso(): string {
@@ -533,7 +533,7 @@ onMounted(() => {
               </div>
             </div>
             <div class="aip-usage__session-bar">
-              <UsageBar :value="s.totalTokens" :max="sessionSumTotal" color-mode="absolute" />
+              <UsageBar :value="s.totalTokens" :max="sessionMaxTotal" color-mode="absolute" />
             </div>
           </article>
         </div>
