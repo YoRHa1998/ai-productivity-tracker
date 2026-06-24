@@ -4,6 +4,7 @@ import {
   ElButton,
   ElCheckbox,
   ElCheckboxGroup,
+  ElDialog,
   ElDrawer,
   ElInput,
   ElMessage,
@@ -64,6 +65,9 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 
 /** 历史对比:被勾选参与对比的记录 id 集合。 */
 const compareIds = ref<Set<string>>(new Set())
+
+/** 对比用量弹窗开关:勾选 ≥2 条后点「对比用量」按钮打开。 */
+const compareOpen = ref(false)
 
 const active = computed(() => state.value?.active ?? null)
 const sessions = computed(() => state.value?.sessions ?? [])
@@ -485,66 +489,26 @@ onUnmounted(() => {
       </template>
     </div>
 
-    <!-- 对比区 -->
-    <div v-if="canCompare" class="aip-bmk__compare aipt-glass">
-      <div class="aip-bmk__compare-head">
-        <span class="aip-bmk__section-title">对比({{ compareSessions.length }} 条)</span>
-      </div>
-      <VChart
-        class="aip-bmk__chart"
-        :option="compareOption"
-        autoresize
-        :style="{ height: '260px' }"
-      />
-      <div class="aip-bmk__compare-table-wrap">
-        <table class="aip-bmk__table">
-          <thead>
-            <tr>
-              <th>指标</th>
-              <th v-for="s in compareSessions" :key="s.id">
-                {{ s.label || formatDateTime(s.startedAt) }}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>总 token</td>
-              <td v-for="s in compareSessions" :key="s.id" class="aipt-num">
-                {{ formatNumber(sessionGrand(s)) }}
-              </td>
-            </tr>
-            <tr>
-              <td>用量对比</td>
-              <td v-for="s in compareSessions" :key="s.id">
-                <UsageBar :value="sessionGrand(s)" :max="compareMaxGrand" />
-              </td>
-            </tr>
-            <tr>
-              <td>对话次数</td>
-              <td v-for="s in compareSessions" :key="s.id" class="aipt-num">
-                {{ formatNumber(s.grandTotal?.turns ?? 0) }}
-              </td>
-            </tr>
-            <tr>
-              <td>时长</td>
-              <td v-for="s in compareSessions" :key="s.id" class="aipt-num">
-                {{ formatDuration(s.durationMs) }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
     <!-- 历史记录列表 -->
     <div class="aip-bmk__history">
       <div class="aip-bmk__history-head">
         <div class="aip-bmk__section-title">历史记录</div>
-        <ElRadioGroup v-if="sessions.length > 0" v-model="historySort" size="small">
-          <ElRadioButton value="recent">最近</ElRadioButton>
-          <ElRadioButton value="usage-desc">用量高→低</ElRadioButton>
-          <ElRadioButton value="usage-asc">用量低→高</ElRadioButton>
-        </ElRadioGroup>
+        <div class="aip-bmk__history-tools">
+          <ElButton
+            type="primary"
+            size="small"
+            :disabled="!canCompare"
+            :title="canCompare ? '查看勾选记录的用量对比' : '勾选 ≥2 条记录进行对比'"
+            @click="compareOpen = true"
+          >
+            对比用量{{ compareSessions.length > 0 ? ` (${compareSessions.length})` : '' }}
+          </ElButton>
+          <ElRadioGroup v-if="sessions.length > 0" v-model="historySort" size="small">
+            <ElRadioButton value="recent">最近</ElRadioButton>
+            <ElRadioButton value="usage-desc">用量高→低</ElRadioButton>
+            <ElRadioButton value="usage-asc">用量低→高</ElRadioButton>
+          </ElRadioGroup>
+        </div>
       </div>
       <div v-if="sessions.length === 0" class="aip-bmk__empty aipt-glass">
         <ElEmpty description="还没有测算记录,选择工具并「开始记录」一次试试" />
@@ -565,10 +529,14 @@ onUnmounted(() => {
             <span class="aip-bmk__card-check" @click.stop>
               <ElCheckbox :model-value="compareIds.has(s.id)" @change="() => toggleCompare(s.id)" />
             </span>
-            <span class="aip-bmk__card-title">{{ s.label || '(未命名)' }}</span>
-            <span class="aip-bmk__card-time"
-              >{{ formatDateTime(s.startedAt) }} · {{ formatDuration(s.durationMs) }}</span
-            >
+            <div class="aip-bmk__card-head-main">
+              <span class="aip-bmk__card-title" :title="s.label || '(未命名)'">{{
+                s.label || '(未命名)'
+              }}</span>
+              <span class="aip-bmk__card-time"
+                >{{ formatDateTime(s.startedAt) }} · {{ formatDuration(s.durationMs) }}</span
+              >
+            </div>
             <ElButton
               size="small"
               text
@@ -601,6 +569,64 @@ onUnmounted(() => {
         </article>
       </div>
     </div>
+
+    <!-- 对比用量弹窗:勾选 ≥2 条记录后展示图表 + 对比表格 -->
+    <ElDialog
+      v-model="compareOpen"
+      title="用量对比"
+      width="860px"
+      align-center
+      append-to-body
+      class="aip-bmk-compare-dialog"
+    >
+      <div v-if="canCompare" class="aip-bmk__compare">
+        <VChart
+          class="aip-bmk__chart"
+          :option="compareOption"
+          autoresize
+          :style="{ height: '260px' }"
+        />
+        <div class="aip-bmk__compare-table-wrap">
+          <table class="aip-bmk__table">
+            <thead>
+              <tr>
+                <th>指标</th>
+                <th v-for="s in compareSessions" :key="s.id">
+                  {{ s.label || formatDateTime(s.startedAt) }}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>总 token</td>
+                <td v-for="s in compareSessions" :key="s.id" class="aipt-num">
+                  {{ formatNumber(sessionGrand(s)) }}
+                </td>
+              </tr>
+              <tr>
+                <td>用量对比</td>
+                <td v-for="s in compareSessions" :key="s.id">
+                  <UsageBar :value="sessionGrand(s)" :max="compareMaxGrand" />
+                </td>
+              </tr>
+              <tr>
+                <td>对话次数</td>
+                <td v-for="s in compareSessions" :key="s.id" class="aipt-num">
+                  {{ formatNumber(s.grandTotal?.turns ?? 0) }}
+                </td>
+              </tr>
+              <tr>
+                <td>时长</td>
+                <td v-for="s in compareSessions" :key="s.id" class="aipt-num">
+                  {{ formatDuration(s.durationMs) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <ElEmpty v-else description="请勾选至少 2 条记录后再对比" />
+    </ElDialog>
 
     <!-- 记录详情抽屉:窗口内各会话实际消耗 -->
     <ElDrawer
@@ -661,15 +687,20 @@ onUnmounted(() => {
             "
           />
         </div>
-        <div v-else class="aip-bmk-drawer__sessions">
-          <SessionUsageRow
-            v-for="row in detailRows"
-            :key="row.key"
-            :session="row"
-            :max-total="detailMaxTotal"
-            @goto-requirement="gotoRequirement"
-          />
-        </div>
+        <section v-else class="aip-bmk-drawer__sessions-wrap">
+          <div class="aip-bmk-drawer__sessions-label">
+            会话明细 · <span class="aipt-num">{{ detailRows.length }}</span> 个
+          </div>
+          <div class="aip-bmk-drawer__sessions">
+            <SessionUsageRow
+              v-for="row in detailRows"
+              :key="row.key"
+              :session="row"
+              :max-total="detailMaxTotal"
+              @goto-requirement="gotoRequirement"
+            />
+          </div>
+        </section>
       </div>
     </ElDrawer>
   </section>
@@ -875,13 +906,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--aipt-space-4);
-  padding: var(--aipt-space-5);
-}
-
-.aip-bmk__compare-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
 }
 
 .aip-bmk__section-title {
@@ -907,7 +931,7 @@ onUnmounted(() => {
 .aip-bmk__table th,
 .aip-bmk__table td {
   padding: 8px 12px;
-  text-align: right;
+  text-align: left;
   border-bottom: 1px solid var(--aipt-border, rgba(255, 255, 255, 0.08));
   color: var(--aipt-text-strong);
   white-space: nowrap;
@@ -915,7 +939,6 @@ onUnmounted(() => {
 
 .aip-bmk__table th:first-child,
 .aip-bmk__table td:first-child {
-  text-align: left;
   color: var(--aipt-text-muted);
 }
 
@@ -930,6 +953,13 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: var(--aipt-space-4);
+  flex-wrap: wrap;
+}
+
+.aip-bmk__history-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--aipt-space-3);
   flex-wrap: wrap;
 }
 
@@ -969,7 +999,7 @@ onUnmounted(() => {
 
 .aip-bmk__card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
 }
 
@@ -977,23 +1007,32 @@ onUnmounted(() => {
 .aip-bmk__card-check {
   display: inline-flex;
   align-items: center;
+  height: 20px;
   cursor: default;
+}
+
+.aip-bmk__card-head-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .aip-bmk__card-title {
   font-size: 14px;
   font-weight: 700;
+  line-height: 1.4;
   color: var(--aipt-text-strong);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .aip-bmk__card-time {
   font-size: 11px;
   color: var(--aipt-text-muted);
-  margin-left: auto;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .aip-bmk__card-del {
@@ -1057,12 +1096,15 @@ onUnmounted(() => {
 .aip-bmk-drawer__time {
   font-size: 12px;
   color: var(--aipt-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
+/* 抽屉 body 全局被重置为 padding:0,这里恢复内边距,避免内容贴边 */
 .aip-bmk-drawer__body {
   display: flex;
   flex-direction: column;
   gap: var(--aipt-space-4);
+  padding: var(--aipt-space-6);
 }
 
 .aip-bmk-drawer__totals {
@@ -1071,21 +1113,24 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: var(--aipt-space-4);
   flex-wrap: wrap;
-  padding: var(--aipt-space-4);
-  border-radius: var(--aipt-radius-3, 12px);
-  background: var(--aipt-surface-2, rgba(255, 255, 255, 0.04));
+  padding: var(--aipt-space-5);
+  border-radius: var(--aipt-radius-lg);
+  background: var(--aipt-surface);
+  border: 1px solid var(--aipt-border-faint);
 }
 
 .aip-bmk-drawer__grand {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .aip-bmk-drawer__grand-value {
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 800;
+  line-height: 1.1;
   color: var(--aipt-text-strong);
+  font-variant-numeric: tabular-nums;
 }
 
 .aip-bmk-drawer__grand-unit {
@@ -1096,27 +1141,36 @@ onUnmounted(() => {
 .aip-bmk-drawer__source-list {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--aipt-space-3);
+  gap: var(--aipt-space-2);
 }
 
 .aip-bmk-drawer__source {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  padding: 4px 10px;
   font-size: 12px;
   color: var(--aipt-text-muted);
+  background: var(--aipt-surface-soft);
+  border: 1px solid var(--aipt-border-faint);
+  border-radius: var(--aipt-radius-pill);
 }
 
 .aip-bmk-drawer__source b {
   color: var(--aipt-text-strong);
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .aip-bmk-drawer__note {
   margin: 0;
+  padding: var(--aipt-space-3) var(--aipt-space-4);
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.7;
   color: var(--aipt-text-muted);
+  background: var(--aipt-surface-soft);
+  border-left: 2px solid var(--aipt-border-strong);
+  border-radius: var(--aipt-radius-md);
 }
 
 .aip-bmk-drawer__note b {
@@ -1126,13 +1180,17 @@ onUnmounted(() => {
 
 .aip-bmk-drawer__warn {
   margin: 0;
+  padding: var(--aipt-space-3) var(--aipt-space-4);
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.7;
   color: #d99a3c;
+  background: rgba(245, 188, 110, 0.1);
+  border-left: 2px solid rgba(245, 188, 110, 0.5);
+  border-radius: var(--aipt-radius-md);
 }
 
 .aip-bmk-drawer__loading {
-  padding: var(--aipt-space-5);
+  padding: var(--aipt-space-8);
   text-align: center;
   font-size: 13px;
   color: var(--aipt-text-muted);
@@ -1142,11 +1200,35 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 180px;
+  min-height: 200px;
+  padding: var(--aipt-space-5);
+  border-radius: var(--aipt-radius-lg);
+  background: var(--aipt-surface-soft);
+  border: 1px solid var(--aipt-border-faint);
+}
+
+.aip-bmk-drawer__sessions-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aipt-space-2);
+}
+
+.aip-bmk-drawer__sessions-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aipt-text-muted);
+}
+
+.aip-bmk-drawer__sessions-label .aipt-num {
+  color: var(--aipt-text-strong);
 }
 
 .aip-bmk-drawer__sessions {
   display: flex;
   flex-direction: column;
+  padding: 0 var(--aipt-space-4);
+  border-radius: var(--aipt-radius-lg);
+  background: var(--aipt-surface);
+  border: 1px solid var(--aipt-border-faint);
 }
 </style>
