@@ -718,6 +718,14 @@ function buildCursorUsageEvent(body: HookRequestBody, at: string): AiUsageEvent 
   const title = truncateTitle(readTranscriptTitle(raw?.transcript_path)) || undefined
   const jiraKey = (typeof body.branch === 'string' && extractIssueKey(body.branch)) || undefined
 
+  // 会话所属项目 / 分支(best-effort):branch 取 body.branch;projectName 在拿得到
+  // project root 时读 package.json name,拿不到留空。
+  const branch = (typeof body.branch === 'string' && body.branch.trim()) || undefined
+  const projectName =
+    (typeof body.projectRoot === 'string' && body.projectRoot.trim()
+      ? readProjectNameFromPackageJson(body.projectRoot)
+      : '') || undefined
+
   return {
     source: 'cursor',
     sessionId,
@@ -725,6 +733,8 @@ function buildCursorUsageEvent(body: HookRequestBody, at: string): AiUsageEvent 
     tokens: { input, output, cacheRead, cacheCreation, total },
     title,
     jiraKey,
+    projectName,
+    branch,
     at
   }
 }
