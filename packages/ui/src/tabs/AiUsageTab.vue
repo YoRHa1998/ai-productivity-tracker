@@ -9,7 +9,8 @@ import {
   ElSelect,
   ElOption,
   ElEmpty,
-  ElTooltip
+  ElTooltip,
+  ElPagination
 } from 'element-plus'
 
 import { useRouter } from 'vue-router'
@@ -208,21 +209,41 @@ const SOURCE_LABEL: Record<AiUsageSource, string> = {
   codex: 'Codex'
 }
 
+/** AI 工具 → 标签底色修饰类(与 SOURCE_COLOR 同源,不同工具不同底色)。 */
+const SOURCE_TAG_CLASS: Record<AiUsageSource, string> = {
+  cursor: 'aip-usage__tag--cursor',
+  'claude-code': 'aip-usage__tag--claude',
+  codex: 'aip-usage__tag--codex'
+}
+
 /**
  * 会话列表筛选 / 排序状态:
  * - sessionSource:AI 平台('all' 全部);
  * - sessionProject:所属项目('all' 全部 / 具体项目名,服务端精确过滤);
- * - sessionRangeDays:时间范围(近 7 / 30 天);
+ * - sessionRangeDays:时间范围(当天 1 / 近 7 / 30 天);
  * - sessionSortKey:排序依据(用量高低 total / 记录时间 lastAt);
  * - sessionSortDir:排序方向(降序 desc / 升序 asc)。
  */
 const sessionSource = ref<'all' | AiUsageSource>('all')
 const sessionProject = ref<'all' | string>('all')
-const sessionRangeDays = ref<7 | 30>(7)
-const sessionSortKey = ref<SessionUsageSortKey>('total')
+const sessionRangeDays = ref<1 | 7 | 30>(1)
+const sessionSortKey = ref<SessionUsageSortKey>('lastAt')
 const sessionSortDir = ref<SessionUsageSortDir>('desc')
 const sessionLoading = ref(false)
 const sessions = ref<SessionUsageView[]>([])
+
+/**
+ * 会话列表前端分页:服务端一次拉取全量(放大 limit),前端按 pageSize 切片。
+ * 任意筛选 / 排序变更后复位到第 1 页。
+ */
+const currentPage = ref(1)
+const pageSize = ref(30)
+
+/** 当前页展示的会话切片(基于全量 sessions + currentPage/pageSize)。 */
+const pagedSessions = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return sessions.value.slice(start, start + pageSize.value)
+})
 
 /** 「所属项目」下拉的动态选项(由当前时间范围 + 平台、不带 project 的会话集合派生)。 */
 const projectOptions = ref<string[]>([])
@@ -251,9 +272,13 @@ async function loadSessions() {
       project: sessionProject.value === 'all' ? undefined : sessionProject.value,
       sort: sessionSortKey.value,
       dir: sessionSortDir.value,
-      limit: 50
+      limit: 1000
     })
     sessions.value = res.sessions
+    // 数据刷新后若当前页越界(典型:筛选收窄后总数变少),回退到第 1 页
+    if ((currentPage.value - 1) * pageSize.value >= sessions.value.length) {
+      currentPage.value = 1
+    }
   } catch {
     // 会话明细加载失败不阻断主页面,留空列表(空态引导兜底)
     sessions.value = []
@@ -292,15 +317,22 @@ async function loadProjectOptions() {
   }
 }
 
-// 平台 / 时间范围变更:先重算项目下拉选项(可能回退选中项),再刷新列表。
+// 平台 / 时间范围变更:复位页码 → 先重算项目下拉选项(可能回退选中项),再刷新列表。
 watch([sessionSource, sessionRangeDays], async () => {
+  currentPage.value = 1
   await loadProjectOptions()
   void loadSessions()
 })
 
-// 项目 / 排序依据 / 方向变更:仅刷新列表。
+// 项目 / 排序依据 / 方向变更:复位页码后仅刷新列表。
 watch([sessionProject, sessionSortKey, sessionSortDir], () => {
+  currentPage.value = 1
   void loadSessions()
+})
+
+// 每页条数变更:复位到第 1 页(纯前端,不需重新拉取)。
+watch(pageSize, () => {
+  currentPage.value = 1
 })
 
 /** 会话展示标识:title 优先;否则短会话 ID + 工具(回退在模板里附时间窗)。 */
@@ -310,7 +342,8 @@ function sessionLabel(s: SessionUsageView): string {
   return `${SOURCE_LABEL[s.source]} · ${shortId}`
 }
 
-function formatTimeWindow(s: SessionUsageView): string {
+/** 绝对时间窗「MM-DD HH:mm → MM-DD HH:mm」,作时长标签的 title 兜底悬浮。 */
+function formatTimeWindowAbsolute(s: SessionUsageView): string {
   const fmt = (iso: string) => {
     const d = new Date(iso)
     if (Number.isNaN(d.getTime())) return ''
@@ -319,6 +352,24 @@ function formatTimeWindow(s: SessionUsageView): string {
   const from = fmt(s.firstAt)
   const to = fmt(s.lastAt)
   return from && to ? `${from} → ${to}` : from || to
+}
+
+/**
+ * 会话持续时长(firstAt → lastAt)紧凑展示,比绝对起止时间更直观:
+ * < 1 分钟 → `Ns`;< 60 分钟 → `Nmin`;否则 `Xh` 或 `XhYmin`(不足 1h 余数)。
+ * 时间无法解析 / 起止相同 → `0s`。
+ */
+function formatDuration(s: SessionUsageView): string {
+  const from = Date.parse(s.firstAt)
+  const to = Date.parse(s.lastAt)
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return '0s'
+  const totalSec = Math.round((to - from) / 1000)
+  if (totalSec < 60) return `${totalSec}s`
+  const totalMin = Math.round(totalSec / 60)
+  if (totalMin < 60) return `${totalMin}min`
+  const hours = Math.floor(totalMin / 60)
+  const min = totalMin % 60
+  return min === 0 ? `${hours}h` : `${hours}h${min}min`
 }
 
 function gotoRequirement(jiraKey: string) {
@@ -431,26 +482,8 @@ onMounted(() => {
 
       <div class="aip-usage__sessions aipt-glass">
         <div class="aip-usage__sessions-head">
-          <div class="aip-usage__chart-title">会话用量(最烧 token 的会话)</div>
+          <div class="aip-usage__chart-title">会话用量明细</div>
           <div class="aip-usage__sessions-filters">
-            <ElSelect
-              v-model="sessionSortKey"
-              size="small"
-              class="aip-usage__filter-select"
-              aria-label="排序依据"
-            >
-              <ElOption label="用量高低" value="total" />
-              <ElOption label="记录时间" value="lastAt" />
-            </ElSelect>
-            <ElSelect
-              v-model="sessionSortDir"
-              size="small"
-              class="aip-usage__filter-select"
-              aria-label="排序方向"
-            >
-              <ElOption label="降序" value="desc" />
-              <ElOption label="升序" value="asc" />
-            </ElSelect>
             <ElSelect
               v-model="sessionSource"
               size="small"
@@ -478,8 +511,27 @@ onMounted(() => {
               class="aip-usage__filter-select"
               aria-label="时间范围"
             >
+              <ElOption label="当天" :value="1" />
               <ElOption label="近 7 天" :value="7" />
               <ElOption label="近 30 天" :value="30" />
+            </ElSelect>
+            <ElSelect
+              v-model="sessionSortKey"
+              size="small"
+              class="aip-usage__filter-select"
+              aria-label="排序依据"
+            >
+              <ElOption label="用量高低" value="total" />
+              <ElOption label="记录时间" value="lastAt" />
+            </ElSelect>
+            <ElSelect
+              v-model="sessionSortDir"
+              size="small"
+              class="aip-usage__filter-select"
+              aria-label="排序方向"
+            >
+              <ElOption label="降序" value="desc" />
+              <ElOption label="升序" value="asc" />
             </ElSelect>
           </div>
         </div>
@@ -495,7 +547,7 @@ onMounted(() => {
         </div>
 
         <div v-else class="aip-usage__session-list">
-          <article v-for="s in sessions" :key="s.key" class="aip-usage__session-row">
+          <article v-for="s in pagedSessions" :key="s.key" class="aip-usage__session-row">
             <div class="aip-usage__session-main">
               <div class="aip-usage__session-title-line">
                 <span class="aip-usage__session-title" :title="s.title || s.sessionId">{{
@@ -512,30 +564,49 @@ onMounted(() => {
                 </button>
               </div>
               <div class="aip-usage__session-meta">
-                <span class="aip-usage__session-source">{{ SOURCE_LABEL[s.source] }}</span>
+                <span class="aip-usage__tag" :class="SOURCE_TAG_CLASS[s.source]">{{
+                  SOURCE_LABEL[s.source]
+                }}</span>
                 <span
                   v-if="s.projectName"
-                  class="aip-usage__session-project"
+                  class="aip-usage__tag aip-usage__tag--ellipsis"
                   :title="`项目 ${s.projectName}`"
                   >{{ s.projectName }}</span
                 >
                 <span
                   v-if="s.branch"
-                  class="aip-usage__session-branch"
+                  class="aip-usage__tag aip-usage__tag--ellipsis"
                   :title="`分支 ${s.branch}`"
                   >{{ s.branch }}</span
                 >
-                <span v-if="s.model" class="aip-usage__session-model" :title="s.model">{{
-                  s.model
+                <span
+                  v-if="s.model"
+                  class="aip-usage__tag aip-usage__tag--ellipsis aip-usage__tag--model"
+                  :title="s.model"
+                  >{{ s.model }}</span
+                >
+                <span class="aip-usage__tag" :title="formatTimeWindowAbsolute(s)">{{
+                  formatDuration(s)
                 }}</span>
-                <span class="aip-usage__session-window">{{ formatTimeWindow(s) }}</span>
-                <span class="aip-usage__session-turns">{{ formatNumber(s.turns) }} 轮</span>
+                <span class="aip-usage__tag">{{ formatNumber(s.turns) }} 轮</span>
               </div>
             </div>
             <div class="aip-usage__session-bar">
               <UsageBar :value="s.totalTokens" :max="sessionMaxTotal" color-mode="absolute" />
             </div>
           </article>
+        </div>
+
+        <div v-if="sessions.length > 0" class="aip-usage__sessions-pager">
+          <ElPagination
+            v-model:current-page="currentPage"
+            v-model:page-size="pageSize"
+            size="small"
+            background
+            layout="prev, pager, next, sizes, total"
+            :page-sizes="[30, 50, 100]"
+            :total="sessions.length"
+          />
         </div>
       </div>
     </template>
@@ -825,23 +896,52 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
-.aip-usage__session-model {
-  max-width: 180px;
+.aip-usage__tag {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: var(--aipt-radius-pill);
+  background: var(--aipt-surface-strong);
+  color: var(--aipt-text-secondary);
+  border: 1px solid transparent;
+  line-height: 1.5;
+}
+
+.aip-usage__tag--ellipsis {
+  max-width: 160px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.aip-usage__session-project,
-.aip-usage__session-branch {
-  max-width: 160px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 0 6px;
-  border-radius: var(--aipt-radius-pill);
-  background: var(--aipt-surface-strong);
-  color: var(--aipt-text-secondary);
+.aip-usage__tag--model {
+  max-width: 180px;
+}
+
+/* AI 工具标签按工具着色(半透明底 + 同色边/文字,与 SOURCE_COLOR 同源) */
+.aip-usage__tag--cursor {
+  background: rgba(110, 167, 245, 0.16);
+  border-color: rgba(110, 167, 245, 0.4);
+  color: #6ea7f5;
+}
+
+.aip-usage__tag--claude {
+  background: rgba(240, 166, 200, 0.16);
+  border-color: rgba(240, 166, 200, 0.4);
+  color: #f0a6c8;
+}
+
+.aip-usage__tag--codex {
+  background: rgba(159, 229, 212, 0.16);
+  border-color: rgba(159, 229, 212, 0.4);
+  color: #9fe5d4;
+}
+
+.aip-usage__sessions-pager {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--aipt-space-2);
 }
 
 .aip-usage__session-bar {
