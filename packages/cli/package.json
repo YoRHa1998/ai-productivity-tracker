@@ -1,6 +1,6 @@
 {
   "name": "@ai-productivity-tracker/cli",
-  "version": "1.3.0-rc.8",
+  "version": "1.3.0-rc.9",
   "description": "Standalone AI productivity tracking toolkit. One npm package: daemon + stdio MCP + Cursor/Claude hook + browser dashboard.",
   "keywords": [
     "ai",
