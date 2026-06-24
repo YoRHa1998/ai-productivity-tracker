@@ -288,8 +288,36 @@ describe('parseClaudeUserMessage (v2.12.0)', () => {
       gitBranch: 'feature/ABC-1-test',
       sessionId: 'sess-1',
       uuid: 'uu-1',
-      timestamp: '2026-05-21T03:30:00.000Z'
+      timestamp: '2026-05-21T03:30:00.000Z',
+      text: 'hi claude'
     })
+  })
+
+  it('提取 user 文本素材:字符串直取、内容块数组拼 text、tool_result 归空', () => {
+    expect(parseClaudeUserMessage(userLine())?.text).toBe('hi claude')
+    expect(
+      parseClaudeUserMessage(
+        userLine({
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text: '第一段' },
+              { type: 'text', text: '第二段' }
+            ]
+          }
+        })
+      )?.text
+    ).toBe('第一段\n第二段')
+    expect(
+      parseClaudeUserMessage(
+        userLine({
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', content: 'x' }]
+          }
+        })
+      )?.text
+    ).toBe('')
   })
 
   it('type 非 user 返回 null(避免误吃 assistant / system 行)', () => {

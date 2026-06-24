@@ -55,6 +55,8 @@ export interface CodexTurnBoundary {
   /** task_started / task_complete 带 turn_id;user_message 通常无,留空串 */
   turnId: string
   timestamp: string
+  /** user_message 的输入文本(best-effort,作会话标题素材);其余 kind 为空串 */
+  text: string
 }
 
 function num(v: unknown): number {
@@ -165,6 +167,7 @@ export function parseCodexTurnBoundary(raw: string): CodexTurnBoundary | null {
   return {
     kind: subtype,
     turnId: str(payload.turn_id),
-    timestamp: str(obj.timestamp) || new Date().toISOString()
+    timestamp: str(obj.timestamp) || new Date().toISOString(),
+    text: subtype === 'user_message' ? str(payload.message) : ''
   }
 }

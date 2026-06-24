@@ -31,6 +31,7 @@ import { buildIterationExtras } from './iteration-extras.js'
 import { appendIteration } from './store/iteration-store.js'
 import { loadRequirement } from './store/requirement-store.js'
 import { isUsageCaptureActive, recordUsage } from './store/ai-usage-store.js'
+import { truncateTitle } from './store/session-usage-store.js'
 
 const DEFAULT_CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
 /**
@@ -88,6 +89,11 @@ interface CodexPendingTurn {
   branch: string
   /** 本轮真实起点:user_message timestamp;缺省退化到 task_started / 首个信号 timestamp */
   userPromptTs: string
+  /**
+   * 会话标题素材(best-effort):会话首个 user_message 文本片段;仅作会话维度 title,
+   * store 侧只首次写入不覆盖。
+   */
+  title: string
   /** 最近一次该 session 的任意事件 timestamp,用于 stale 判定 */
   lastEventTs: string
   model: string
@@ -436,6 +442,8 @@ export class CodexWatcher {
       if (buf) {
         buf.userPromptTs = boundary.timestamp
         buf.lastEventTs = boundary.timestamp
+        // 取首个 user_message 文本作会话标题素材(本轮未捕获过时才写)。
+        if (!buf.title) buf.title = truncateTitle(boundary.text)
       }
       return
     }
@@ -478,6 +486,7 @@ export class CodexWatcher {
       gitRoot,
       branch,
       userPromptTs: timestamp,
+      title: '',
       lastEventTs: timestamp,
       model: 'unknown',
       currentTotalEffective: baseline,
@@ -542,6 +551,9 @@ export class CodexWatcher {
             cacheCreation: 0,
             total: delta
           },
+          // 会话维度富化(D3):会话首个 user_message 截断作 title;命中 Jira 分支时附 jiraKey。
+          title: truncateTitle(buf.title) || undefined,
+          jiraKey: buf.issueKey || undefined,
           at: reportedAt
         })
       } catch {

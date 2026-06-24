@@ -39,6 +39,11 @@ export const AI_USAGE_FILE_NAME = 'ai-usage.json'
  * 都正交,直接落 data 根;详见 usage-benchmark-store.ts。
  */
 export const USAGE_BENCHMARK_FILE_NAME = 'usage-benchmark.json'
+/**
+ * 「会话维度用量」单文件聚合(按 `${source}:${sessionId}`)。整体用量(ai-usage.json)
+ * 的细化视图,直接落 data 根;无界增长靠 prune on write 治理。详见 session-usage-store.ts。
+ */
+export const SESSION_USAGE_FILE_NAME = 'session-usage.json'
 
 export function aipRoot(root?: string): string {
   return root ? resolve(root) : resolveDefaultRoot()
@@ -70,6 +75,11 @@ export function aiUsagePath(root?: string): string {
 /** 「用量测算」文件路径(data 根下单文件,惰性创建)。 */
 export function usageBenchmarkPath(root?: string): string {
   return join(aipRoot(root), USAGE_BENCHMARK_FILE_NAME)
+}
+
+/** 「会话维度用量」文件路径(data 根下单文件,惰性创建)。 */
+export function sessionUsagePath(root?: string): string {
+  return join(aipRoot(root), SESSION_USAGE_FILE_NAME)
 }
 
 /** JiraKey 在文件路径里的安全形态:大写 + [A-Z0-9-] 过滤 */

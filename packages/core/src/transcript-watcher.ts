@@ -27,6 +27,7 @@ import { buildIterationExtras } from './iteration-extras.js'
 import { appendIteration } from './store/iteration-store.js'
 import { loadRequirement } from './store/requirement-store.js'
 import { isUsageCaptureActive, recordUsage } from './store/ai-usage-store.js'
+import { truncateTitle } from './store/session-usage-store.js'
 
 const DEFAULT_CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects')
 const DEFAULT_STATE_PATH = join(
@@ -110,6 +111,11 @@ interface PendingTurn {
    * iteration-extras 据此把 thinkSeconds 计算成真实 turn 时长,不再用近似口径。
    */
   userPromptTs: string
+  /**
+   * 会话标题素材(best-effort):本轮起点 user 行的输入文本片段,新建 buffer 时从
+   * pendingUserTitle 取。仅作会话维度 title;store 侧只首次写入不覆盖。
+   */
+  title: string
   firstMessageTs: string
   lastMessageTs: string
   /**
@@ -199,6 +205,11 @@ export class TranscriptWatcher {
    * 但远比老口径准),不影响幂等性。
    */
   private pendingUserPromptTs = new Map<string, string>()
+  /**
+   * 按 sessionId 缓存「最近一次 user 行的输入文本」,与 pendingUserPromptTs 同步消费,
+   * 供新建 PendingTurn 取首条用户输入作会话标题素材。仅进程内存,丢失退化为标题留空。
+   */
+  private pendingUserTitle = new Map<string, string>()
 
   constructor(private readonly deps: TranscriptWatcherDeps) {
     this.claudeProjectsDir = deps.claudeProjectsDir ?? DEFAULT_CLAUDE_PROJECTS_DIR
@@ -242,6 +253,7 @@ export class TranscriptWatcher {
     this.seenApiMessageIds.clear()
     this.lastFlushedFingerprint.clear()
     this.pendingUserPromptTs.clear()
+    this.pendingUserTitle.clear()
     this.log('TranscriptWatcher stopped')
   }
 
@@ -434,7 +446,7 @@ export class TranscriptWatcher {
     if (existing) {
       buf = {
         ...existing,
-        // gitRoot / issueKey / branch 沿用首个消息的值,中途切换属于异常但我们不做拦截
+        // gitRoot / issueKey / branch / title 沿用首个消息的值,中途切换属于异常但我们不做拦截
         lastMessageTs: msg.timestamp,
         lastSeenAt: msg.timestamp,
         tokenSum: existing.tokenSum + delta,
@@ -451,12 +463,15 @@ export class TranscriptWatcher {
       const userPromptTs = cachedUserTs || msg.timestamp
       // 消费后清掉,防止下一轮新 turn 误读上一轮的 user timestamp
       if (cachedUserTs) this.pendingUserPromptTs.delete(msg.sessionId)
+      const cachedTitle = this.pendingUserTitle.get(msg.sessionId) ?? ''
+      if (cachedTitle) this.pendingUserTitle.delete(msg.sessionId)
       buf = {
         sessionId: msg.sessionId,
         issueKey,
         gitRoot,
         branch,
         userPromptTs,
+        title: cachedTitle,
         firstMessageTs: msg.timestamp,
         lastMessageTs: msg.timestamp,
         lastSeenAt: msg.timestamp,
@@ -504,6 +519,9 @@ export class TranscriptWatcher {
   private routeUserMessage(msg: ParsedUserMessage): void {
     if (!msg.sessionId) return
     this.pendingUserPromptTs.set(msg.sessionId, msg.timestamp)
+    // 捕获首条用户输入文本作会话标题素材(tool_result 等空文本行不覆盖已有素材)。
+    const titleMaterial = truncateTitle(msg.text)
+    if (titleMaterial) this.pendingUserTitle.set(msg.sessionId, titleMaterial)
     // v2.14.1 同 sessionId 若已有 buffer(典型场景:LLM 多轮 tool_use 期间用户工具结果回填),
     // 把 user 行 timestamp 也算作「会话活动信号」,避免 stale flush 把活会话误切。
     const turnKey = msg.sessionId
@@ -602,6 +620,9 @@ export class TranscriptWatcher {
             cacheCreation: buf.usageCacheCreation,
             total: buf.tokenSum
           },
+          // 会话维度富化(D3):首条用户输入截断作 title;命中 Jira 分支时附 jiraKey。
+          title: truncateTitle(buf.title) || undefined,
+          jiraKey: buf.issueKey || undefined,
           at: buf.lastMessageTs
         })
       } catch {

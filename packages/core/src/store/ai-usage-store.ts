@@ -22,6 +22,7 @@ import { dirname } from 'node:path'
 
 import { aiUsagePath } from './paths.js'
 import { accumulateBenchmark, hasActiveBenchmark } from './usage-benchmark-store.js'
+import { accumulateSessionUsage } from './session-usage-store.js'
 
 /** AI 用量维度键 —— 复用既有 IterationSource 的可采集子集(排除 'unknown')。 */
 export type AiUsageSource = 'cursor' | 'claude-code' | 'codex'
@@ -59,6 +60,16 @@ export interface AiUsageEvent {
   tokens: AiUsageTokens
   /** 工具调用次数(best-effort,缺则记 0) */
   toolCalls?: number
+  /**
+   * 会话标题素材(best-effort):各采集点在会话首条用户输入处截断填入,作会话维度
+   * store 的人类可读标识。仅会话维度(session-usage.json)消费;daily 日聚合不消费。
+   */
+  title?: string
+  /**
+   * 命中的 Jira issue key(best-effort):采集点解析到则填,作会话维度的可下钻附加
+   * 标签;main / 非仓库会话留空。仅会话维度消费;daily 日聚合不消费。
+   */
+  jiraKey?: string
   /** 事件时间(ISO 字符串),决定落入哪个自然日桶 */
   at: string
 }
@@ -308,6 +319,10 @@ export function recordUsage(event: AiUsageEvent, root?: string): void {
   }
 
   writeAiUsage(file, root)
+
+  // 会话维度旁路(D2):在 enabled 守卫之内、写 ai-usage.json 之后 tee 一次。
+  // 与 daily 聚合同生命周期(全局开关关闭时上面已 return,不写会话维度)。
+  accumulateSessionUsage(event, root)
 }
 
 // ────────────────────────────────────────────────────────────────────

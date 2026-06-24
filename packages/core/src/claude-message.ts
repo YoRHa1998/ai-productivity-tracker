@@ -164,6 +164,11 @@ export interface ParsedUserMessage {
   sessionId: string
   uuid: string
   timestamp: string
+  /**
+   * 用户输入文本(best-effort):message.content 为字符串时直接取,为内容块数组时拼接
+   * 其中的 text 块。tool_result 等非文本块归空串。仅用作会话标题素材(截断后落会话维度)。
+   */
+  text: string
 }
 
 export function parseClaudeUserMessage(raw: string): ParsedUserMessage | null {
@@ -190,8 +195,28 @@ export function parseClaudeUserMessage(raw: string): ParsedUserMessage | null {
     gitBranch,
     sessionId: str(obj.sessionId),
     uuid: str(obj.uuid),
-    timestamp: str(obj.timestamp) || new Date().toISOString()
+    timestamp: str(obj.timestamp) || new Date().toISOString(),
+    text: extractUserText(message.content)
   }
+}
+
+/**
+ * 从 Claude user message.content 提取纯文本(best-effort):
+ * 字符串直接返回;数组拼接其中 `type:'text'` 块的 text;其余(tool_result 等)归空串。
+ */
+function extractUserText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    const parts: string[] = []
+    for (const block of content) {
+      if (block && typeof block === 'object' && (block as { type?: unknown }).type === 'text') {
+        const t = (block as { text?: unknown }).text
+        if (typeof t === 'string') parts.push(t)
+      }
+    }
+    return parts.join('\n')
+  }
+  return ''
 }
 
 export function parseClaudeStopHookSummary(raw: string): ParsedStopHookSummary | null {
