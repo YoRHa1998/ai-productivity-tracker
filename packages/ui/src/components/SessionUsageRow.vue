@@ -19,6 +19,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'goto-requirement', jiraKey: string): void
+  (e: 'open-detail', key: string): void
 }>()
 
 const SOURCE_LABEL: Record<AiUsageSource, string> = {
@@ -78,7 +79,15 @@ const duration = computed(() => {
 </script>
 
 <template>
-  <article class="aip-session-row">
+  <article
+    class="aip-session-row"
+    role="button"
+    tabindex="0"
+    :title="`查看会话逐轮明细`"
+    @click="emit('open-detail', session.key)"
+    @keydown.enter="emit('open-detail', session.key)"
+    @keydown.space.prevent="emit('open-detail', session.key)"
+  >
     <div class="aip-session-row__main">
       <div class="aip-session-row__title-line">
         <span class="aip-session-row__title" :title="session.title || session.sessionId">{{
@@ -89,7 +98,7 @@ const duration = computed(() => {
           type="button"
           class="aip-session-row__jira"
           :title="`跳转到需求 ${session.jiraKey}`"
-          @click="emit('goto-requirement', session.jiraKey)"
+          @click.stop="emit('goto-requirement', session.jiraKey)"
         >
           {{ session.jiraKey }}
         </button>
@@ -134,7 +143,7 @@ const duration = computed(() => {
       </div>
     </div>
     <div class="aip-session-row__bar">
-      <UsageBar :value="session.totalTokens" :max="maxTotal" color-mode="absolute" />
+      <UsageBar :value="session.totalTokens" :max="maxTotal" color-mode="unified" />
     </div>
   </article>
 </template>
@@ -144,8 +153,20 @@ const duration = computed(() => {
   display: flex;
   align-items: center;
   gap: var(--aipt-space-4);
-  padding: var(--aipt-space-3) 0;
+  padding: var(--aipt-space-3) var(--aipt-space-2);
   border-bottom: 1px solid var(--aipt-border-faint);
+  border-radius: var(--aipt-radius-sm);
+  cursor: pointer;
+  transition: background var(--aipt-duration-fast);
+}
+
+.aip-session-row:hover {
+  background: var(--aipt-surface-hover);
+}
+
+.aip-session-row:focus-visible {
+  outline: 2px solid var(--aipt-primary);
+  outline-offset: -2px;
 }
 
 .aip-session-row:last-child {

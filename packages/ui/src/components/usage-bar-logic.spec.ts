@@ -5,6 +5,7 @@ import {
   formatCompactUsage,
   usageColorVar,
   usageColorVarAbsolute,
+  usageColorVarUnified,
   usageRatio,
   usageWidthPct
 } from './usage-bar-logic'
@@ -72,6 +73,10 @@ describe('usage-bar-logic', () => {
     expect(usageColorVar(usageRatio(70, 100))).toBe('var(--aipt-usage-high)')
     expect(usageColorVar(usageRatio(40, 100))).toBe('var(--aipt-usage-mid)')
     expect(usageColorVar(usageRatio(10, 100))).toBe('var(--aipt-usage-low)')
+  })
+
+  it('统一单色:返回中性品牌色 token,不分档(外层会话列表用)', () => {
+    expect(usageColorVarUnified()).toBe('var(--aipt-usage-bar)')
   })
 
   it('紧凑数值格式化', () => {

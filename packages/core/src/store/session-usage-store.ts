@@ -25,14 +25,50 @@ import { dirname } from 'node:path'
 import type { AiUsageEvent, AiUsageSource } from './ai-usage-store.js'
 import { sessionUsagePath } from './paths.js'
 
-/** 会话标题截断上限(字符);采集点 / store 双重兜底。 */
-export const TITLE_MAX_LEN = 80
+/**
+ * 会话标题 / 逐轮名称素材的安全上限(字符);采集点 / store 双重兜底。
+ *
+ * 由历史的「80 字符硬截断」放宽为「完整记录」——正常对话完整保留,仅在防御异常超长输入
+ * (如粘贴整段日志)时按此大上限 slice 兜底,避免单条标题撑爆落盘文件(见 design D6)。
+ */
+export const TITLE_MAX_LEN = 4000
 /** 保留天数:lastAt 早于此天数的会话在写盘前被裁剪。 */
 export const RETENTION_DAYS = 30
 /** 会话条数上限:超出按 lastAt 倒序保留最近的。 */
 export const MAX_SESSIONS = 1000
+/**
+ * 单会话逐轮明细(turnDetails)条数上限:超出按时间保留最近的若干项。
+ *
+ * 与会话级 `turns` 计数解耦——`turns` 仍累加真实总轮数,明细数组只留最近 N 项,
+ * 详情弹窗对「明细被裁剪」给出说明(见 design D3)。
+ */
+export const MAX_TURN_DETAILS = 500
 
 const SESSION_USAGE_SOURCES: readonly AiUsageSource[] = ['cursor', 'claude-code', 'codex']
+
+/**
+ * 单轮明细的持久化形态(一条 `AiUsageEvent` = 一轮,与 `rec.turns += 1` 同步追加)。
+ *
+ * token 细分口径与 `AiUsageTokens` / `SessionUsageRecord` 一致;`title` 为该轮用户输入素材
+ * (去标签 / 压一行 / 完整记录,大安全上限兜底)。无时长字段——时长由相邻轮 `at` 差值在
+ * 查询 / 视图层推导,不落盘(见 design D2)。
+ */
+export interface SessionTurnDetail {
+  /** 该轮事件时间戳(ISO) */
+  at: string
+  /** 本轮有效用量合计 = input + output + cacheCreation(不含 cacheRead) */
+  total: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreation: number
+  /** 本轮工具调用次数(best-effort) */
+  toolCalls: number
+  /** 本轮模型(best-effort) */
+  model?: string
+  /** 本轮名称素材 = 该轮用户输入(去标签 / 压一行 / 完整记录) */
+  title?: string
+}
 
 /** 单个会话的持久化形态(token 细分口径与 AiUsageTokens 一致)。 */
 export interface SessionUsageRecord {
@@ -58,6 +94,11 @@ export interface SessionUsageRecord {
   projectName?: string
   /** 会话所属分支(best-effort;非空时覆盖,取最近) */
   branch?: string
+  /**
+   * 逐轮明细(可选,加性 schema):每轮 push 一项,超 `MAX_TURN_DETAILS` 按时间保留最近的。
+   * 本能力上线前写入的旧记录无此字段,读取时安全兜底为 undefined(见 design D1/D3)。
+   */
+  turnDetails?: SessionTurnDetail[]
   firstAt: string
   lastAt: string
 }
@@ -172,6 +213,42 @@ export function truncateTitle(text: unknown, max: number = TITLE_MAX_LEN): strin
   return oneLine.length > limit ? oneLine.slice(0, limit) : oneLine
 }
 
+/**
+ * 加性安全解析逐轮明细数组:
+ * - 缺失 / 非数组 → undefined(旧记录向后兼容,绝不报错);
+ * - 逐项过滤掉非法项(非对象 / 无合法 `at`),数值字段经 `num` 兜底、`title`/`model` 经 `optStr`;
+ * - 全部非法 → undefined(而非空数组),与「无明细」语义一致;
+ * - 超 `MAX_TURN_DETAILS` 时保留最近的若干项(防御异常超大旧文件)。
+ */
+function normalizeTurnDetails(raw: unknown): SessionTurnDetail[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: SessionTurnDetail[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const t = item as Partial<SessionTurnDetail>
+    const at = typeof t.at === 'string' && t.at ? t.at : ''
+    if (!at) continue
+    const input = num(t.input)
+    const output = num(t.output)
+    const cacheRead = num(t.cacheRead)
+    const cacheCreation = num(t.cacheCreation)
+    const total = num(t.total) || input + output + cacheCreation
+    out.push({
+      at,
+      total,
+      input,
+      output,
+      cacheRead,
+      cacheCreation,
+      toolCalls: num(t.toolCalls),
+      model: optStr(t.model),
+      title: optStr(t.title)
+    })
+  }
+  if (out.length === 0) return undefined
+  return out.length > MAX_TURN_DETAILS ? out.slice(out.length - MAX_TURN_DETAILS) : out
+}
+
 function normalizeRecord(key: string, raw: unknown): SessionUsageRecord | null {
   if (!raw || typeof raw !== 'object') return null
   const r = raw as Partial<SessionUsageRecord>
@@ -199,6 +276,7 @@ function normalizeRecord(key: string, raw: unknown): SessionUsageRecord | null {
     jiraKey: optStr(r.jiraKey),
     projectName: optStr(r.projectName),
     branch: optStr(r.branch),
+    turnDetails: normalizeTurnDetails(r.turnDetails),
     firstAt,
     lastAt
   }
@@ -310,6 +388,25 @@ export function accumulateSessionUsage(event: AiUsageEvent, root?: string): void
   rec.total += total
   rec.turns += 1
   rec.toolCalls += num(event.toolCalls)
+
+  // 逐轮明细:与 `rec.turns += 1` 同步追加一项(一事件 = 一轮)。
+  // turns 计数反映真实总轮数,明细数组只留最近 MAX_TURN_DETAILS 项(裁剪不影响 turns,见 D3)。
+  if (!Array.isArray(rec.turnDetails)) rec.turnDetails = []
+  const turnTitle = truncateTitle(event.title)
+  rec.turnDetails.push({
+    at,
+    total,
+    input,
+    output,
+    cacheRead,
+    cacheCreation,
+    toolCalls: num(event.toolCalls),
+    model: optStr(event.model),
+    title: turnTitle || undefined
+  })
+  if (rec.turnDetails.length > MAX_TURN_DETAILS) {
+    rec.turnDetails = rec.turnDetails.slice(rec.turnDetails.length - MAX_TURN_DETAILS)
+  }
 
   // firstAt 取最早、lastAt 取最近(跨自然日累加,不被日切分拆开)。
   if (Date.parse(at) < Date.parse(rec.firstAt)) rec.firstAt = at
@@ -475,4 +572,94 @@ export function querySessions(params: QuerySessionsParams = {}, root?: string): 
 
   if (entries.length > limit) entries = entries.slice(0, limit)
   return entries.map(([k, rec]) => recordToView(k, rec))
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 会话详情(逐轮明细)查询视图
+// ────────────────────────────────────────────────────────────────────
+
+/** 单轮明细的查询视图:落盘字段 + 视图层推导的 durationMs / ratio。 */
+export interface SessionTurnDetailView {
+  at: string
+  total: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreation: number
+  toolCalls: number
+  model?: string
+  /** 本轮名称素材(展示侧幂等去标签 / 压一行;纯占位则留空) */
+  title?: string
+  /**
+   * 本轮时长(ms)= 相邻两轮事件时间戳之差(`at[i+1] - at[i]`);
+   * 含用户思考 / 空闲,非纯模型耗时;**最后一轮**无后继时留空(展示侧呈现「—」)。见 D2。
+   */
+  durationMs?: number
+  /** 本轮 total / 会话 total,clamp 到 [0,1];会话 total<=0 时为 0。 */
+  ratio: number
+}
+
+/** 会话详情查询结果:会话头部(无则 null)+ 按时间升序的逐轮明细。 */
+export interface SessionDetailResult {
+  /** 会话头部(复用列表视图);key 不存在时为 null。 */
+  session: SessionUsageView | null
+  /** 逐轮明细(按 at 升序);key 不存在 / 无明细时为空数组。 */
+  turns: SessionTurnDetailView[]
+}
+
+/**
+ * 按会话 key(`${source}:${sessionId}`)查询单个会话的逐轮明细视图。
+ *
+ * - 逐轮明细按 `at` 升序;每轮推导 `durationMs`(相邻轮间隔、末轮留空)与 `ratio`
+ *   (本轮 total ÷ 会话 total)。
+ * - key 不存在 → `{ session: null, turns: [] }`(端点据此返回 200 空态,非 404)。
+ * - key 存在但无逐轮明细(上线前历史会话)→ `{ session, turns: [] }`,绝不报错。
+ */
+export function querySessionDetail(key: string, root?: string): SessionDetailResult {
+  const trimmed = typeof key === 'string' ? key.trim() : ''
+  if (!trimmed) return { session: null, turns: [] }
+
+  const file = readSessionUsage(root)
+  const rec = file.sessions[trimmed]
+  if (!rec) return { session: null, turns: [] }
+
+  const session = recordToView(trimmed, rec)
+  const details = Array.isArray(rec.turnDetails) ? rec.turnDetails : []
+  if (details.length === 0) return { session, turns: [] }
+
+  // 按 at 升序(防御乱序落盘);无法解析的 at 视为 0 排到最前,稳定排序保留相对次序。
+  const sorted = [...details].sort((a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0))
+  const sessionTotal = rec.total > 0 ? rec.total : 0
+
+  const turns: SessionTurnDetailView[] = sorted.map((t, i) => {
+    let durationMs: number | undefined
+    if (i < sorted.length - 1) {
+      const cur = Date.parse(t.at)
+      const next = Date.parse(sorted[i + 1].at)
+      if (Number.isFinite(cur) && Number.isFinite(next) && next >= cur) durationMs = next - cur
+    }
+    const ratio = sessionTotal > 0 ? usageRatioClamp(t.total / sessionTotal) : 0
+    return {
+      at: t.at,
+      total: t.total,
+      input: t.input,
+      output: t.output,
+      cacheRead: t.cacheRead,
+      cacheCreation: t.cacheCreation,
+      toolCalls: t.toolCalls,
+      model: t.model,
+      title:
+        t.title && !isPlaceholderTitle(t.title) ? truncateTitle(t.title) || undefined : undefined,
+      durationMs,
+      ratio
+    }
+  })
+
+  return { session, turns }
+}
+
+/** 把比值 clamp 到 [0,1];非法 / 负值归 0,超 1 归 1。 */
+function usageRatioClamp(r: number): number {
+  if (!Number.isFinite(r) || r <= 0) return 0
+  return r > 1 ? 1 : r
 }

@@ -48,6 +48,7 @@ import {
   handleAiProductivityListHarnessSuggestions,
   handleAiProductivityGetAiUsage,
   handleSessionUsageQuery,
+  handleSessionUsageDetail,
   handleAiProductivityPatchAiUsageConfig,
   handleGetUsageBenchmark,
   handleStartUsageBenchmark,
@@ -85,7 +86,7 @@ export interface DaemonHandle {
  * 仅 IDE / Hook 主链路要求 Bearer token;其它 ai-productivity 路由属于
  * Web 看板设置面板的功能,走 panel-origin 放行。
  */
-function isAiProductivityPanelPath(pathname: string): boolean {
+export function isAiProductivityPanelPath(pathname: string): boolean {
   if (!pathname.startsWith('/ai-productivity/')) return false
   if (
     pathname === '/ai-productivity/init' ||
@@ -332,6 +333,12 @@ async function routeAiProductivity(
   }
 
   // ── 会话维度用量(panel-origin 放行,见 isAiProductivityPanelPath 默认放行)──
+  // 详情端点放在列表端点之前(两者均为精确匹配,顺序无依赖,但语义上属同组)。
+  if (method === 'GET' && pathname === '/ai-productivity/session-usage/detail') {
+    handleSessionUsageDetail(res, { key: url.searchParams.get('key') })
+    return true
+  }
+
   if (method === 'GET' && pathname === '/ai-productivity/session-usage') {
     handleSessionUsageQuery(res, {
       from: url.searchParams.get('from'),

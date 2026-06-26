@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { applyCors, isLocalOrigin, isPanelOriginAllowed } from './cors.js'
+import { isAiProductivityPanelPath } from './server.js'
 import type { ServerConfig } from '../config.js'
 
 const baseConfig: ServerConfig = {
@@ -145,6 +146,19 @@ describe('isPanelOriginAllowed', () => {
       referer: 'http://127.0.0.1:17350/'
     })
     expect(isPanelOriginAllowed(baseConfig, req)).toBe(true)
+  })
+})
+
+describe('isAiProductivityPanelPath', () => {
+  it('会话详情端点归入 panel-origin 同源放行集合', () => {
+    expect(isAiProductivityPanelPath('/ai-productivity/session-usage/detail')).toBe(true)
+    expect(isAiProductivityPanelPath('/ai-productivity/session-usage')).toBe(true)
+  })
+
+  it('IDE / Hook 主链路不放行(仍走 token)', () => {
+    expect(isAiProductivityPanelPath('/ai-productivity/init')).toBe(false)
+    expect(isAiProductivityPanelPath('/ai-productivity/attach-summary')).toBe(false)
+    expect(isAiProductivityPanelPath('/other')).toBe(false)
   })
 })
 

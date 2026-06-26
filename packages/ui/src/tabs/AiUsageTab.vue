@@ -30,6 +30,7 @@ import {
 } from '../api'
 import AuroraLineCard from '../charts/AuroraLineCard.vue'
 import SessionUsageRow from '../components/SessionUsageRow.vue'
+import SessionUsageDetailDialog from '../components/SessionUsageDetailDialog.vue'
 
 const DAYS = 14
 
@@ -326,6 +327,15 @@ function gotoRequirement(jiraKey: string) {
   void router.push({ path: '/workspace', query: { jira: jiraKey } })
 }
 
+// ── 会话详情弹窗:点击会话行打开,按 key 拉取逐轮明细 ──
+const detailOpen = ref(false)
+const detailKey = ref<string | null>(null)
+
+function openSessionDetail(key: string) {
+  detailKey.value = key
+  detailOpen.value = true
+}
+
 onMounted(() => {
   void load()
   void loadProjectOptions()
@@ -503,6 +513,7 @@ onMounted(() => {
             :session="s"
             :max-total="sessionMaxTotal"
             @goto-requirement="gotoRequirement"
+            @open-detail="openSessionDetail"
           />
         </div>
 
@@ -519,6 +530,8 @@ onMounted(() => {
         </div>
       </div>
     </template>
+
+    <SessionUsageDetailDialog v-model="detailOpen" :session-key="detailKey" />
   </section>
 </template>
 

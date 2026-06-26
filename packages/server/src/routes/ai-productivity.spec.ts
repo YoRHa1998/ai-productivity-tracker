@@ -43,6 +43,7 @@ import {
   handleAiProductivityGetAiUsage,
   handleAiProductivityPatchAiUsageConfig,
   handleSessionUsageQuery,
+  handleSessionUsageDetail,
   handleGetUsageBenchmark,
   handleStartUsageBenchmark,
   handleStopUsageBenchmark,
@@ -3662,6 +3663,77 @@ describe('会话维度用量端点(session-usage)', () => {
     const omitted = makeMockRes()
     handleSessionUsageQuery(omitted.res, {})
     expect(JSON.parse(omitted.body).data.sessions).toHaveLength(2)
+  })
+})
+
+describe('会话详情端点(session-usage/detail)', () => {
+  let aipCleanup: () => void
+
+  function seedSession(
+    partial: Partial<AiUsageEvent> & Pick<AiUsageEvent, 'source' | 'sessionId'>
+  ): void {
+    accumulateSessionUsage(
+      {
+        source: partial.source,
+        sessionId: partial.sessionId,
+        title: partial.title,
+        at: partial.at ?? new Date().toISOString(),
+        tokens: partial.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0 }
+      },
+      aipRoot()
+    )
+  }
+
+  beforeEach(() => {
+    const setup = setupAipRoot()
+    aipCleanup = setup.restore
+  })
+
+  afterEach(() => {
+    aipCleanup()
+  })
+
+  it('正常返回会话头部 + 逐轮明细(含 durationMs / ratio)', () => {
+    seedSession({
+      source: 'cursor',
+      sessionId: 's',
+      at: '2026-06-24T10:00:00.000Z',
+      title: 'a',
+      tokens: { input: 100, output: 0, cacheRead: 0, cacheCreation: 0, total: 100 }
+    })
+    seedSession({
+      source: 'cursor',
+      sessionId: 's',
+      at: '2026-06-24T10:03:00.000Z',
+      title: 'b',
+      tokens: { input: 300, output: 0, cacheRead: 0, cacheCreation: 0, total: 300 }
+    })
+    const mock = makeMockRes()
+    handleSessionUsageDetail(mock.res, { key: 'cursor:s' })
+    expect(mock.statusCode).toBe(200)
+    const data = JSON.parse(mock.body).data
+    expect(data.session.totalTokens).toBe(400)
+    expect(data.turns).toHaveLength(2)
+    expect(data.turns[0].durationMs).toBe(180000)
+    expect(data.turns[1].durationMs).toBeUndefined()
+  })
+
+  it('key 不存在返回 200 + 空明细(非 404)', () => {
+    const mock = makeMockRes()
+    handleSessionUsageDetail(mock.res, { key: 'cursor:ghost' })
+    expect(mock.statusCode).toBe(200)
+    const data = JSON.parse(mock.body).data
+    expect(data.session).toBeNull()
+    expect(data.turns).toEqual([])
+  })
+
+  it('key 缺省返回 200 + 空明细', () => {
+    const mock = makeMockRes()
+    handleSessionUsageDetail(mock.res, {})
+    expect(mock.statusCode).toBe(200)
+    const data = JSON.parse(mock.body).data
+    expect(data.session).toBeNull()
+    expect(data.turns).toEqual([])
   })
 })
 

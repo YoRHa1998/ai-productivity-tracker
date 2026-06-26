@@ -984,6 +984,40 @@ export function fetchSessionUsage(params: FetchSessionUsageParams = {}) {
   )
 }
 
+/** 会话详情:单轮明细视图(落盘字段 + 服务端推导的 durationMs / ratio)。 */
+export type SessionTurnDetailView = {
+  at: string
+  total: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreation: number
+  toolCalls: number
+  model?: string
+  /** 本轮名称素材(该轮用户输入,去标签 / 压一行) */
+  title?: string
+  /** 本轮时长(ms)= 相邻轮事件间隔;末轮无后继时缺省(展示「—」) */
+  durationMs?: number
+  /** 本轮 total / 会话 total,[0,1] */
+  ratio: number
+}
+
+/** 会话详情响应:会话头部(无则 null)+ 按时间升序的逐轮明细。 */
+export type SessionUsageDetailResponse = {
+  session: SessionUsageView | null
+  turns: SessionTurnDetailView[]
+}
+
+/**
+ * 按会话 key(`${source}:${sessionId}`)拉取逐轮明细。
+ * key 不存在 / 无明细时服务端返回 `200` 与空 `turns` 数组(非 404)。
+ */
+export function fetchSessionUsageDetail(key: string) {
+  return agentRequest<SessionUsageDetailResponse>(
+    `/ai-productivity/session-usage/detail${buildQuery({ key })}`
+  )
+}
+
 // ===== 用量测算(usage-benchmark)秒表式窗口化测算 API =====
 
 /** 单工具在一次测算窗口内的累加值。 */

@@ -64,6 +64,8 @@
   --aipt-usage-low: #7eddc5; /* 绿:用量轻 */
   --aipt-usage-mid: #f5c489; /* 橙:用量中 */
   --aipt-usage-high: #f08597; /* 红:用量重 */
+  /* 统一单色:会话用量明细外层列表用量条仅以长度表达占比,不按绝对量分档(随主题取品牌色) */
+  --aipt-usage-bar: var(--aipt-primary);
 
   /* ----- 通用阶梯 ----- */
   --aipt-radius-sm: 6px;

@@ -90,6 +90,7 @@ import {
   setAiUsageEnabled,
   getAiUsageView,
   querySessions,
+  querySessionDetail,
   truncateTitle,
   isPlaceholderTitle,
   startBenchmark,
@@ -2542,6 +2543,22 @@ export function handleSessionUsageQuery(
     keys: keys.length > 0 ? keys : undefined
   })
   ok(res, { sessions })
+}
+
+/**
+ * 看板侧 GET /ai-productivity/session-usage/detail (panel-origin 放行)
+ *
+ * query:`key`(`${source}:${sessionId}`)。返回 `{ session, turns }`:会话头部(无则 null)
+ * + 按时间升序的逐轮明细(每项含视图层推导的 durationMs / ratio)。
+ * key 缺省 / 不存在 / 无逐轮明细 → 返回 `200` 与空明细数组(MUST NOT 404)。
+ */
+export function handleSessionUsageDetail(
+  res: ServerResponse,
+  query: { key?: string | null }
+): void {
+  const key = typeof query.key === 'string' ? query.key.trim() : ''
+  const detail = querySessionDetail(key)
+  ok(res, detail)
 }
 
 // ────────────────────────────────────────────────────────────────────

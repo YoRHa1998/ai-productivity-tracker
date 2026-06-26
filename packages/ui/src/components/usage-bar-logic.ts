@@ -59,6 +59,16 @@ export function usageColorVarAbsolute(
   return 'var(--aipt-usage-low)'
 }
 
+/**
+ * 统一单色取值:返回中性品牌色设计 token,不按绝对量 / 比值分档。
+ *
+ * 用于「会话用量明细」外层列表用量条 —— 仅以条长表达占比,绝对量三档配色下沉到详情弹窗
+ * 逐轮条(见 add-session-usage-detail/design.md D5)。
+ */
+export function usageColorVarUnified(): string {
+  return 'var(--aipt-usage-bar)'
+}
+
 /** 紧凑 token 数值:>=1M 用 M、>=1k 用 k,否则取整。 */
 export function formatCompactUsage(n: number): string {
   const v = Number.isFinite(n) && n > 0 ? n : 0

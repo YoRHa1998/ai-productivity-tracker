@@ -7,6 +7,7 @@ import {
   formatCompactUsage,
   usageColorVar,
   usageColorVarAbsolute,
+  usageColorVarUnified,
   usageRatio,
   usageWidthPct,
   type UsageThresholds
@@ -21,6 +22,7 @@ import {
  *   - `ratio`(默认,既有行为):ratio = value / max,>= danger(默认 0.66) → 红;>= warn
  *     (默认 0.33) → 橙;否则绿。
  *   - `absolute`:按 value 绝对值落 absoluteThresholds(默认 150K/300K),与条长分母无关。
+ *   - `unified`:统一中性单色(--aipt-usage-bar),不分档,仅以条长表达占比。
  * - 颜色取设计 token(--aipt-usage-low/mid/high,亮暗各一套),不写死色值。
  * - 条上叠加紧凑数值 + aria-label,供「AI 用量」会话列表与「用量测算」记录列表共用。
  */
@@ -28,7 +30,7 @@ const props = withDefaults(
   defineProps<{
     value: number
     max: number
-    colorMode?: 'ratio' | 'absolute'
+    colorMode?: 'ratio' | 'absolute' | 'unified'
     thresholds?: UsageThresholds
     absoluteThresholds?: UsageThresholds
   }>(),
@@ -40,11 +42,12 @@ const props = withDefaults(
 )
 
 const widthPct = computed(() => usageWidthPct(props.value, props.max))
-const colorVar = computed(() =>
-  props.colorMode === 'absolute'
-    ? usageColorVarAbsolute(props.value, props.absoluteThresholds)
-    : usageColorVar(usageRatio(props.value, props.max), props.thresholds)
-)
+const colorVar = computed(() => {
+  if (props.colorMode === 'unified') return usageColorVarUnified()
+  if (props.colorMode === 'absolute')
+    return usageColorVarAbsolute(props.value, props.absoluteThresholds)
+  return usageColorVar(usageRatio(props.value, props.max), props.thresholds)
+})
 const label = computed(() => formatCompactUsage(props.value))
 </script>
 

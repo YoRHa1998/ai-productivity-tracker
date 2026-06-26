@@ -8,12 +8,14 @@ import {
   readSessionUsage,
   pruneSessions,
   querySessions,
+  querySessionDetail,
   isPlaceholderTitle,
   sanitizeTitle,
   truncateTitle,
   writeSessionUsage,
   RETENTION_DAYS,
   TITLE_MAX_LEN,
+  MAX_TURN_DETAILS,
   type SessionUsageFile,
   type SessionUsageRecord
 } from './session-usage-store.js'
@@ -738,5 +740,273 @@ describe('truncateTitle', () => {
     expect(truncateTitle('   ')).toBe('')
     expect(truncateTitle(undefined)).toBe('')
     expect(truncateTitle(123 as unknown)).toBe('')
+  })
+
+  it('放宽默认上限:超过 80 字符不再截断,完整记录(未达安全上限)', () => {
+    const text = 'b'.repeat(200)
+    expect(truncateTitle(text)).toBe(text)
+    expect(truncateTitle(text).length).toBe(200)
+  })
+})
+
+describe('session-usage-store: 逐轮明细(turnDetails)', () => {
+  let root: string
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'aip-session-detail-'))
+  })
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('每轮追加一项明细,保存 token 细分 / toolCalls / model / title / at', () => {
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's-detail',
+        at: '2026-06-23T10:00:00.000Z',
+        model: 'gpt-x',
+        toolCalls: 2,
+        title: '第一轮输入',
+        tokens: { input: 100, output: 10, cacheRead: 5, cacheCreation: 20, total: 130 }
+      }),
+      root
+    )
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's-detail',
+        at: '2026-06-23T10:05:00.000Z',
+        model: 'gpt-y',
+        toolCalls: 1,
+        title: '第二轮输入',
+        tokens: { input: 1, output: 2, cacheRead: 3, cacheCreation: 4, total: 7 }
+      }),
+      root
+    )
+    const r = readSessionUsage(root).sessions['cursor:s-detail']
+    expect(r.turns).toBe(2)
+    expect(r.turnDetails).toHaveLength(2)
+    expect(r.turnDetails?.[0]).toMatchObject({
+      at: '2026-06-23T10:00:00.000Z',
+      total: 130,
+      input: 100,
+      output: 10,
+      cacheRead: 5,
+      cacheCreation: 20,
+      toolCalls: 2,
+      model: 'gpt-x',
+      title: '第一轮输入'
+    })
+    expect(r.turnDetails?.[1]).toMatchObject({
+      total: 7,
+      model: 'gpt-y',
+      title: '第二轮输入'
+    })
+  })
+
+  it('超 MAX_TURN_DETAILS 时按时间保留最近项,turns 计数仍累加真实总轮数', () => {
+    const n = MAX_TURN_DETAILS + 5
+    for (let i = 0; i < n; i++) {
+      accumulateSessionUsage(
+        evt({
+          source: 'codex',
+          sessionId: 's-cap',
+          at: new Date(Date.UTC(2026, 5, 23, 0, 0, i)).toISOString(),
+          title: `turn-${i}`,
+          tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+        }),
+        root
+      )
+    }
+    const r = readSessionUsage(root).sessions['codex:s-cap']
+    expect(r.turns).toBe(n)
+    expect(r.turnDetails).toHaveLength(MAX_TURN_DETAILS)
+    // 保留的是最近的 MAX_TURN_DETAILS 项(末项为最后一轮)
+    expect(r.turnDetails?.[r.turnDetails.length - 1].title).toBe(`turn-${n - 1}`)
+    expect(r.turnDetails?.[0].title).toBe(`turn-${n - MAX_TURN_DETAILS}`)
+  })
+
+  it('每轮 title 完整记录(放宽 80 上限),异常超长按安全上限兜底', () => {
+    const long = 'x'.repeat(TITLE_MAX_LEN + 100)
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's-long',
+        title: long,
+        tokens: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0, total: 1 }
+      }),
+      root
+    )
+    const r = readSessionUsage(root).sessions['cursor:s-long']
+    expect(r.turnDetails?.[0].title?.length).toBe(TITLE_MAX_LEN)
+  })
+
+  it('normalizeRecord 加性兼容:旧记录无 turnDetails → undefined,不报错', () => {
+    const file: SessionUsageFile = {
+      version: 1,
+      sessions: {
+        'cursor:legacy': rec({
+          source: 'cursor',
+          sessionId: 'legacy',
+          total: 100,
+          lastAt: '2026-06-23T10:00:00.000Z'
+        })
+      }
+    }
+    writeSessionUsage(file, root)
+    const r = readSessionUsage(root).sessions['cursor:legacy']
+    expect(r.turnDetails).toBeUndefined()
+  })
+
+  it('normalizeRecord 过滤非法明细项(无 at)', () => {
+    const file = {
+      version: 1,
+      sessions: {
+        'cursor:mixed': {
+          ...rec({
+            source: 'cursor',
+            sessionId: 'mixed',
+            total: 30,
+            lastAt: '2026-06-23T10:00:00.000Z'
+          }),
+          turnDetails: [
+            {
+              at: '2026-06-23T10:00:00.000Z',
+              total: 10,
+              input: 10,
+              output: 0,
+              cacheRead: 0,
+              cacheCreation: 0,
+              toolCalls: 0
+            },
+            { total: 20 },
+            null,
+            'bogus'
+          ]
+        }
+      }
+    } as unknown as SessionUsageFile
+    writeSessionUsage(file, root)
+    const r = readSessionUsage(root).sessions['cursor:mixed']
+    expect(r.turnDetails).toHaveLength(1)
+    expect(r.turnDetails?.[0].total).toBe(10)
+  })
+})
+
+describe('querySessionDetail', () => {
+  let root: string
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'aip-query-detail-'))
+  })
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  function seed() {
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's',
+        at: '2026-06-23T10:00:00.000Z',
+        title: 'a',
+        tokens: { input: 100, output: 0, cacheRead: 0, cacheCreation: 0, total: 100 }
+      }),
+      root
+    )
+    accumulateSessionUsage(
+      evt({
+        source: 'cursor',
+        sessionId: 's',
+        at: '2026-06-23T10:02:00.000Z',
+        title: 'b',
+        tokens: { input: 300, output: 0, cacheRead: 0, cacheCreation: 0, total: 300 }
+      }),
+      root
+    )
+  }
+
+  it('返回会话头部 + 升序逐轮明细,含 durationMs / ratio', () => {
+    seed()
+    const detail = querySessionDetail('cursor:s', root)
+    expect(detail.session?.totalTokens).toBe(400)
+    expect(detail.turns).toHaveLength(2)
+    // 相邻轮间隔 2min = 120000ms
+    expect(detail.turns[0].durationMs).toBe(120000)
+    // 末轮无后继留空
+    expect(detail.turns[1].durationMs).toBeUndefined()
+    // ratio = 本轮 total / 会话 total
+    expect(detail.turns[0].ratio).toBeCloseTo(100 / 400)
+    expect(detail.turns[1].ratio).toBeCloseTo(300 / 400)
+  })
+
+  it('乱序落盘时按 at 升序输出', () => {
+    const file = {
+      version: 1,
+      sessions: {
+        'cursor:o': {
+          ...rec({
+            source: 'cursor',
+            sessionId: 'o',
+            total: 30,
+            lastAt: '2026-06-23T10:05:00.000Z'
+          }),
+          turnDetails: [
+            {
+              at: '2026-06-23T10:05:00.000Z',
+              total: 20,
+              input: 20,
+              output: 0,
+              cacheRead: 0,
+              cacheCreation: 0,
+              toolCalls: 0,
+              title: 'late'
+            },
+            {
+              at: '2026-06-23T10:00:00.000Z',
+              total: 10,
+              input: 10,
+              output: 0,
+              cacheRead: 0,
+              cacheCreation: 0,
+              toolCalls: 0,
+              title: 'early'
+            }
+          ]
+        }
+      }
+    } as unknown as SessionUsageFile
+    writeSessionUsage(file, root)
+    const detail = querySessionDetail('cursor:o', root)
+    expect(detail.turns.map((t) => t.title)).toEqual(['early', 'late'])
+  })
+
+  it('key 不存在 → session null + 空明细(非报错)', () => {
+    const detail = querySessionDetail('cursor:ghost', root)
+    expect(detail.session).toBeNull()
+    expect(detail.turns).toEqual([])
+  })
+
+  it('空 key → 空结果', () => {
+    const detail = querySessionDetail('  ', root)
+    expect(detail.session).toBeNull()
+    expect(detail.turns).toEqual([])
+  })
+
+  it('会话存在但无逐轮明细(历史会话)→ session + 空明细', () => {
+    const file: SessionUsageFile = {
+      version: 1,
+      sessions: {
+        'cursor:legacy': rec({
+          source: 'cursor',
+          sessionId: 'legacy',
+          total: 100,
+          lastAt: '2026-06-23T10:00:00.000Z'
+        })
+      }
+    }
+    writeSessionUsage(file, root)
+    const detail = querySessionDetail('cursor:legacy', root)
+    expect(detail.session?.totalTokens).toBe(100)
+    expect(detail.turns).toEqual([])
   })
 })
