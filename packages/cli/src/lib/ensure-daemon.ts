@@ -22,6 +22,7 @@ import {
   readRuntimeLock,
   type RuntimeLock
 } from './runtime-lock.js'
+import { stopRunningDaemon } from './restart-daemon.js'
 import { DEFAULT_PORT } from './pick-port.js'
 
 export interface EnsureDaemonOptions {
@@ -47,16 +48,28 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
   const timeout = options.readyTimeoutMs ?? 5000
   const cliEntry = options.cliEntry ?? resolveCliEntry()
 
-  if (!options.forceRestart) {
-    const existing = readRuntimeLock()
-    if (existing && (await isHealthyLock(existing))) {
-      return {
-        kind: 'reused',
-        endpoint: { baseUrl: `http://${existing.host}:${existing.port}`, token: existing.token },
-        pid: existing.pid,
-        port: existing.port
-      }
+  const existing = readRuntimeLock()
+  if (!options.forceRestart && existing && (await isHealthyLock(existing))) {
+    return {
+      kind: 'reused',
+      endpoint: { baseUrl: `http://${existing.host}:${existing.port}`, token: existing.token },
+      pid: existing.pid,
+      port: existing.port
     }
+  }
+
+  // 走到这里 = 不复用(无 lock / lock 不健康 / forceRestart)。
+  //
+  // 关键修复:若 runtime.json 记录的旧 daemon **进程仍存活**,必须先回收它再起新的。
+  // 最典型的场景是 isStaleLock 按 24h 龄把「还活着、还在服务、端口还占着」的 daemon
+  // 判成不健康——若此时只 spawn 新 daemon 而不杀旧的,会连环踩两个坑:
+  //   ① 旧端口仍被占 → 新 daemon 的 pickAvailablePort 漂移到下一个端口(每次 +1);
+  //   ② 旧进程被 init 收养成孤儿长期挂着,日积月累堆出一片占用 17350+ 的僵尸 daemon,
+  //      甚至漂到 vite dev 端口(17351)上,害得本地看板命中老代码、报「响应非 JSON」。
+  // stopRunningDaemon 会 SIGTERM → 轮询 → 超时 SIGKILL 兜底,并清掉 runtime.json;
+  // 它返回后旧端口已释放,新 daemon 即可稳定复用 DEFAULT_PORT,不再逐次漂移。
+  if (existing && isPidAlive(existing.pid)) {
+    await stopRunningDaemon()
   }
 
   // 拉起新 daemon。token 与 port 在 daemon 进程内分配并写 runtime.json。

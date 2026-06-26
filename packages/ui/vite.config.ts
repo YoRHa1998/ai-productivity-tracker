@@ -31,6 +31,10 @@ export default defineConfig({
     }
   },
   server: {
+    // 显式绑定 127.0.0.1(IPv4):默认 host 会把 localhost 解析成 ::1,
+    // 只监听 IPv6 loopback,导致用 http://127.0.0.1:17351 访问被拒。
+    // 整个本地栈(daemon / 代理目标 AIPT_DAEMON_URL)统一用 127.0.0.1,这里对齐。
+    host: '127.0.0.1',
     port: 17351,
     proxy: {
       // 开发态把 /ai-productivity 请求代理到本地 daemon

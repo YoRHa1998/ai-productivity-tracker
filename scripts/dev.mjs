@@ -23,8 +23,8 @@
  * 优雅退出:Ctrl-C 后并行 SIGTERM 两个子进程,等子进程结束再 exit。
  */
 
-import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
+import { spawn, execSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -37,6 +37,10 @@ const repoRoot = join(__dirname, '..')
 // ───────────────────────────────────────────────────────────────────────
 
 const DEV_PORT = Number(process.env.AIPT_DEV_PORT ?? '27350')
+// vite dev server 端口(与 packages/ui/vite.config.ts 的 server.port 保持一致)。
+// 同样需要 pre-flight 释放:实测漂移的孤儿 prod daemon 会沿 17350→17351… 占到这里,
+// 害得 fresh vite 只能退到 IPv6 ::1,浏览器(走 IPv4)却命中了那个老 daemon。
+const DEV_UI_PORT = Number(process.env.AIPT_DEV_UI_PORT ?? '17351')
 const DEV_HOME = process.env.AIPT_DEV_HOME ?? join(repoRoot, '.dev-home')
 // 真实生产 data 目录(rc.x daemon 落盘 + 用户在 Cursor 里跑出来的需求都在这里)
 const PROD_DATA_ROOT = join(homedir(), '.ai-productivity-tracker', 'data')
@@ -85,6 +89,118 @@ console.log(
 )
 console.log('  Ctrl-C 退出(不影响全局 cli 的 daemon)')
 console.log('───────────────────────────────────')
+
+// ───────────────────────────────────────────────────────────────────────
+// 1.5 端口 pre-flight:保证 daemon 端口 + vite UI 端口都干净
+// ───────────────────────────────────────────────────────────────────────
+//
+// 背景坑(两条,根因同源):
+//   1. daemon 端口最终会过 `pickAvailablePort(preferred)`,DEV_PORT 被占时**静默漂移**
+//      到下一个空闲端口(27350 → 27351);但下面 vite 代理目标写死 DEV_PORT,一旦漂移
+//      UI 的 /ai-productivity 请求就打到「占着 DEV_PORT 的那个进程」而非新 daemon。
+//   2. vite UI 端口(17351)也可能被占:实测全局 `aipt daemon` 同样用 pickAvailablePort
+//      从 17350 起递增,旧实例不被回收时会沿 17350→17351→17352… 漂移并永久占着
+//      (孤儿 PPID=1)。fresh vite 在 IPv4 17351 被占后只能退到 IPv6 ::1:17351,
+//      浏览器走 IPv4 反而命中那个老 daemon → 旧代码无新端点 → 回退 SPA → 「响应非 JSON」。
+//
+// 处理原则:dev 的两个端口都不该住着别的 ai-productivity daemon。
+//   - 占用者是 ai-productivity daemon(本仓库 tsx dev daemon 或全局 aipt daemon)→ 视为
+//     上次残留/漂移过来的孤儿,清理掉(SIGTERM,2s 不退再 SIGKILL)。
+//   - 但**绝不动** runtime.json 记录的当前活跃 prod daemon(理论上它不该落在 dev 端口上,
+//     真落上了说明环境异常,宁可报错退出也不误杀)。
+//   - 占用者是无关进程 → 不擅自杀,打印明显提示并退出,让用户自行处理或换端口。
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function listPortListeners(port) {
+  try {
+    const out = execSync(`lsof -ti tcp:${port} -sTCP:LISTEN`, { encoding: 'utf-8' }).trim()
+    return out
+      ? out
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : []
+  } catch {
+    // lsof 非 0 退出码 = 该端口没人监听
+    return []
+  }
+}
+
+/** 读 ~/.ai-productivity-tracker/runtime.json 里活跃 prod daemon 的 pid(误杀保护用) */
+function readActiveProdPid() {
+  try {
+    const raw = readFileSync(join(homedir(), '.ai-productivity-tracker', 'runtime.json'), 'utf-8')
+    const pid = JSON.parse(raw)?.pid
+    return typeof pid === 'number' && pid > 0 ? pid : null
+  } catch {
+    return null
+  }
+}
+
+/** 是否是 ai-productivity 的 daemon 进程(本仓库 tsx dev / 全局 aipt / bundle cli.mjs) */
+function isAiptDaemonCmd(cmd) {
+  if (!/\bdaemon\b/.test(cmd)) return false
+  return (
+    cmd.includes('packages/cli/src/index.ts') || // 本仓库 tsx dev daemon
+    /\baipt\b/.test(cmd) || // 全局 bin
+    /cli\.mjs\b/.test(cmd) // esbuild bundle 产物
+  )
+}
+
+function ensureDevPortFree(port, label, activeProdPid) {
+  let pids = listPortListeners(port)
+  if (pids.length === 0) return
+
+  for (const pid of pids) {
+    let cmd = ''
+    try {
+      cmd = execSync(`ps -o command= -p ${pid}`, { encoding: 'utf-8' }).trim()
+    } catch {
+      continue
+    }
+    if (activeProdPid && Number(pid) === activeProdPid) {
+      console.error(`[dev] ${label} 端口 ${port} 被当前活跃 prod daemon(pid ${pid})占用。`)
+      console.error(
+        `[dev] 不擅自终止 prod daemon,请用 AIPT_DEV_PORT / AIPT_DEV_UI_PORT 换端口后重试。`
+      )
+      process.exit(1)
+    }
+    if (!isAiptDaemonCmd(cmd)) {
+      console.error(`[dev] ${label} 端口 ${port} 被非 ai-productivity 进程占用(pid ${pid}):${cmd}`)
+      console.error(`[dev] 请先释放该端口,或用 AIPT_DEV_PORT / AIPT_DEV_UI_PORT 换端口后重试。`)
+      process.exit(1)
+    }
+    console.log(
+      `[dev] ${label} 端口 ${port} 被残留/漂移的 ai-productivity daemon(pid ${pid})占用,正在清理...`
+    )
+    try {
+      process.kill(Number(pid), 'SIGTERM')
+    } catch {
+      /* 已退出 */
+    }
+  }
+
+  // 等待端口释放(最多 ~2s);仍未释放则 SIGKILL 兜底
+  for (let i = 0; i < 20; i++) {
+    sleepSync(100)
+    pids = listPortListeners(port)
+    if (pids.length === 0) return
+  }
+  for (const pid of pids) {
+    try {
+      process.kill(Number(pid), 'SIGKILL')
+    } catch {
+      /* ignore */
+    }
+  }
+  sleepSync(300)
+}
+
+const activeProdPid = readActiveProdPid()
+ensureDevPortFree(DEV_PORT, 'daemon', activeProdPid)
+ensureDevPortFree(DEV_UI_PORT, 'vite', activeProdPid)
 
 // ───────────────────────────────────────────────────────────────────────
 // 2. 起子进程
