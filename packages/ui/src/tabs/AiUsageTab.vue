@@ -32,12 +32,55 @@ import AuroraLineCard from '../charts/AuroraLineCard.vue'
 import SessionUsageRow from '../components/SessionUsageRow.vue'
 import SessionUsageDetailDialog from '../components/SessionUsageDetailDialog.vue'
 
-const DAYS = 14
-
 const router = useRouter()
 
 /** 展示偏好持久化键:是否把 cacheRead 合并进 token 展示口径。 */
 const MERGE_CACHE_READ_KEY = 'aipt:ai-usage:merge-cache-read'
+
+/** 页面级统一时间筛选持久化键。 */
+const RANGE_DAYS_KEY = 'aipt:ai-usage:range-days'
+
+/** 统一时间筛选档位:当天 1 / 近 7 天 / 近 30 天。默认近 7 天。 */
+type RangeDays = 1 | 7 | 30
+const VALID_RANGE_DAYS: readonly RangeDays[] = [1, 7, 30]
+const DEFAULT_RANGE_DAYS: RangeDays = 7
+
+function readPersistedRange(): RangeDays {
+  try {
+    const raw = Number(localStorage.getItem(RANGE_DAYS_KEY))
+    return (VALID_RANGE_DAYS as readonly number[]).includes(raw)
+      ? (raw as RangeDays)
+      : DEFAULT_RANGE_DAYS
+  } catch {
+    return DEFAULT_RANGE_DAYS
+  }
+}
+
+/**
+ * 全页唯一时间口径来源:汇总卡片 / 趋势图 / 会话明细均从它派生。
+ * 替代原 DAYS 常量与会话模块本地 sessionRangeDays。
+ */
+const rangeDays = ref<RangeDays>(readPersistedRange())
+
+watch(rangeDays, (v) => {
+  try {
+    localStorage.setItem(RANGE_DAYS_KEY, String(v))
+  } catch {
+    /* localStorage 不可用时静默降级,仅丢失持久化能力,不影响展示 */
+  }
+})
+
+/** 统一时间筛选档位文案:1→当天 / 7→近 7 天 / 30→近 30 天。 */
+const rangeLabel = computed(() => {
+  switch (rangeDays.value) {
+    case 1:
+      return '当天'
+    case 30:
+      return '近 30 天'
+    default:
+      return '近 7 天'
+  }
+})
 
 /** 各 AI 趋势线配色(与卡片左侧色点一致)。 */
 const SOURCE_COLOR: Record<AiUsageSource, string> = {
@@ -84,18 +127,30 @@ function tokenOf(view: AiUsageDailyView | undefined): number {
 
 const enabled = computed(() => data.value?.enabled ?? false)
 
-const todayCards = computed(() =>
-  AI_USAGE_SOURCES.map((s) => {
-    const view = data.value?.today?.[s.key]
+/**
+ * 汇总卡片:对所选时间范围内 series 的各 source 求和(范围合计),不再读 data.today。
+ * rangeDays=1 时 series 仅 1 点(今天),结果与原 today 口径等价。
+ */
+const todayCards = computed(() => {
+  const series = data.value?.series ?? []
+  return AI_USAGE_SOURCES.map((s) => {
+    let totalTokens = 0
+    let turns = 0
+    for (const point of series) {
+      const view = point[s.key]
+      if (!view) continue
+      totalTokens += tokenOf(view)
+      turns += view.turns
+    }
     return {
       key: s.key,
       label: s.label,
       color: SOURCE_COLOR[s.key],
-      totalTokens: tokenOf(view),
-      turns: view?.turns ?? 0
+      totalTokens,
+      turns
     }
   })
-)
+})
 
 /** 是否已有任何用量数据(决定空态展示)。 */
 const hasAnyData = computed(() => {
@@ -132,15 +187,15 @@ const chartSeries = computed(() => {
 })
 
 const chartSubtitle = computed(() => {
-  if (metric.value !== 'tokens') return `近 ${DAYS} 天各 AI 对话次数`
+  if (metric.value !== 'tokens') return `${rangeLabel.value}各 AI 对话次数`
   return mergeCacheRead.value
-    ? `近 ${DAYS} 天各 AI token 消耗(含缓存读取)`
-    : `近 ${DAYS} 天各 AI 有效 token 消耗`
+    ? `${rangeLabel.value}各 AI token 消耗(含缓存读取)`
+    : `${rangeLabel.value}各 AI 有效 token 消耗`
 })
 
-/** 今日卡片单位文案:随合并开关反映口径。 */
+/** 卡片单位文案:随所选时间范围与合并开关反映口径。 */
 const cardTokenUnit = computed(() =>
-  mergeCacheRead.value ? '今日 token(含缓存读取)' : '今日 token'
+  mergeCacheRead.value ? `${rangeLabel.value} token(含缓存读取)` : `${rangeLabel.value} token`
 )
 
 function formatNumber(n: number): string {
@@ -177,7 +232,7 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    data.value = await fetchAiUsage(DAYS)
+    data.value = await fetchAiUsage(rangeDays.value)
   } catch (err) {
     error.value = err instanceof AgentRequestError ? err.message : (err as Error).message
   } finally {
@@ -205,16 +260,14 @@ async function onToggle(next: boolean) {
 // ───────────────────────── 会话明细区(会话 Top N) ─────────────────────────
 
 /**
- * 会话列表筛选 / 排序状态:
+ * 会话列表筛选 / 排序状态(时间口径由页面级 rangeDays 统一托管,本模块不再自带):
  * - sessionSource:AI 平台('all' 全部);
  * - sessionProject:所属项目('all' 全部 / 具体项目名,服务端精确过滤);
- * - sessionRangeDays:时间范围(当天 1 / 近 7 / 30 天);
  * - sessionSortKey:排序依据(用量高低 total / 记录时间 lastAt);
  * - sessionSortDir:排序方向(降序 desc / 升序 asc)。
  */
 const sessionSource = ref<'all' | AiUsageSource>('all')
 const sessionProject = ref<'all' | string>('all')
-const sessionRangeDays = ref<1 | 7 | 30>(1)
 const sessionSortKey = ref<SessionUsageSortKey>('lastAt')
 const sessionSortDir = ref<SessionUsageSortDir>('desc')
 const sessionLoading = ref(false)
@@ -246,7 +299,7 @@ const sessionMaxTotal = computed(() =>
 
 function sessionFromIso(): string {
   const d = new Date()
-  d.setDate(d.getDate() - (sessionRangeDays.value - 1))
+  d.setDate(d.getDate() - (rangeDays.value - 1))
   d.setHours(0, 0, 0, 0)
   return d.toISOString()
 }
@@ -305,9 +358,19 @@ async function loadProjectOptions() {
   }
 }
 
-// 平台 / 时间范围变更:复位页码 → 先重算项目下拉选项(可能回退选中项),再刷新列表。
-watch([sessionSource, sessionRangeDays], async () => {
+// 平台变更:复位页码 → 先重算项目下拉选项(可能回退选中项),再刷新列表。
+watch(sessionSource, async () => {
   currentPage.value = 1
+  await loadProjectOptions()
+  void loadSessions()
+})
+
+// 页面级时间筛选变更:复位会话分页,统一驱动三模块同口径刷新。
+// load() 刷新卡片 + 趋势图;loadProjectOptions() + loadSessions() 刷新会话明细。
+// 与上面 watch(sessionSource) 监听源不重叠,不会产生重复请求。
+watch(rangeDays, async () => {
+  currentPage.value = 1
+  void load()
   await loadProjectOptions()
   void loadSessions()
 })
@@ -349,10 +412,15 @@ onMounted(() => {
       <div class="aip-usage__heading">
         <h1 class="aip-usage__page-title aipt-aurora-text">AI 用量</h1>
         <p class="aip-usage__page-sub">
-          跨需求、跨分支的全局视图:每个 AI 工具当天与近 {{ DAYS }} 天的 token 消耗与对话次数
+          跨需求、跨分支的全局视图:各 AI 工具在所选时间范围内的 token 消耗与对话次数
         </p>
       </div>
       <div class="aip-usage__heading-actions">
+        <ElRadioGroup v-model="rangeDays" size="small" aria-label="时间范围">
+          <ElRadioButton :value="1">当天</ElRadioButton>
+          <ElRadioButton :value="7">近 7 天</ElRadioButton>
+          <ElRadioButton :value="30">近 30 天</ElRadioButton>
+        </ElRadioGroup>
         <div class="aip-usage__switch">
           <span class="aip-usage__switch-label">合并缓存读取(cacheRead)</span>
           <ElTooltip placement="bottom" :show-after="100">
@@ -464,16 +532,6 @@ onMounted(() => {
             >
               <ElOption label="全部项目" value="all" />
               <ElOption v-for="p in projectOptions" :key="p" :label="p" :value="p" />
-            </ElSelect>
-            <ElSelect
-              v-model="sessionRangeDays"
-              size="small"
-              class="aip-usage__filter-select"
-              aria-label="时间范围"
-            >
-              <ElOption label="当天" :value="1" />
-              <ElOption label="近 7 天" :value="7" />
-              <ElOption label="近 30 天" :value="30" />
             </ElSelect>
             <ElSelect
               v-model="sessionSortKey"
